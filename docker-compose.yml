@@ -1,0 +1,98 @@
+# version: "3.9"
+services:
+  cgevents_postgres:
+    image: postgres:13
+    container_name: cgevents_postgres
+    hostname: cgevents_postgres
+    restart: always
+    networks:
+      - cgevents_net
+    dns:
+      - "8.8.8.8"
+    ports:
+      - "5432:5432"
+    env_file:
+      - .env
+    environment:
+      TZ: America/New_York
+      DEBUG_NO_EXIT: 1
+      DEBUG_TRACE: 1
+      POSTGRES_DB: ${POSTGRES_DB:-default}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ./pgdata:/var/lib/postgresql/data
+
+  cgevents_app:
+    build:
+      context: ./app
+    container_name: cgevents_app
+    hostname: cgevents_app
+    restart: always
+    networks:
+      - cgevents_net
+    dns:
+      - "8.8.8.8"
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      TZ: America/New_York
+      DEBUG_NO_EXIT: 1
+      DEBUG_TRACE: 1
+      SERVER_PORT: 8000
+      POSTGRES_HOST: cgevents_postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-default}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ./app:/opt/app
+    depends_on:
+      - cgevents_postgres
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 65535
+        hard: 65535
+
+  cgevents_nginx:
+    image: nginx:1.27-alpine
+    container_name: cgevents_nginx
+    hostname: cgevents_nginx
+    restart: always
+    networks:
+      - cgevents_net
+    dns:
+      - "8.8.8.8"
+    ports:
+      - "80:80"
+    depends_on:
+      - cgevents_app
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+networks:
+  cgevents_net:
+    driver: bridge
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.enable_ipv6: "false"
