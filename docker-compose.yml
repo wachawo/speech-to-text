@@ -1,0 +1,60 @@
+services:
+  stt_server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: stt_server
+    pull_policy: build
+    container_name: stt_server
+    hostname: stt_server
+    restart: unless-stopped
+    networks:
+      - stt_network
+    env_file:
+      - .env                          # STT_HOST, STT_PORT, STT_POOL_SIZE, ...
+    environment:
+      TZ: America/New_York
+      STT_HOST: "0.0.0.0"
+      STT_PORT: "5099"
+      STT_POOL_SIZE: "4"             # number of pre-loaded Whisper instances
+      STT_DEBUG: "false"
+      WHISPER_DOWNLOAD_ROOT: "/opt/models"
+    ports:
+      - "5099:5099"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      # Live-reload application code (no rebuild needed)
+      - ./stt_server.py:/opt/stt_server.py:ro
+      - ./stt_client.py:/opt/stt_client.py:ro
+      # libs/stt.py - your Whisper wrapper (must NOT be modified)
+      - ./libs:/opt/libs:ro
+      # Persistent data
+      - ./models:/opt/models          # downloaded Whisper model weights
+      - ./logs:/opt/logs
+      - ./recs:/opt/recs              # optional: audio recordings
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "128m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5099/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s             # models take time to load at startup
+
+networks:
+  stt_network:
+    driver: bridge
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.enable_ipv6: "false"

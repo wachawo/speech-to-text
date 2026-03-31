@@ -1,0 +1,15 @@
+.vscode/
+.idea/
+__pycache__/
+data/
+recs/
+models/
+*.pyc
+*.log
+logs/*.log
+.DS_Store
+.env
+*.db
+*.sqlite3
+*.keras
+*.h5

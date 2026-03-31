@@ -1,0 +1,22 @@
+# Web framework
+flask>=3.0.0
+flask-cors>=4.0.0
+werkzeug>=3.0.0
+
+# ASGI server
+uvicorn[standard]>=0.29.0
+
+# Audio processing
+pydub>=0.25.1
+
+# Whisper STT backend (matches libs/stt.py)
+openai-whisper>=20231117
+
+# ML/audio runtime required by libs/stt.py
+torch>=2.2.0
+torchaudio>=2.2.0
+soundfile>=0.12.1
+
+# Utilities
+python-dotenv>=1.0.0
+requests>=2.33.0
