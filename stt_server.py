@@ -92,11 +92,12 @@ def internal_error(error):
 
 
 @app.errorhandler(Exception)
-def handle_exception(exc):
-    if isinstance(exc, werkzeug.exceptions.NotFound):
+def handle_exception(e):
+    if isinstance(e, werkzeug.exceptions.NotFound):
         return jsonify({"error": "NotFound"}), 404
-    logger.error("%s: %s\n%s", type(exc).__name__, exc, traceback.format_exc())
-    return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 500
+
+    logger.error(f"{type(e).__name__} {str(e)} {traceback.format_exc()}")
+    return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
 
 
 # Routes
@@ -105,16 +106,12 @@ def handle_exception(exc):
 @app.route("/api/health", methods=["GET"])
 def health():
     """Healthcheck — report pool size and available models."""
-    return (
-        jsonify(
-            {
-                "status": "ok",
-                "pool_size": MODEL_POOL_SIZE,
-                "available": MODEL_POOL.qsize(),
-            }
-        ),
-        200,
-    )
+    health_status = {
+        "status": "ok",
+        "pool_size": MODEL_POOL_SIZE,
+        "available": MODEL_POOL.qsize(),
+    }
+    return jsonify(health_status), 200
 
 
 @app.route("/api/stt", methods=["POST"])
@@ -156,7 +153,9 @@ def transcribe():
         audio.export(wav_bio, format="wav")
         wav_bio.seek(0)
     except Exception as e:
-        logger.error("Audio conversion failed: %s", e)
+        logger.error(
+            f"Audio conversion failed: {type(e).__name__} {str(e)}\n{traceback.format_exc()}"
+        )
         return jsonify({"error": f"Audio conversion failed: {e}"}), 400
 
     # Acquire model from pool
@@ -178,7 +177,9 @@ def transcribe():
         )
         return jsonify({"text": text, "elapsed": round(elapsed, 3)}), 200
     except Exception as e:
-        logger.error("STT failed: %s\n%s", e, traceback.format_exc())
+        logger.error(
+            f"STT failed: {type(e).__name__} {str(e)}\n{traceback.format_exc()}"
+        )
         return jsonify({"error": f"STT failed: {e}"}), 500
     finally:
         MODEL_POOL.put(model)
