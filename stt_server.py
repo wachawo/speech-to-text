@@ -46,9 +46,7 @@ FLASK_HOST = os.getenv("STT_HOST", "0.0.0.0")
 FLASK_PORT = int(os.getenv("STT_PORT", "5099"))
 FLASK_DEBUG = os.getenv("STT_DEBUG", "False").lower() in TRUE_VALUES
 MODEL_POOL_SIZE = int(os.getenv("STT_POOL_SIZE", "8"))
-
-# Model pool
-model_pool: queue.Queue = queue.Queue()
+MODEL_POOL: queue.Queue = queue.Queue()
 
 
 def init_model_pool(size: int = MODEL_POOL_SIZE):
@@ -58,9 +56,9 @@ def init_model_pool(size: int = MODEL_POOL_SIZE):
         t0 = time.monotonic()
         model = stt.get_model()
         elapsed = time.monotonic() - t0
-        model_pool.put(model)
+        MODEL_POOL.put(model)
         logger.info("  Model #%d ready (%.2fs)", i + 1, elapsed)
-    logger.info("Model pool ready: %d instances", model_pool.qsize())
+    logger.info("Model pool ready: %d instances", MODEL_POOL.qsize())
 
 
 # Flask app
@@ -71,6 +69,7 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 
 # Error handlers
+
 
 @app.errorhandler(400)
 def bad_request(error):
@@ -102,14 +101,20 @@ def handle_exception(exc):
 
 # Routes
 
+
 @app.route("/api/health", methods=["GET"])
 def health():
     """Healthcheck — report pool size and available models."""
-    return jsonify({
-        "status": "ok",
-        "pool_size": MODEL_POOL_SIZE,
-        "available": model_pool.qsize(),
-    }), 200
+    return (
+        jsonify(
+            {
+                "status": "ok",
+                "pool_size": MODEL_POOL_SIZE,
+                "available": MODEL_POOL.qsize(),
+            }
+        ),
+        200,
+    )
 
 
 @app.route("/api/stt", methods=["POST"])
@@ -142,6 +147,7 @@ def transcribe():
     # Convert to WAV via pydub (handles mp3, wav, ogg, etc.)
     try:
         from pydub import AudioSegment
+
         audio = AudioSegment.from_file(bio)
         channels = audio.split_to_mono()
         if len(channels) > 1:
@@ -155,7 +161,7 @@ def transcribe():
 
     # Acquire model from pool
     try:
-        model = model_pool.get(timeout=120)
+        model = MODEL_POOL.get(timeout=120)
     except queue.Empty:
         return jsonify({"error": "All models busy, try again later"}), 503
 
@@ -164,17 +170,22 @@ def transcribe():
         text = stt.get_stt_bio(wav_bio, model=model)
         elapsed = time.monotonic() - t0
         logger.info(
-            "STT %s (%dkb) → %d chars (%.2fs)", filename, size_kb, len(text), elapsed,
+            "STT %s (%dkb) → %d chars (%.2fs)",
+            filename,
+            size_kb,
+            len(text),
+            elapsed,
         )
         return jsonify({"text": text, "elapsed": round(elapsed, 3)}), 200
     except Exception as e:
         logger.error("STT failed: %s\n%s", e, traceback.format_exc())
         return jsonify({"error": f"STT failed: {e}"}), 500
     finally:
-        model_pool.put(model)
+        MODEL_POOL.put(model)
 
 
 # Main
+
 
 def main():
     init_model_pool(MODEL_POOL_SIZE)
@@ -186,9 +197,10 @@ def main():
         from uvicorn.middleware.wsgi import WSGIMiddleware
 
         wsgi_app = cast(Any, app.wsgi_app)
-        uvicorn.run(WSGIMiddleware(wsgi_app), host=FLASK_HOST, port=FLASK_PORT, log_level="info")
+        uvicorn.run(
+            WSGIMiddleware(wsgi_app), host=FLASK_HOST, port=FLASK_PORT, log_level="info"
+        )
 
 
 if __name__ == "__main__":
     main()
-

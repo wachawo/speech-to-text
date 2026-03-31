@@ -77,9 +77,11 @@ def main():
             )
         except Exception as e:
             import traceback
-            logger.error(f"[{i}/{total}] {filepath}: {type(e).__name__} {str(e)} {traceback.format_exc()}")
+
+            logger.error(
+                f"[{i}/{total}] {filepath}: {type(e).__name__} {str(e)} {traceback.format_exc()}"
+            )
 
 
 if __name__ == "__main__":
     main()
-

@@ -15,7 +15,9 @@ import torch
 import torchaudio
 import warnings
 
-warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
+warnings.filterwarnings(
+    "ignore", message="FP16 is not supported on CPU; using FP32 instead"
+)
 
 # import traceback
 import urllib3
@@ -127,9 +129,7 @@ def get_stt_bio(
 
 
 def get_stt_filename(
-    filename: str,
-    model: Optional[whisper.Whisper] = None,
-    device: str = COMPUTE_TYPE
+    filename: str, model: Optional[whisper.Whisper] = None, device: str = COMPUTE_TYPE
 ) -> str:
     """Transcribe audio using Whisper model."""
     if not os.path.exists(filename):
