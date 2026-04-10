@@ -31,10 +31,11 @@ load_dotenv(find_dotenv())
 import libs.stt as stt
 
 # Logging
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOGGING = {
     "handlers": [logging.StreamHandler()],
     "format": "%(asctime)s.%(msecs)03d [%(levelname)s]: (%(name)s.%(funcName)s) %(message)s",
-    "level": logging.INFO,
+    "level": getattr(logging, LOG_LEVEL, logging.INFO),
     "datefmt": "%Y-%m-%d %H:%M:%S",
 }
 logging.basicConfig(**LOGGING)

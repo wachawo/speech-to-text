@@ -3,10 +3,9 @@ SHELL := /bin/zsh
 VENV_DIR := .venv
 PYTHON := $(VENV_DIR)/bin/python
 PIP := $(VENV_DIR)/bin/pip
-PID_FILE := .stt_server.pid
-LOG_FILE := logs/stt_server.log
+GUNICORN := $(VENV_DIR)/bin/gunicorn
 
-.PHONY: install start run stop
+.PHONY: install start run stop gunicorn
 
 install:
 	@if [ ! -d "$(VENV_DIR)" ]; then \
@@ -28,6 +27,13 @@ run:
 		exit 1; \
 	fi
 	$(PYTHON) stt_server.py
+
+gunicorn:
+	@if [ ! -x "$(GUNICORN)" ]; then \
+		echo "[gunicorn] Missing virtual environment. Run: make install"; \
+		exit 1; \
+	fi
+	$(GUNICORN) --config gu.py stt_server:app
 
 start:
 	@if [ ! -x "$(PYTHON)" ]; then \

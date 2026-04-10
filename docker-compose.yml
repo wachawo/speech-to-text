@@ -16,9 +16,13 @@ services:
       TZ: America/New_York
       STT_HOST: "0.0.0.0"
       STT_PORT: "5099"
-      STT_POOL_SIZE: "4"             # number of pre-loaded Whisper instances
+      STT_POOL_SIZE: "1"              # 1 model per sync worker (handles 1 request at a time)
       STT_DEBUG: "false"
+      GUNICORN_WORKERS: "4"           # 4 sync workers = 4 concurrent requests
       WHISPER_DOWNLOAD_ROOT: "/opt/models"
+      OMP_NUM_THREADS: "1"            # prevent torch from spawning extra threads
+      MKL_NUM_THREADS: "1"
+
     ports:
       - "5099:5099"
     volumes:
@@ -27,6 +31,7 @@ services:
       # Live-reload application code (no rebuild needed)
       - ./stt_server.py:/opt/stt_server.py:ro
       - ./stt_client.py:/opt/stt_client.py:ro
+      - ./gu.py:/opt/gu.py:ro
       # libs/stt.py - your Whisper wrapper (must NOT be modified)
       - ./libs:/opt/libs:ro
       # Persistent data
@@ -44,9 +49,12 @@ services:
       options:
         max-size: "128m"
         max-file: "3"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "python3 stt_server.py"
+      # - "gunicorn --config gu.py stt_server:app"
     healthcheck:
-      test: ["CMD", "python", "-c",
-             "import urllib.request; urllib.request.urlopen('http://localhost:5099/api/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5099/api/health')"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -5,6 +5,7 @@ werkzeug>=3.0.0
 
 # ASGI server
 uvicorn[standard]>=0.29.0
+gunicorn>=22.0.0
 
 # Audio processing
 pydub>=0.25.1
