@@ -32,14 +32,40 @@ import libs.stt as stt
 
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_FORMAT = "%(asctime)s.%(msecs)03d [%(levelname)s]: (%(name)s.%(funcName)s) %(message)s"
+LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
 LOGGING = {
     "handlers": [logging.StreamHandler()],
-    "format": "%(asctime)s.%(msecs)03d [%(levelname)s]: (%(name)s.%(funcName)s) %(message)s",
+    "format": LOG_FORMAT,
     "level": getattr(logging, LOG_LEVEL, logging.INFO),
-    "datefmt": "%Y-%m-%d %H:%M:%S",
+    "datefmt": LOG_DATE_FORMAT,
 }
 logging.basicConfig(**LOGGING)
 logger = logging.getLogger(__name__)
+
+LOG_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": LOG_FORMAT,
+            "datefmt": LOG_DATE_FORMAT,
+        },
+    },
+    "handlers": {
+        "default": {
+            "formatter": "default",
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stderr",
+        },
+    },
+    "loggers": {
+        "uvicorn": {"handlers": ["default"], "level": LOG_LEVEL, "propagate": False},
+        "uvicorn.error": {"handlers": ["default"], "level": LOG_LEVEL, "propagate": False},
+        "uvicorn.access": {"handlers": [], "propagate": False},
+    },
+}
 
 # Config
 TRUE_VALUES = ("1", "true", "yes", "on", "enabled")
@@ -99,6 +125,13 @@ def handle_exception(e):
 
     logger.error(f"{type(e).__name__} {str(e)} {traceback.format_exc()}")
     return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+
+
+@app.after_request
+def after_request(resp):
+    log_fn = logger.debug if request.path == "/api/health" else logger.info
+    log_fn("%s %s: %s %s", request.method, request.path, resp.status_code, resp.status)
+    return resp
 
 
 # Routes
@@ -200,7 +233,12 @@ def main():
 
         wsgi_app = cast(Any, app.wsgi_app)
         uvicorn.run(
-            WSGIMiddleware(wsgi_app), host=FLASK_HOST, port=FLASK_PORT, log_level="info"
+            WSGIMiddleware(wsgi_app),
+            host=FLASK_HOST,
+            port=FLASK_PORT,
+            log_level=LOG_LEVEL.lower(),
+            log_config=LOG_CONFIG,
+            access_log=False,
         )
 
 
