@@ -1,13 +1,19 @@
-# GPU image based on CUDA 13.2 + cuDNN.
-FROM nvidia/cuda:13.2.1-cudnn-runtime-ubuntu24.04
+# GPU image based on CUDA 13.0 + cuDNN.
+FROM nvidia/cuda:13.0.3-cudnn-runtime-ubuntu24.04
 
 # ffmpeg is required by pydub; libsndfile1 is required by soundfile.
+# libcublas-13-0 provides cuBLAS / cuBLASLt runtime that torch 2.10+cu130
+# calls into (cublasLtMatmul*). The `-runtime` base image does not include
+# it by default — without this package the first matmul on CUDA fails with
+# `CUBLAS_STATUS_NOT_INITIALIZED`.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        python3-venv \
         ffmpeg \
         build-essential \
         libsndfile1 \
-        python3-venv \
-        python3-pip \
+        libcublas-13-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt
