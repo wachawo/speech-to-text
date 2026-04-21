@@ -1,0 +1,8 @@
+# CPU-only ML stack for libs/stt.py
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchaudio
+
+# Shared app dependencies
+-r requirements.txt
+

@@ -2,7 +2,7 @@ services:
   stt_server:
     build:
       context: .
-      dockerfile: Dockerfile.cpu
+      dockerfile: Dockerfile-cpu
     image: stt_server_cpu
     pull_policy: build
     container_name: stt_server
@@ -22,7 +22,7 @@ services:
       WHISPER_DOWNLOAD_ROOT: "/opt/models"
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
-      # Force CPU backend in libs/stt.py regardless of the .env value.
+      # Force CPU backend.
       COMPUTE_TYPE: "cpu"
     ports:
       - "5099:5099"

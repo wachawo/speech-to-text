@@ -2,7 +2,7 @@ services:
   stt_server:
     build:
       context: .
-      dockerfile: Dockerfile.gpu
+      dockerfile: Dockerfile
     image: stt_server_gpu
     pull_policy: build
     container_name: stt_server
@@ -24,8 +24,7 @@ services:
       MKL_NUM_THREADS: "1"
       NVIDIA_VISIBLE_DEVICES: "all"
       NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
-      # Force CUDA backend. If the GPU is not actually available at runtime,
-      # libs/stt.py will raise — use COMPUTE_TYPE=gpu for graceful fallback.
+      # Force CUDA backend.
       COMPUTE_TYPE: "cuda"
     ports:
       - "5099:5099"
@@ -46,7 +45,7 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [ gpu ]
+              capabilities: [gpu]
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
     ulimits:
@@ -59,15 +58,15 @@ services:
         max-size: "128m"
         max-file: "3"
     entrypoint: ["/bin/sh", "-c"]
-    command:
-      - "python3 stt_server.py"
-      # - "gunicorn --config gu.py stt_server:app"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5099/api/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
+    command:
+      - "python3 stt_server.py"
+      # - "gunicorn --config gu.py stt_server:app"
 
 networks:
   stt_network:

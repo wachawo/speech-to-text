@@ -30,8 +30,10 @@ load_dotenv(find_dotenv())
 # Local import — stt.py must NOT be modified
 import libs.stt as stt
 
+TRUE = ("1", "true", "yes", "on", "enabled")
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_ACCESS = os.getenv("LOG_ACCESS", "false").lower() in TRUE
 LOG_FORMAT = "%(asctime)s.%(msecs)03d [%(levelname)s]: (%(name)s.%(funcName)s) %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -240,7 +242,7 @@ def main():
             port=FLASK_PORT,
             log_level=LOG_LEVEL.lower(),
             log_config=LOG_CONFIG,
-            access_log=False,
+            access_log=LOG_ACCESS,
         )
 
 

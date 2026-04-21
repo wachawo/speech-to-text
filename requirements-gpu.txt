@@ -1,0 +1,8 @@
+# GPU-accelerated dependencies for libs/stt.py
+--extra-index-url https://download.pytorch.org/whl/cu130
+torch==2.10.0+cu130
+torchaudio==2.10.0+cu130
+
+# Shared app dependencies
+-r requirements.txt
+
