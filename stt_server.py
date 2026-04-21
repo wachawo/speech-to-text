@@ -176,6 +176,8 @@ def transcribe():
     size_kb = len(bio.getvalue()) // 1024
 
     # Convert to WAV via pydub (handles mp3, wav, ogg, etc.)
+    # Export as 16kHz mono 16-bit PCM — matches Whisper's expected format,
+    # so stt.py skips the torchaudio resampling step entirely.
     try:
         from pydub import AudioSegment
 

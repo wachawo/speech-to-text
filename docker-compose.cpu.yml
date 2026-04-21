@@ -2,8 +2,8 @@ services:
   stt_server:
     build:
       context: .
-      dockerfile: Dockerfile.gpu
-    image: stt_server_gpu
+      dockerfile: Dockerfile.cpu
+    image: stt_server_cpu
     pull_policy: build
     container_name: stt_server
     hostname: stt_server
@@ -12,14 +12,6 @@ services:
       - stt_network
     env_file:
       - .env
-    # GPU passthrough — requires nvidia-container-toolkit on host.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     environment:
       TZ: America/New_York
       STT_HOST: "0.0.0.0"
@@ -30,11 +22,8 @@ services:
       WHISPER_DOWNLOAD_ROOT: "/opt/models"
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
-      NVIDIA_VISIBLE_DEVICES: "all"
-      NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
-      # Force CUDA backend. If the GPU is not actually available at runtime,
-      # libs/stt.py will raise — use COMPUTE_TYPE=auto for graceful fallback.
-      COMPUTE_TYPE: "cuda"
+      # Force CPU backend in libs/stt.py regardless of the .env value.
+      COMPUTE_TYPE: "cpu"
     ports:
       - "5099:5099"
     volumes:

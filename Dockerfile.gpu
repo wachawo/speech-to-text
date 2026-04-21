@@ -1,0 +1,28 @@
+# GPU image based on NGC PyTorch (CUDA 13 + cuDNN + torch, incl. ARM64 for GB10 Grace).
+# Browse tags at: https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch/tags
+FROM nvcr.io/nvidia/pytorch:25.02-py3
+
+# ffmpeg is required by pydub; libsndfile1 is usually already present in the NGC image.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt
+
+# Do NOT reinstall torch/torchaudio — the NGC image already ships them built
+# against the correct CUDA runtime (including sm_120+ for Blackwell/GB10).
+COPY requirements.txt /opt/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY stt_server.py /opt/stt_server.py
+COPY stt_client.py /opt/stt_client.py
+RUN mkdir -p /opt/libs && touch /opt/libs/__init__.py
+RUN mkdir -p /opt/models /opt/logs /opt/recs
+
+RUN useradd --no-create-home --shell /bin/false stt
+RUN chown -R stt:stt /opt
+USER stt
+
+EXPOSE 5099
+CMD ["python", "stt_server.py"]
+

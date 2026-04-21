@@ -1,0 +1,31 @@
+# CPU-only image (no CUDA).
+FROM python:3.11-slim
+
+# ffmpeg is required by pydub; libsndfile1 is required by soundfile.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        build-essential \
+        libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt
+
+COPY requirements.txt /opt/requirements.txt
+# Install CPU-only torch/torchaudio wheels (smaller, no CUDA libs).
+RUN pip install --no-cache-dir \
+        --extra-index-url https://download.pytorch.org/whl/cpu \
+        torch torchaudio \
+ && pip install --no-cache-dir -r requirements.txt
+
+COPY stt_server.py /opt/stt_server.py
+COPY stt_client.py /opt/stt_client.py
+RUN mkdir -p /opt/libs && touch /opt/libs/__init__.py
+RUN mkdir -p /opt/models /opt/logs /opt/recs
+
+RUN useradd --no-create-home --shell /bin/false stt
+RUN chown -R stt:stt /opt
+USER stt
+
+EXPOSE 5099
+CMD ["python", "stt_server.py"]
+
