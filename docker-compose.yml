@@ -12,14 +12,6 @@ services:
       - stt_network
     env_file:
       - .env
-    # GPU passthrough — requires nvidia-container-toolkit on host.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     environment:
       TZ: America/New_York
       STT_HOST: "0.0.0.0"
@@ -33,7 +25,7 @@ services:
       NVIDIA_VISIBLE_DEVICES: "all"
       NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
       # Force CUDA backend. If the GPU is not actually available at runtime,
-      # libs/stt.py will raise — use COMPUTE_TYPE=auto for graceful fallback.
+      # libs/stt.py will raise — use COMPUTE_TYPE=gpu for graceful fallback.
       COMPUTE_TYPE: "cuda"
     ports:
       - "5099:5099"
@@ -47,6 +39,14 @@ services:
       - ./models:/opt/models
       - ./logs:/opt/logs
       - ./recs:/opt/recs
+    # GPU passthrough — requires nvidia-container-toolkit on host.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
     ulimits:
