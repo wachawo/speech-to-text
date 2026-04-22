@@ -2,7 +2,7 @@
 
 `stt_server.py` is an HTTP speech-to-text service built with Flask and served by uvicorn.
 
-Backend: **openai-whisper** (no faster-whisper/ctranslate2 stack).
+Backend: **openai-whisper**.
 
 ## What the server does
 
