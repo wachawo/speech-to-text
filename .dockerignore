@@ -1,5 +1,10 @@
-.vscode/
+# IDE
 .idea/
+.vscode/
+.cursor/
+.claude/
+.codex
+
 __pycache__/
 data/
 recs/
