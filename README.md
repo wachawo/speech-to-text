@@ -1,6 +1,7 @@
 # STT Server
 
 `stt_server.py` is an HTTP speech-to-text service built with Flask and served by uvicorn.
+The BEST Server model for English is `turbo`
 
 Backend: **openai-whisper**.
 
@@ -49,7 +50,7 @@ Example response:
 - `STT_PORT` (default: `5099`)
 - `STT_POOL_SIZE` (default: `8`)
 - `STT_DEBUG` (default: `false`)
-- `WHISPER_MODEL` (default: `small.en`)
+- `WHISPER_MODEL` (default: `turbo`)
 - `WHISPER_LANGUAGE` (default: `en`)
 - `WHISPER_DOWNLOAD_ROOT` (default: `models`; in Docker: `/opt/models`)
 
