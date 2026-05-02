@@ -19,13 +19,18 @@ workers = int(os.getenv("GUNICORN_WORKERS", "4"))
 worker_class = "sync"
 
 # Timeouts
-timeout = 600           # model loading + inference can be slow
+timeout = 600  # model loading + inference can be slow
 graceful_timeout = 120
 
 
 def on_starting(server):
     """Log master startup. No heavy imports here — torch + fork = deadlock."""
-    logger.info("Gunicorn master starting (workers=%s, worker_class=%s, bind=%s)", workers, worker_class, bind)
+    logger.info(
+        "Gunicorn master starting (workers=%s, worker_class=%s, bind=%s)",
+        workers,
+        worker_class,
+        bind,
+    )
 
 
 def post_fork(server, worker):
@@ -48,8 +53,11 @@ def post_fork(server, worker):
 
     with open(lock_path, "w") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
-        logger.info("Worker %s (pid %s): lock acquired, loading model(s)...", worker.age, worker.pid)
-        from stt_server import init_model_pool, MODEL_POOL_SIZE
+        logger.info(
+            "Worker %s (pid %s): lock acquired, loading model(s)...", worker.age, worker.pid
+        )
+        from stt_server import MODEL_POOL_SIZE, init_model_pool
+
         init_model_pool(MODEL_POOL_SIZE)
 
     elapsed = time.monotonic() - t0

@@ -8,7 +8,6 @@ FROM nvidia/cuda:13.0.3-cudnn-runtime-ubuntu24.04
 # `CUBLAS_STATUS_NOT_INITIALIZED`.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 \
-        python3-pip \
         python3-venv \
         ffmpeg \
         build-essential \
@@ -16,19 +15,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libcublas-13-0 \
     && rm -rf /var/lib/apt/lists/*
 
+# uv: fast Python package installer (https://github.com/astral-sh/uv).
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
 WORKDIR /opt
 
 ENV PATH="/opt/venv/bin:${PATH}"
+ENV UV_LINK_MODE=copy
 
-RUN python3 -m venv "/opt/venv" \
- && pip install --no-cache-dir --upgrade pip
+RUN uv venv /opt/venv --python python3
 
 COPY requirements.txt /opt/requirements.txt
-# Install GPU-accelerated PyTorch and other dependencies.
-RUN pip install --no-cache-dir \
+# Install GPU-accelerated PyTorch and other dependencies via uv.
+RUN uv pip install --no-cache \
         --extra-index-url https://download.pytorch.org/whl/cu130 \
         torch==2.10.0+cu130 torchaudio==2.10.0+cu130 \
- && pip install --no-cache-dir -r requirements.txt
+ && uv pip install --no-cache -r requirements.txt
 
 COPY stt_server.py /opt/stt_server.py
 COPY stt_client.py /opt/stt_client.py
@@ -41,4 +43,3 @@ USER stt
 
 EXPOSE 5099
 CMD ["python3", "stt_server.py"]
-

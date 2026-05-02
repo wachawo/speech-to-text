@@ -5,21 +5,24 @@ PYTHON := $(VENV_DIR)/bin/python
 PIP := $(VENV_DIR)/bin/pip
 GUNICORN := $(VENV_DIR)/bin/gunicorn
 
-.PHONY: install start run stop gunicorn
+.PHONY: install start run stop gunicorn test lint
 
 install:
+	@command -v uv >/dev/null 2>&1 || { \
+		echo "[install] uv not found, installing via pip --user"; \
+		python3 -m pip install --user --upgrade uv; \
+	}
 	@if [ ! -d "$(VENV_DIR)" ]; then \
-		echo "[install] Creating virtual environment in $(VENV_DIR)"; \
-		python3 -m venv "$(VENV_DIR)"; \
+		echo "[install] Creating virtual environment in $(VENV_DIR) via uv"; \
+		uv venv "$(VENV_DIR)"; \
 	else \
 		echo "[install] Virtual environment already exists: $(VENV_DIR)"; \
 	fi
 	@echo "[install] Installing Ubuntu packages (ffmpeg, build-essential, libsndfile1)"
 	sudo apt-get update
-	sudo apt-get install -y ffmpeg build-essential libsndfile1 python3-venv
-	@echo "[install] Installing Python dependencies from requirements.txt"
-	$(PIP) install --upgrade pip
-	$(PIP) install -r requirements.txt
+	sudo apt-get install -y ffmpeg build-essential libsndfile1
+	@echo "[install] Installing Python dependencies via uv (requirements-dev.txt includes requirements.txt)"
+	uv pip install --python "$(PYTHON)" -r requirements-dev.txt
 
 run:
 	@if [ ! -x "$(PYTHON)" ]; then \
@@ -48,6 +51,12 @@ start:
 	@nohup "$(PYTHON)" stt_server.py > "$(LOG_FILE)" 2>&1 & echo $$! > "$(PID_FILE)"
 	@echo "[start] Server started in background (PID $$(cat $(PID_FILE)))"
 	@echo "[start] Logs: $(LOG_FILE)"
+
+test:
+	python3 -m pytest
+
+lint:
+	pre-commit run --all-files
 
 stop:
 	@if [ ! -f "$(PID_FILE)" ]; then \
