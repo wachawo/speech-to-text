@@ -5,14 +5,13 @@ force-exclude = '''
 /(
     libs
   | models
-  | \.venv
 )/
 '''
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["libs", "models", ".venv"]
+extend-exclude = ["libs", "models", "venv", ".venv"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

@@ -78,15 +78,15 @@ Client (`stt_client.py`):
 
 Model files are stored in `./models` on host via the `./models:/opt/models` mount in `docker-compose.yml`.
 
-## Local install (uv)
+## Local commands
 
-The project uses [uv](https://github.com/astral-sh/uv) for fast Python dependency
-installation. `make install` installs `uv` (if missing), creates a `.venv`, and
-installs both runtime and dev/test dependencies.
+Install Python dependencies into whichever environment you prefer
+(`requirements.txt` for runtime, `requirements-dev.txt` for runtime + dev/test
+tools). System packages `ffmpeg` and `libsndfile1` must be present. The
+Makefile invokes `python3`, `gunicorn`, `pytest` and `pre-commit` from `PATH`.
 
 ```bash
-make install        # uv venv + uv pip install -r requirements-dev.txt
-make run            # foreground: python stt_server.py
+make run            # foreground: python3 stt_server.py
 make start          # background: PID -> .stt_server.pid, logs -> logs/stt_server.log
 make stop           # stop the background server
 make gunicorn       # run via gunicorn
@@ -100,7 +100,7 @@ make lint           # pre-commit (black + ruff)
 To install pre-commit hooks (so `git commit` runs black + ruff):
 
 ```bash
-.venv/bin/pre-commit install
+pre-commit install
 ```
 
 ## Docker
