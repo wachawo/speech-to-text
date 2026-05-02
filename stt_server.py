@@ -165,8 +165,9 @@ def internal_error(error):
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    if isinstance(e, werkzeug.exceptions.NotFound):
-        return jsonify({"error": "Not Found", "request_id": get_req_id()}), 404
+    if isinstance(e, werkzeug.exceptions.HTTPException):
+        logger.warning("[%s] %s: %s", get_req_id(), e.name, e.description)
+        return jsonify({"error": e.name, "request_id": get_req_id()}), e.code
 
     logger.error(
         "[%s] Unhandled exception: %s: %s\n%s",
