@@ -6,6 +6,9 @@
 .codex
 
 __pycache__/
+.pytest_cache/
+.ruff_cache/
+.coverage
 data/
 recs/
 models/
@@ -14,6 +17,8 @@ models/
 logs/*.log
 .DS_Store
 .env
+.env.*
+!.env.example
 *.db
 *.sqlite3
 *.keras

@@ -1,0 +1,24 @@
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+force-exclude = '''
+/(
+    libs
+  | models
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["libs", "models", "venv", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# E501: line length handled by black.
+# UP009: project style requires UTF-8 coding declarations in headers.
+ignore = ["E501", "UP009"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -8,14 +8,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
+# uv: fast Python package installer (https://github.com/astral-sh/uv).
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
 WORKDIR /opt
 
+ENV UV_LINK_MODE=copy
+# uv installs into the system Python interpreter inside the image (no venv).
+ENV UV_SYSTEM_PYTHON=1
+
 COPY requirements.txt /opt/requirements.txt
-# Install CPU-only torch/torchaudio wheels (smaller, no CUDA libs).
-RUN pip install --no-cache-dir \
+# Install CPU-only torch/torchaudio wheels (smaller, no CUDA libs) via uv.
+RUN uv pip install --system --no-cache \
         --extra-index-url https://download.pytorch.org/whl/cpu \
         torch torchaudio \
- && pip install --no-cache-dir -r requirements.txt
+ && uv pip install --system --no-cache -r requirements.txt
 
 COPY stt_server.py /opt/stt_server.py
 COPY stt_client.py /opt/stt_client.py
@@ -28,4 +35,3 @@ USER stt
 
 EXPOSE 5099
 CMD ["python", "stt_server.py"]
-

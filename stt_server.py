@@ -10,25 +10,27 @@ Initializes a pool of N Whisper model instances at startup
 so each request grabs a pre-loaded model from the queue.
 """
 
+import hmac
 import io
 import logging
 import os
 import queue
 import time
 import traceback
+import uuid
+from functools import wraps
 from typing import Any, cast
 
 import werkzeug.exceptions
-from flask import Flask, jsonify, request, Response
+from dotenv import find_dotenv, load_dotenv
+from flask import Flask, g, jsonify, request
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
-
-from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
 
 # Local import — stt.py must NOT be modified
-import libs.stt as stt
+import libs.stt as stt  # noqa: E402  (must follow load_dotenv)
 
 TRUE = ("1", "true", "yes", "on", "enabled")
 # Logging
@@ -77,6 +79,9 @@ FLASK_DEBUG = os.getenv("STT_DEBUG", "False").lower() in TRUE_VALUES
 MODEL_POOL_SIZE = int(os.getenv("STT_POOL_SIZE", "8"))
 MODEL_POOL: queue.Queue = queue.Queue()
 
+# Static-token auth — empty set means "auth disabled, allow all".
+STT_TOKENS: set[str] = {t.strip() for t in os.getenv("STT_TOKENS", "").split(",") if t.strip()}
+
 
 def init_model_pool(size: int = MODEL_POOL_SIZE):
     """Pre-load `size` Whisper model instances into the pool."""
@@ -97,42 +102,96 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_host=1)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 
+# Request context helpers
+
+
+def get_req_id() -> str:
+    return getattr(g, "request_id", "-")
+
+
+def token_required(view):
+    """Reject requests without a valid Bearer token when STT_TOKENS is non-empty."""
+
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if not STT_TOKENS:
+            return view(*args, **kwargs)
+        header = request.headers.get("Authorization", "")
+        token = header[7:].strip() if header.startswith("Bearer ") else ""
+        if not token or not any(hmac.compare_digest(token, t) for t in STT_TOKENS):
+            logger.warning("[%s] Unauthorized", get_req_id())
+            return jsonify({"error": "Unauthorized", "request_id": get_req_id()}), 401
+        return view(*args, **kwargs)
+
+    return wrapper
+
+
+@app.before_request
+def before_request():
+    g.request_id = uuid.uuid4().hex[:12]
+    g.request_start = time.monotonic()
+
+
 # Error handlers
 
 
 @app.errorhandler(400)
 def bad_request(error):
-    return jsonify({"error": "Bad Request", "message": str(error)}), 400
+    logger.warning("[%s] Bad Request: %s", get_req_id(), error)
+    return jsonify({"error": "Bad Request", "request_id": get_req_id()}), 400
 
 
 @app.errorhandler(404)
 def not_found(error):
-    return jsonify({"error": "Not Found"}), 404
+    return jsonify({"error": "Not Found", "request_id": get_req_id()}), 404
 
 
 @app.errorhandler(405)
 def method_not_allowed(error):
-    return jsonify({"error": "Method Not Allowed"}), 405
+    return jsonify({"error": "Method Not Allowed", "request_id": get_req_id()}), 405
 
 
 @app.errorhandler(500)
 def internal_error(error):
-    return jsonify({"error": "Internal Server Error", "message": str(error)}), 500
+    logger.error(
+        "[%s] Internal Server Error: %s: %s\n%s",
+        get_req_id(),
+        type(error).__name__,
+        error,
+        traceback.format_exc(),
+    )
+    return jsonify({"error": "Internal Server Error", "request_id": get_req_id()}), 500
 
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    if isinstance(e, werkzeug.exceptions.NotFound):
-        return jsonify({"error": "NotFound"}), 404
+    if isinstance(e, werkzeug.exceptions.HTTPException):
+        logger.warning("[%s] %s: %s", get_req_id(), e.name, e.description)
+        return jsonify({"error": e.name, "request_id": get_req_id()}), e.code
 
-    logger.error(f"{type(e).__name__} {str(e)} {traceback.format_exc()}")
-    return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+    logger.error(
+        "[%s] Unhandled exception: %s: %s\n%s",
+        get_req_id(),
+        type(e).__name__,
+        e,
+        traceback.format_exc(),
+    )
+    return jsonify({"error": "Internal Server Error", "request_id": get_req_id()}), 500
 
 
 @app.after_request
 def after_request(resp):
+    elapsed_ms = int((time.monotonic() - getattr(g, "request_start", time.monotonic())) * 1000)
     log_fn = logger.debug if request.path == "/api/health" else logger.info
-    log_fn("%s %s: %s %s", request.method, request.path, resp.status_code, resp.status)
+    log_fn(
+        "[%s] %s %s: %s %s (%dms)",
+        get_req_id(),
+        request.method,
+        request.path,
+        resp.status_code,
+        resp.status,
+        elapsed_ms,
+    )
     return resp
 
 
@@ -151,6 +210,7 @@ def health():
 
 
 @app.route("/api/stt", methods=["POST"])
+@token_required
 def transcribe():
     """
     Transcribe an uploaded audio file.
@@ -172,7 +232,7 @@ def transcribe():
         bio = io.BytesIO(request.data)
         filename = "raw_body"
     else:
-        return jsonify({"error": "No audio file provided"}), 400
+        return jsonify({"error": "No audio data", "request_id": get_req_id()}), 400
 
     bio.seek(0)
     size_kb = len(bio.getvalue()) // 1024
@@ -192,22 +252,33 @@ def transcribe():
         wav_bio.seek(0)
     except Exception as e:
         logger.error(
-            f"Audio conversion failed: {type(e).__name__} {str(e)}\n{traceback.format_exc()}"
+            "[%s] Audio conversion failed: %s: %s\n%s",
+            get_req_id(),
+            type(e).__name__,
+            e,
+            traceback.format_exc(),
         )
-        return jsonify({"error": f"Audio conversion failed: {e}"}), 400
+        return jsonify({"error": "Invalid audio data", "request_id": get_req_id()}), 400
 
     # Acquire model from pool
     try:
         model = MODEL_POOL.get(timeout=120)
     except queue.Empty:
-        return jsonify({"error": "All models busy, try again later"}), 503
+        logger.warning(
+            "[%s] Model pool exhausted (size=%d, available=%d)",
+            get_req_id(),
+            MODEL_POOL_SIZE,
+            MODEL_POOL.qsize(),
+        )
+        return jsonify({"error": "Service Unavailable", "request_id": get_req_id()}), 503
 
     # Transcribe
     try:
         text = stt.get_stt_bio(wav_bio, model=model)
         elapsed = time.monotonic() - t0
         logger.info(
-            "STT %s (%dkb) → %d chars (%.2fs)",
+            "[%s] STT %s (%dkb) → %d chars (%.2fs)",
+            get_req_id(),
             filename,
             size_kb,
             len(text),
@@ -216,9 +287,13 @@ def transcribe():
         return jsonify({"text": text, "elapsed": round(elapsed, 3)}), 200
     except Exception as e:
         logger.error(
-            f"STT failed: {type(e).__name__} {str(e)}\n{traceback.format_exc()}"
+            "[%s] STT failed: %s: %s\n%s",
+            get_req_id(),
+            type(e).__name__,
+            e,
+            traceback.format_exc(),
         )
-        return jsonify({"error": f"STT failed: {e}"}), 500
+        return jsonify({"error": "Transcription failed", "request_id": get_req_id()}), 500
     finally:
         MODEL_POOL.put(model)
 
@@ -228,6 +303,10 @@ def transcribe():
 
 def main():
     init_model_pool(MODEL_POOL_SIZE)
+    if STT_TOKENS:
+        logger.info("Auth: %d static token(s) loaded", len(STT_TOKENS))
+    else:
+        logger.info("Auth: disabled (STT_TOKENS empty)")
 
     if FLASK_DEBUG:
         app.run(host=FLASK_HOST, port=FLASK_PORT, debug=FLASK_DEBUG)
