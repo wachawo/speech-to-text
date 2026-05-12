@@ -23,5 +23,8 @@ logs/*.log
 *.sqlite3
 *.keras
 *.h5
-DEPLOY.txt
-ROLLBACK.txt
+
+*.md
+!README.md
+!CHANGELOG.md
+!docs/*.md

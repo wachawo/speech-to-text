@@ -79,8 +79,20 @@ FLASK_DEBUG = os.getenv("STT_DEBUG", "False").lower() in TRUE_VALUES
 MODEL_POOL_SIZE = int(os.getenv("STT_POOL_SIZE", "8"))
 MODEL_POOL: queue.Queue = queue.Queue()
 
-# Static-token auth — empty set means "auth disabled, allow all".
+# Static-token auth — empty set means "auth disabled, allow all" (trusted deployment).
 STT_TOKENS: set[str] = {t.strip() for t in os.getenv("STT_TOKENS", "").split(",") if t.strip()}
+
+# Max request body size — caps memory usage per request to mitigate OOM/DoS.
+# Flask returns 413 automatically when exceeded.
+MAX_CONTENT_LENGTH_MB = int(os.getenv("MAX_CONTENT_LENGTH_MB", "10"))
+
+# CORS allowed origins. "*" allows any origin; otherwise comma-separated allowlist.
+FORWARDED_ALLOW_IPS = os.getenv("FORWARDED_ALLOW_IPS", "*").strip()
+CORS_ORIGINS = (
+    "*"
+    if FORWARDED_ALLOW_IPS == "*"
+    else [o.strip() for o in FORWARDED_ALLOW_IPS.split(",") if o.strip()]
+)
 
 
 def init_model_pool(size: int = MODEL_POOL_SIZE):
@@ -98,8 +110,9 @@ def init_model_pool(size: int = MODEL_POOL_SIZE):
 # Flask app
 app = Flask(__name__)
 app.url_map.strict_slashes = False
+app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH_MB * 1024 * 1024
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_host=1)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app, resources={r"/api/*": {"origins": CORS_ORIGINS}})
 
 
 # Request context helpers
@@ -149,6 +162,21 @@ def not_found(error):
 @app.errorhandler(405)
 def method_not_allowed(error):
     return jsonify({"error": "Method Not Allowed", "request_id": get_req_id()}), 405
+
+
+@app.errorhandler(413)
+def payload_too_large(error):
+    logger.warning("[%s] Payload too large (limit=%dMB)", get_req_id(), MAX_CONTENT_LENGTH_MB)
+    return (
+        jsonify(
+            {
+                "error": "Payload Too Large",
+                "limit_mb": MAX_CONTENT_LENGTH_MB,
+                "request_id": get_req_id(),
+            }
+        ),
+        413,
+    )
 
 
 @app.errorhandler(500)
