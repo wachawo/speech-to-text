@@ -52,6 +52,10 @@ Example response:
 - `WHISPER_MODEL` (default: `small.en`)
 - `WHISPER_LANGUAGE` (default: `en`)
 - `WHISPER_DOWNLOAD_ROOT` (default: `models`; in Docker: `/opt/models`)
+- `STT_TOKENS` (default: empty — auth disabled). Comma-separated bearer tokens.
+  When non-empty, `POST /api/stt` requires `Authorization: Bearer <token>`
+  (or `X-API-Token: <token>`). `GET /api/health` stays open so container
+  healthchecks keep working.
 
 Model files are stored in `./models` on host via the `./models:/opt/models` mount in `docker-compose.yml`.
 
@@ -67,3 +71,5 @@ make run
 - `make start` — starts server in background, writes PID to `.stt_server.pid`, logs to `logs/stt_server.log`
 - `make stop` — stops the background server by PID
 - `make run` — runs server in foreground (console mode)
+
+`stt_client.py` reads `STT_TOKEN` from env and sends it as a bearer token when set.

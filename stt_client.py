@@ -32,14 +32,17 @@ logging.basicConfig(**LOGGING)
 logger = logging.getLogger(__name__)
 
 STT_URL = os.getenv("STT_URL", "http://localhost:5099")
+STT_TOKEN = os.getenv("STT_TOKEN", "").strip()
 
 
 def transcribe_file(filepath: str) -> dict:
     """Send a single file to /api/stt and return response JSON."""
+    headers = {"Authorization": f"Bearer {STT_TOKEN}"} if STT_TOKEN else {}
     with open(filepath, "rb") as f:
         resp = requests.post(
             f"{STT_URL}/api/stt",
             files={"file": (os.path.basename(filepath), f)},
+            headers=headers,
             timeout=120,
         )
     resp.raise_for_status()

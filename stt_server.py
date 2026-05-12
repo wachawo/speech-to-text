@@ -10,12 +10,14 @@ Initializes a pool of N Whisper model instances at startup
 so each request grabs a pre-loaded model from the queue.
 """
 
+import hmac
 import io
 import logging
 import os
 import queue
 import time
 import traceback
+from functools import wraps
 from typing import Any, cast
 
 import werkzeug.exceptions
@@ -76,6 +78,46 @@ FLASK_PORT = int(os.getenv("STT_PORT", "5099"))
 FLASK_DEBUG = os.getenv("STT_DEBUG", "False").lower() in TRUE_VALUES
 MODEL_POOL_SIZE = int(os.getenv("STT_POOL_SIZE", "8"))
 MODEL_POOL: queue.Queue = queue.Queue()
+
+# Auth — comma-separated bearer tokens; empty value disables auth.
+STT_TOKENS = frozenset(
+    t.strip() for t in os.getenv("STT_TOKENS", "").split(",") if t.strip()
+)
+
+
+def extract_bearer_token() -> str:
+    """Pull token from `Authorization: Bearer <t>` or `X-API-Token: <t>`."""
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return request.headers.get("X-API-Token", "").strip()
+
+
+def token_matches(provided: str) -> bool:
+    """Constant-time match of `provided` against any configured token."""
+    if not provided:
+        return False
+    for known in STT_TOKENS:
+        if hmac.compare_digest(provided, known):
+            return True
+    return False
+
+
+def auth_required(func):
+    """Require a valid bearer token when STT_TOKENS is configured.
+
+    No-op when STT_TOKENS is empty — keeps the legacy unauthenticated mode.
+    """
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if not STT_TOKENS:
+            return func(*args, **kwargs)
+        provided = extract_bearer_token()
+        if not token_matches(provided):
+            logger.warning("Unauthorized %s %s", request.method, request.path)
+            return jsonify({"error": "Unauthorized"}), 401
+        return func(*args, **kwargs)
+    return wrapper
 
 
 def init_model_pool(size: int = MODEL_POOL_SIZE):
@@ -151,6 +193,7 @@ def health():
 
 
 @app.route("/api/stt", methods=["POST"])
+@auth_required
 def transcribe():
     """
     Transcribe an uploaded audio file.
@@ -228,6 +271,10 @@ def transcribe():
 
 def main():
     init_model_pool(MODEL_POOL_SIZE)
+    if STT_TOKENS:
+        logger.info("Auth enabled: %d token(s) configured", len(STT_TOKENS))
+    else:
+        logger.info("Auth disabled (STT_TOKENS is empty)")
 
     if FLASK_DEBUG:
         app.run(host=FLASK_HOST, port=FLASK_PORT, debug=FLASK_DEBUG)
