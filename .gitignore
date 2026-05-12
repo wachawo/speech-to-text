@@ -24,6 +24,9 @@ logs/*.log
 *.keras
 *.h5
 
+DEPLOY.txt
+ROLLBACK.txt
+
 *.md
 !README.md
 !CHANGELOG.md
