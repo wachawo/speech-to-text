@@ -18,6 +18,8 @@ services:
       STT_PORT: "5099"
       STT_POOL_SIZE: "1"
       STT_DEBUG: "false"
+      MAX_CONTENT_LENGTH_MB: "10"
+      CORS_ORIGINS: "*"
       GUNICORN_WORKERS: "4"
       WHISPER_DOWNLOAD_ROOT: "/opt/models"
       OMP_NUM_THREADS: "1"
