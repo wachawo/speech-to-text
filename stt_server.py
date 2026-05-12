@@ -87,12 +87,7 @@ STT_TOKENS: set[str] = {t.strip() for t in os.getenv("STT_TOKENS", "").split(","
 MAX_CONTENT_LENGTH_MB = int(os.getenv("MAX_CONTENT_LENGTH_MB", "10"))
 
 # CORS allowed origins. "*" allows any origin; otherwise comma-separated allowlist.
-FORWARDED_ALLOW_IPS = os.getenv("FORWARDED_ALLOW_IPS", "*").strip()
-CORS_ORIGINS = (
-    "*"
-    if FORWARDED_ALLOW_IPS == "*"
-    else [o.strip() for o in FORWARDED_ALLOW_IPS.split(",") if o.strip()]
-)
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
 
 
 def init_model_pool(size: int = MODEL_POOL_SIZE):
