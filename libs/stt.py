@@ -1,155 +1,135 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Get STT from audio file using Whisper
-Usage: python stt.py file.wav
-"""
+"""Whisper wrapper: transcribe audio from a file on disk or from an in-memory WAV buffer."""
 
-import logging
 import io
-import soundfile as sf
-import sys
+import logging
 import os
+import sys
 import time
-import torch
-import torchaudio
+import traceback
 import warnings
 
-warnings.filterwarnings(
-    "ignore", message="FP16 is not supported on CPU; using FP32 instead"
-)
-
-# import traceback
-import urllib3
-import whisper
 import numpy as np
-from typing import Optional
+import soundfile as sf
+import torch
+import torchaudio
+import whisper
 from pydub import AudioSegment
 
-LOGGING = {
-    "format": "%(asctime)s.%(msecs)03d [%(levelname)s]: (%(name)s.%(funcName)s) %(message)s",
-    "level": logging.INFO,
-    "datefmt": "%Y-%m-%d %H:%M:%S",
-    "handlers": [
-        logging.StreamHandler(),
-        # logging.handlers.RotatingFileHandler(filename=f'{SCRIPT_NAME}.log', maxBytes=1024 * 1024 * 10, backupCount=3),
-    ],
-}
-logging.basicConfig(**LOGGING)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# Local imports
+from libs import config, logs
+
+# Whisper always decodes in FP32 on CPU; the warning carries nothing actionable.
+warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
+
 logger = logging.getLogger(__name__)
 
-from dotenv import load_dotenv, find_dotenv
+# Sampling rate Whisper expects; anything else is resampled first.
+TARGET_SAMPLE_RATE = 16000
 
-load_dotenv(find_dotenv())
+# Language values that mean "let Whisper autodetect".
+AUTODETECT_VALUES = ("", "auto")
 
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small.en").lower()
-COMPUTE_TYPE = os.getenv("COMPUTE_TYPE", "auto").lower()
-WHISPER_DOWNLOAD_ROOT = os.getenv("WHISPER_DOWNLOAD_ROOT", "models")
-WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", "en").lower()
+SUPPORTED_DEVICES = ("cpu", "cuda")
 
 
-def get_model(device: str = COMPUTE_TYPE):
-    """Load the Whisper model."""
+def resolve_device(device: str = config.COMPUTE_TYPE) -> str:
+    """Resolve "auto" to cuda/cpu and reject a device this machine cannot serve."""
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    if device not in ["cpu", "cuda"]:
+    if device not in SUPPORTED_DEVICES:
         raise ValueError("Device must be 'cpu' or 'cuda'.")
     if device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA is not available on this machine.")
-    os.makedirs(WHISPER_DOWNLOAD_ROOT, exist_ok=True)
-    model = whisper.load_model(
-        WHISPER_MODEL,
+    return device
+
+
+def get_model(device: str = config.COMPUTE_TYPE) -> whisper.Whisper:
+    """Load one Whisper model instance onto the resolved device, downloading it if needed."""
+    device = resolve_device(device)
+    os.makedirs(config.WHISPER_DOWNLOAD_ROOT, exist_ok=True)
+    return whisper.load_model(
+        config.WHISPER_MODEL,
         device=device,
-        download_root=WHISPER_DOWNLOAD_ROOT,
+        download_root=config.WHISPER_DOWNLOAD_ROOT,
     )
-    return model
 
 
-def convert_to_wav(input_filename: str, output_filename: str = None) -> str:
-    """Convert audio file to WAV format."""
-    # ffmpeg -i input.mp3 -ar 16000 -ac 1 -c:a pcm_s16le output.wav
-    audio = AudioSegment.from_file(input_filename)
-    # Set to mono and 16kHz
-    audio = (
-        audio.set_channels(1).set_frame_rate(16000).set_sample_width(2)
-    )  # 2 bytes = 16 bits
-    # Export as WAV
-    audio.export(output_filename, format="wav")
-    return str(output_filename)
+def normalize_language(language: str | None) -> str | None:
+    """Map a requested language onto Whisper's argument.
+
+    None falls back to the WHISPER_LANGUAGE default, "auto" and "" mean
+    autodetect (Whisper takes None for that), anything else is passed through.
+    """
+    value = config.WHISPER_LANGUAGE if language is None else language
+    value = (value or "").strip().lower()
+    return None if value in AUTODETECT_VALUES else value
 
 
-def get_stt_bio(
-    bio: io.BytesIO = io.BytesIO(),
-    model: Optional[whisper.Whisper] = None,
-    device: Optional[str] = COMPUTE_TYPE,
-    language: Optional[str] = None,
-) -> str:
-    if not model:
-        if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        if device not in ["cpu", "cuda"]:
-            raise ValueError("Device must be 'cpu' or 'cuda'.")
-        if device == "cuda" and not torch.cuda.is_available():
-            raise RuntimeError("CUDA is not available on this machine.")
-        # Load the Whisper model
-        model = get_model(device=device)
-    # Read the audio file
-    data, sr = sf.read(bio)
-    # Resample to 16000 Hz (Whisper's expected sampling rate)
-    if sr != 16000:
-        data = torch.from_numpy(data).float()
-        if data.ndim == 2:
-            data = data.mean(dim=1)
-        resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=16000)
-        data = resampler(data)
-        data = data.numpy()
-    elif isinstance(data, np.ndarray):
+def read_waveform(bio: io.BytesIO) -> np.ndarray:
+    """Decode a WAV buffer into a mono float32 waveform at 16 kHz, normalized to [-1.0, 1.0]."""
+    data, sample_rate = sf.read(bio)
+    if sample_rate != TARGET_SAMPLE_RATE:
+        waveform = torch.from_numpy(data).float()
+        if waveform.ndim == 2:
+            waveform = waveform.mean(dim=1)
+        resampler = torchaudio.transforms.Resample(
+            orig_freq=sample_rate, new_freq=TARGET_SAMPLE_RATE
+        )
+        data = resampler(waveform).numpy()
+    else:
         if data.ndim == 2:
             data = data.mean(axis=1)
         data = data.astype(np.float32)
-    # Normalize the waveform to [-1.0, 1.0]
-    if np.abs(data).max() > 0:
-        data = data / np.abs(data).max()
+    peak = np.abs(data).max()
+    if peak > 0:
+        data = data / peak
+    return data
 
-    # Per-request language override; None falls back to the WHISPER_LANGUAGE
-    # default, and "auto"/"" means autodetect (language=None passed to Whisper).
-    lang = WHISPER_LANGUAGE if language is None else language
-    lang = (lang or "").strip().lower()
-    lang = None if lang in ("", "auto") else lang
 
-    # Force deterministic decoding so repeated requests for the same input
-    # produce stable output.
+def get_stt_bio(
+    bio: io.BytesIO,
+    model: whisper.Whisper | None = None,
+    device: str = config.COMPUTE_TYPE,
+    language: str | None = None,
+) -> str:
+    """Transcribe a WAV buffer and return the text.
+
+    A 16 kHz mono buffer (what the server always sends) skips the resampling
+    step. Without an explicit `model` one is loaded on the spot, which is slow —
+    the server passes an instance borrowed from the pool. Decoding is seeded and
+    greedy so the same audio always produces the same text.
+    """
+    if model is None:
+        model = get_model(device=device)
+    data = read_waveform(bio)
     torch.manual_seed(0)
     np.random.seed(0)
     result = model.transcribe(
         audio=data,
-        language=lang,
+        language=normalize_language(language),
         task="transcribe",
         temperature=0.0,
         beam_size=1,
         best_of=1,
         condition_on_previous_text=False,
     )
-    logger.debug(f"result: {result['text']}")
-    return result["text"].strip()
+    text = result["text"].strip()
+    logger.debug("Transcribed %d chars", len(text))
+    return text
 
 
 def get_stt_filename(
     filename: str,
-    model: Optional[whisper.Whisper] = None,
-    device: str = COMPUTE_TYPE,
-    language: Optional[str] = None,
+    model: whisper.Whisper | None = None,
+    device: str = config.COMPUTE_TYPE,
+    language: str | None = None,
 ) -> str:
-    """Transcribe audio using Whisper model."""
+    """Transcribe an audio file from disk by exporting it to a WAV buffer first."""
     if not os.path.exists(filename):
         raise FileNotFoundError(f"File '{filename}' does not exist.")
-    # Get transcription using audio file
     audio = AudioSegment.from_file(filename)
-    channels = audio.split_to_mono()
-    if len(channels) > 1:
-        audio = AudioSegment.from_mono_audiosegments(*channels)
-    # Write audio to a BytesIO
     bio = io.BytesIO()
     audio.export(bio, format="wav")
     bio.seek(0)
@@ -157,12 +137,19 @@ def get_stt_filename(
 
 
 def main():
+    """CLI entry point: transcribe the audio file given as the first argument."""
+    logs.setup_logging()
     if len(sys.argv) < 2:
+        logger.error("Usage: python3 -m libs.stt <audio-file>")
         sys.exit(1)
     filename = sys.argv[1]
     start_time = time.monotonic()
-    text = get_stt_filename(filename)
-    logger.info(f"STT: {text}\n({time.monotonic() - start_time:.3f} sec)")
+    try:
+        text = get_stt_filename(filename)
+    except Exception as exc:
+        logger.error("%s: %s\n%s", type(exc).__name__, exc, traceback.format_exc())
+        sys.exit(1)
+    logger.info("STT: %s (%.3f sec)", text, time.monotonic() - start_time)
 
 
 if __name__ == "__main__":
