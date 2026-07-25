@@ -117,10 +117,17 @@ O `.env` é carregado tanto pelo servidor quanto pelo cliente através do `pytho
 
 ```text
 speech-to-text/
-├── stt_server.py        # Flask + uvicorn HTTP service, model pool, entry point
+├── stt_server.py        # Flask app wiring, routes, entry point
 ├── stt_client.py        # CLI client that posts files to the server
-├── libs/stt.py          # Whisper wrapper (vendored, not modified)
-├── gu.py                # Gunicorn hooks
+├── gu.py                # Gunicorn config and hooks
+├── libs/
+│   ├── config.py        # every environment variable, read once
+│   ├── logs.py          # logging format shared by the app, uvicorn and the CLIs
+│   ├── errors.py        # uniform JSON error responses and Flask error handlers
+│   ├── auth.py          # optional static-token authentication
+│   ├── audio.py         # upload -> 16 kHz mono WAV conversion
+│   ├── model_pool.py    # pool of pre-loaded Whisper instances
+│   └── stt.py           # Whisper wrapper
 ├── Dockerfile           # GPU build (CUDA 13.0)
 ├── Dockerfile-cpu       # CPU build
 ├── docs/                # README translations

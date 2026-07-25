@@ -117,10 +117,17 @@ python3 stt_client.py file1.wav file2.mp3 file3.ogg
 
 ```text
 speech-to-text/
-├── stt_server.py        # Service HTTP Flask + uvicorn, pool de modèles, point d'entrée
+├── stt_server.py        # Assemblage de l'application Flask, routes, point d'entrée
 ├── stt_client.py        # Client CLI qui envoie des fichiers au serveur
-├── libs/stt.py          # Wrapper Whisper (intégré, non modifié)
-├── gu.py                # Hooks Gunicorn
+├── gu.py                # Configuration et hooks Gunicorn
+├── libs/
+│   ├── config.py        # toutes les variables d'environnement, lues une seule fois
+│   ├── logs.py          # format de log partagé par l'application, uvicorn et les CLI
+│   ├── errors.py        # réponses d'erreur JSON uniformes et handlers Flask
+│   ├── auth.py          # authentification optionnelle par jeton statique
+│   ├── audio.py         # conversion de l'envoi en WAV mono 16 kHz
+│   ├── model_pool.py    # pool d'instances Whisper préchargées
+│   └── stt.py           # wrapper Whisper
 ├── Dockerfile           # Construction GPU (CUDA 13.0)
 ├── Dockerfile-cpu       # Construction CPU
 ├── docs/                # Traductions du README

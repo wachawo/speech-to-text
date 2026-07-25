@@ -32,9 +32,8 @@ RUN uv pip install --no-cache \
         torch==2.10.0+cu130 torchaudio==2.10.0+cu130 \
  && uv pip install --no-cache -r requirements.txt
 
-COPY stt_server.py /opt/stt_server.py
-COPY stt_client.py /opt/stt_client.py
-RUN mkdir -p /opt/libs && touch /opt/libs/__init__.py
+COPY stt_server.py stt_client.py gu.py /opt/
+COPY libs /opt/libs
 RUN mkdir -p /opt/models /opt/logs /opt/recs
 
 RUN useradd --no-create-home --shell /bin/false stt
