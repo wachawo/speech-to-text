@@ -1,88 +1,92 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-STT client — send audio files to stt_server and print transcriptions.
-
-Usage:
-    python stt_client.py file1.mp3 file2.wav ...
-    python stt_client.py recs/2026-03-27/*.mp3
-
-Environment:
-    STT_URL    — server base URL (default: http://localhost:5099)
-    STT_TOKEN  — optional static token sent as `Authorization: Bearer <token>`
-"""
+"""CLI client: post audio files to a running stt_server and log the transcriptions."""
 
 import logging
 import os
 import sys
 import time
+import traceback
 
 import requests
-from dotenv import find_dotenv, load_dotenv
 
-load_dotenv(find_dotenv())
+# Local imports
+from libs import config, logs
 
-# Logging
-LOGGING = {
-    "handlers": [logging.StreamHandler()],
-    "format": "%(asctime)s.%(msecs)03d [%(levelname)s]: (%(name)s.%(funcName)s) %(message)s",
-    "level": logging.INFO,
-    "datefmt": "%Y-%m-%d %H:%M:%S",
-}
-logging.basicConfig(**LOGGING)
+logs.setup_logging()
 logger = logging.getLogger(__name__)
 
-STT_URL = os.getenv("STT_URL", "http://localhost:5099")
-STT_TOKEN = os.getenv("STT_TOKEN", "").strip()
+# Generous enough for a cold model pool on the server side.
+REQUEST_TIMEOUT = 120
+
+
+def build_headers() -> dict[str, str]:
+    """Build the request headers, adding the bearer token only when one is configured."""
+    if not config.STT_TOKEN:
+        return {}
+    return {"Authorization": f"Bearer {config.STT_TOKEN}"}
 
 
 def transcribe_file(filepath: str) -> dict:
-    """Send a single file to /api/stt and return response JSON."""
-    headers = {"Authorization": f"Bearer {STT_TOKEN}"} if STT_TOKEN else {}
-    with open(filepath, "rb") as f:
+    """Post a single file to /api/stt and return the decoded JSON response."""
+    with open(filepath, "rb") as audio_file:
         resp = requests.post(
-            f"{STT_URL}/api/stt",
-            files={"file": (os.path.basename(filepath), f)},
-            headers=headers,
-            timeout=120,
+            f"{config.STT_URL}/api/stt",
+            files={"file": (os.path.basename(filepath), audio_file)},
+            headers=build_headers(),
+            timeout=REQUEST_TIMEOUT,
         )
     resp.raise_for_status()
     return resp.json()
 
 
+def transcribe_and_log(filepath: str, position: str) -> None:
+    """Transcribe one file and log the result, or the reason it failed."""
+    if not os.path.isfile(filepath):
+        logger.warning("%s SKIP %s - not found", position, filepath)
+        return
+
+    size_kb = os.path.getsize(filepath) // 1024
+    start_time = time.monotonic()
+    try:
+        result = transcribe_file(filepath)
+    except requests.HTTPError as exc:
+        resp = exc.response
+        logger.error(
+            "%s %s: %s %s %s", position, filepath, resp.status_code, resp.reason, resp.text
+        )
+        return
+    except Exception as exc:
+        logger.error(
+            "%s %s: %s: %s\n%s",
+            position,
+            filepath,
+            type(exc).__name__,
+            exc,
+            traceback.format_exc(),
+        )
+        return
+
+    logger.info(
+        "%s %s (%dkb) -> %s (server=%.2fs total=%.2fs)",
+        position,
+        filepath,
+        size_kb,
+        result.get("text", ""),
+        result.get("elapsed", 0),
+        time.monotonic() - start_time,
+    )
+
+
 def main():
+    """Entry point: transcribe every file given on the command line, in order."""
     if len(sys.argv) < 2:
-        logger.error(f"Usage: {sys.argv[0]} <file1> [file2] ...")
+        logger.error("Usage: %s <file1> [file2] ...", sys.argv[0])
         sys.exit(1)
 
     files = sys.argv[1:]
-    total = len(files)
-
-    for i, filepath in enumerate(files, 1):
-        if not os.path.isfile(filepath):
-            logger.warning(f"[{i}/{total}] SKIP {filepath} — not found")
-            continue
-
-        size_kb = os.path.getsize(filepath) // 1024
-        t0 = time.monotonic()
-
-        try:
-            result = transcribe_file(filepath)
-            elapsed = time.monotonic() - t0
-            text = result.get("text", "")
-            srv = result.get("elapsed", 0)
-            logger.info(
-                f"[{i}/{total}] {filepath} ({size_kb}kb) → {text} (server={srv:.2f}s total={elapsed:.2f}s)"
-            )
-        except requests.HTTPError as e:
-            resp = e.response
-            logger.error(f"[{i}/{total}] {filepath}: {resp.status_code} {resp.reason} {resp.text}")
-        except Exception as e:
-            import traceback
-
-            logger.error(
-                f"[{i}/{total}] {filepath}: {type(e).__name__} {str(e)} {traceback.format_exc()}"
-            )
+    for index, filepath in enumerate(files, 1):
+        transcribe_and_log(filepath, f"[{index}/{len(files)}]")
 
 
 if __name__ == "__main__":

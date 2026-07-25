@@ -6,25 +6,34 @@ import io
 import queue
 import re
 
+from libs import model_pool
 from tests.conftest import make_wav
 
 REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
 
-def _assert_error_shape(body):
+def assert_error_shape(body):
+    """Assert the response carries exactly the generic error category and a request id."""
     assert set(body.keys()) == {"error", "request_id"}
     assert REQ_ID_RE.match(body["request_id"])
 
 
+def raise_runtime_error(bio, model=None, device=None, language=None):
+    """Stand in for stt.get_stt_bio() and fail, to exercise the 500 path."""
+    raise RuntimeError("transcription exploded")
+
+
 def test_no_body(client):
+    """A request with neither a file field nor a body is a 400."""
     resp = client.post("/api/stt")
     assert resp.status_code == 400
     body = resp.get_json()
     assert body["error"] == "No audio data"
-    _assert_error_shape(body)
+    assert_error_shape(body)
 
 
 def test_invalid_audio(client):
+    """A payload pydub cannot decode is a 400, not a 500."""
     resp = client.post(
         "/api/stt",
         data={"file": (io.BytesIO(b"not an audio file at all"), "garbage.bin")},
@@ -33,10 +42,11 @@ def test_invalid_audio(client):
     assert resp.status_code == 400
     body = resp.get_json()
     assert body["error"] == "Invalid audio data"
-    _assert_error_shape(body)
+    assert_error_shape(body)
 
 
 def test_success_multipart(client):
+    """A multipart upload returns the transcription and the elapsed time."""
     wav = make_wav(duration_ms=50)
     resp = client.post(
         "/api/stt",
@@ -50,6 +60,7 @@ def test_success_multipart(client):
 
 
 def test_success_raw_body(client):
+    """A raw audio/* body is accepted just like a multipart upload."""
     wav = make_wav(duration_ms=50)
     resp = client.post("/api/stt", data=wav, content_type="audio/wav")
     assert resp.status_code == 200
@@ -57,12 +68,13 @@ def test_success_raw_body(client):
 
 
 def test_pool_exhausted(client, monkeypatch):
-    import stt_server
+    """When no model frees up in time the request is a 503, not a hang."""
 
-    def _empty(*args, **kwargs):
+    def raise_queue_empty(*args, **kwargs):
+        """Stand in for Queue.get() and report the pool as exhausted."""
         raise queue.Empty
 
-    monkeypatch.setattr(stt_server.MODEL_POOL, "get", _empty)
+    monkeypatch.setattr(model_pool.MODEL_POOL, "get", raise_queue_empty)
 
     wav = make_wav(duration_ms=50)
     resp = client.post(
@@ -73,16 +85,12 @@ def test_pool_exhausted(client, monkeypatch):
     assert resp.status_code == 503
     body = resp.get_json()
     assert body["error"] == "Service Unavailable"
-    _assert_error_shape(body)
+    assert_error_shape(body)
 
 
 def test_transcription_failure_no_leak(client, monkeypatch, stt_module):
-    secret = "INTERNAL-TRACEBACK-MARKER-9876"
-
-    def _boom(bio, model=None, device=None):
-        raise RuntimeError(secret)
-
-    monkeypatch.setattr(stt_module, "get_stt_bio", _boom)
+    """A backend failure returns a generic 500 without leaking the exception."""
+    monkeypatch.setattr(stt_module, "get_stt_bio", raise_runtime_error)
 
     wav = make_wav(duration_ms=50)
     resp = client.post(
@@ -93,18 +101,14 @@ def test_transcription_failure_no_leak(client, monkeypatch, stt_module):
     assert resp.status_code == 500
     body = resp.get_json()
     assert body["error"] == "Transcription failed"
-    _assert_error_shape(body)
-    assert secret not in resp.get_data(as_text=True)
+    assert_error_shape(body)
+    assert "transcription exploded" not in resp.get_data(as_text=True)
     assert "RuntimeError" not in resp.get_data(as_text=True)
 
 
 def test_model_returned_to_pool_after_failure(client, monkeypatch, stt_module):
-    import stt_server
-
-    def _boom(bio, model=None, device=None):
-        raise RuntimeError("x")
-
-    monkeypatch.setattr(stt_module, "get_stt_bio", _boom)
+    """A failing transcription still returns its model, so the pool cannot drain."""
+    monkeypatch.setattr(stt_module, "get_stt_bio", raise_runtime_error)
 
     wav = make_wav(duration_ms=50)
     client.post(
@@ -112,4 +116,4 @@ def test_model_returned_to_pool_after_failure(client, monkeypatch, stt_module):
         data={"file": (io.BytesIO(wav), "sample.wav")},
         content_type="multipart/form-data",
     )
-    assert stt_server.MODEL_POOL.qsize() == 1
+    assert model_pool.MODEL_POOL.qsize() == 1

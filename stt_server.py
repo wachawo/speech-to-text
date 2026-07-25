@@ -1,218 +1,64 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-STT Flask server — exposes Whisper transcription via HTTP.
+"""HTTP service exposing Whisper transcription: POST /api/stt and GET /api/health."""
 
-POST /api/stt  — upload audio file, get transcription text back.
-GET  /api/health — healthcheck (model pool status).
-
-Initializes a pool of N Whisper model instances at startup
-so each request grabs a pre-loaded model from the queue.
-"""
-
-import hmac
 import io
 import logging
-import os
 import queue
 import re
 import time
 import traceback
 import uuid
-from functools import wraps
 from typing import Any, cast
 
-import werkzeug.exceptions
-from dotenv import find_dotenv, load_dotenv
 from flask import Flask, g, jsonify, request
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-load_dotenv(find_dotenv())
+# Local imports
+from libs import audio, config, logs, model_pool, stt
+from libs.auth import token_required
+from libs.errors import build_error_response, get_request_id, register_error_handlers
 
-# Local import — language is overridable per request via get_stt_bio(language=...)
-import libs.stt as stt  # noqa: E402  (must follow load_dotenv)
-
-# Allowed per-request language: ISO code (2-3 letters) or "auto" (autodetect).
-LANGUAGE_RE = re.compile(r"^[a-z]{2,3}$")
-
-TRUE = ("1", "true", "yes", "on", "enabled")
-# Logging
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-LOG_ACCESS = os.getenv("LOG_ACCESS", "false").lower() in TRUE
-LOG_FORMAT = "%(asctime)s.%(msecs)03d [%(levelname)s]: (%(name)s.%(funcName)s) %(message)s"
-LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-
-LOGGING = {
-    "handlers": [logging.StreamHandler()],
-    "format": LOG_FORMAT,
-    "level": getattr(logging, LOG_LEVEL, logging.INFO),
-    "datefmt": LOG_DATE_FORMAT,
-}
-logging.basicConfig(**LOGGING)
+logs.setup_logging()
 logger = logging.getLogger(__name__)
 
-LOG_CONFIG = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "default": {
-            "format": LOG_FORMAT,
-            "datefmt": LOG_DATE_FORMAT,
-        },
-    },
-    "handlers": {
-        "default": {
-            "formatter": "default",
-            "class": "logging.StreamHandler",
-            "stream": "ext://sys.stderr",
-        },
-    },
-    "loggers": {
-        "uvicorn": {"handlers": ["default"], "level": LOG_LEVEL, "propagate": False},
-        "uvicorn.error": {"handlers": ["default"], "level": LOG_LEVEL, "propagate": False},
-        "uvicorn.access": {"handlers": [], "propagate": False},
-    },
-}
+# Accepted per-request language: an ISO code (2-3 letters) or "auto" (autodetect).
+LANGUAGE_RE = re.compile(r"^[a-z]{2,3}$")
 
-# Config
-TRUE_VALUES = ("1", "true", "yes", "on", "enabled")
-FLASK_HOST = os.getenv("STT_HOST", "0.0.0.0")
-FLASK_PORT = int(os.getenv("STT_PORT", "5099"))
-FLASK_DEBUG = os.getenv("STT_DEBUG", "False").lower() in TRUE_VALUES
-MODEL_POOL_SIZE = int(os.getenv("STT_POOL_SIZE", "8"))
-MODEL_POOL: queue.Queue = queue.Queue()
-
-# Static-token auth — empty set means "auth disabled, allow all" (trusted deployment).
-STT_TOKENS: set[str] = {t.strip() for t in os.getenv("STT_TOKENS", "").split(",") if t.strip()}
-
-# Max request body size — caps memory usage per request to mitigate OOM/DoS.
-# Flask returns 413 automatically when exceeded.
-MAX_CONTENT_LENGTH_MB = int(os.getenv("MAX_CONTENT_LENGTH_MB", "10"))
-
-# CORS allowed origins. "*" allows any origin; otherwise comma-separated allowlist.
-CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+# Path whose access log is demoted to DEBUG so healthchecks do not flood the log.
+QUIET_PATH = "/api/health"
 
 
-def init_model_pool(size: int = MODEL_POOL_SIZE):
-    """Pre-load `size` Whisper model instances into the pool."""
-    logger.info("Initializing %d Whisper model instances...", size)
-    for i in range(size):
-        t0 = time.monotonic()
-        model = stt.get_model()
-        elapsed = time.monotonic() - t0
-        MODEL_POOL.put(model)
-        logger.info("  Model #%d ready (%.2fs)", i + 1, elapsed)
-    logger.info("Model pool ready: %d instances", MODEL_POOL.qsize())
+def create_app() -> Flask:
+    """Build the Flask application: upload limit, proxy headers, CORS and error handlers."""
+    flask_app = Flask(__name__)
+    flask_app.url_map.strict_slashes = False
+    flask_app.config["MAX_CONTENT_LENGTH"] = config.MAX_CONTENT_LENGTH_MB * 1024 * 1024
+    flask_app.wsgi_app = ProxyFix(flask_app.wsgi_app, x_for=1, x_host=1)
+    CORS(flask_app, resources={r"/api/*": {"origins": config.CORS_ORIGINS}})
+    register_error_handlers(flask_app)
+    return flask_app
 
 
-# Flask app
-app = Flask(__name__)
-app.url_map.strict_slashes = False
-app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH_MB * 1024 * 1024
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_host=1)
-CORS(app, resources={r"/api/*": {"origins": CORS_ORIGINS}})
-
-
-# Request context helpers
-
-
-def get_req_id() -> str:
-    return getattr(g, "request_id", "-")
-
-
-def token_required(view):
-    """Reject requests without a valid Bearer token when STT_TOKENS is non-empty."""
-
-    @wraps(view)
-    def wrapper(*args, **kwargs):
-        if not STT_TOKENS:
-            return view(*args, **kwargs)
-        header = request.headers.get("Authorization", "")
-        token = header[7:].strip() if header.startswith("Bearer ") else ""
-        if not token or not any(hmac.compare_digest(token, t) for t in STT_TOKENS):
-            logger.warning("[%s] Unauthorized", get_req_id())
-            return jsonify({"error": "Unauthorized", "request_id": get_req_id()}), 401
-        return view(*args, **kwargs)
-
-    return wrapper
+app = create_app()
 
 
 @app.before_request
 def before_request():
+    """Tag the request so every log line and every error body can be correlated."""
     g.request_id = uuid.uuid4().hex[:12]
     g.request_start = time.monotonic()
 
 
-# Error handlers
-
-
-@app.errorhandler(400)
-def bad_request(error):
-    logger.warning("[%s] Bad Request: %s", get_req_id(), error)
-    return jsonify({"error": "Bad Request", "request_id": get_req_id()}), 400
-
-
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({"error": "Not Found", "request_id": get_req_id()}), 404
-
-
-@app.errorhandler(405)
-def method_not_allowed(error):
-    return jsonify({"error": "Method Not Allowed", "request_id": get_req_id()}), 405
-
-
-@app.errorhandler(413)
-def payload_too_large(error):
-    logger.warning("[%s] Payload too large (limit=%dMB)", get_req_id(), MAX_CONTENT_LENGTH_MB)
-    return (
-        jsonify(
-            {
-                "error": "Payload Too Large",
-                "limit_mb": MAX_CONTENT_LENGTH_MB,
-                "request_id": get_req_id(),
-            }
-        ),
-        413,
-    )
-
-
-@app.errorhandler(500)
-def internal_error(error):
-    logger.error(
-        "[%s] Internal Server Error: %s: %s\n%s",
-        get_req_id(),
-        type(error).__name__,
-        error,
-        traceback.format_exc(),
-    )
-    return jsonify({"error": "Internal Server Error", "request_id": get_req_id()}), 500
-
-
-@app.errorhandler(Exception)
-def handle_exception(e):
-    if isinstance(e, werkzeug.exceptions.HTTPException):
-        logger.warning("[%s] %s: %s", get_req_id(), e.name, e.description)
-        return jsonify({"error": e.name, "request_id": get_req_id()}), e.code
-
-    logger.error(
-        "[%s] Unhandled exception: %s: %s\n%s",
-        get_req_id(),
-        type(e).__name__,
-        e,
-        traceback.format_exc(),
-    )
-    return jsonify({"error": "Internal Server Error", "request_id": get_req_id()}), 500
-
-
 @app.after_request
 def after_request(resp):
+    """Log one access line per request with its id, status and duration."""
     elapsed = time.monotonic() - getattr(g, "request_start", time.monotonic())
-    log_fn = logger.debug if request.path == "/api/health" else logger.info
-    log_fn(
+    log_request = logger.debug if request.path == QUIET_PATH else logger.info
+    log_request(
         "[%s] %s %s: %s (%.2fs)",
-        get_req_id(),
+        get_request_id(),
         request.method,
         request.path,
         resp.status,
@@ -221,146 +67,145 @@ def after_request(resp):
     return resp
 
 
-# Routes
+def read_audio_upload() -> tuple[io.BytesIO, str] | None:
+    """Read the audio from the multipart ``file`` field or the raw body; None when absent.
+
+    Must run before any access to request.form: parsing the form consumes the
+    request stream that a raw-body upload lives in.
+    """
+    if "file" in request.files:
+        upload = request.files["file"]
+        return io.BytesIO(upload.read()), upload.filename or "upload"
+    if request.data:
+        return io.BytesIO(request.data), "raw_body"
+    return None
+
+
+def read_language_argument() -> str | None:
+    """Read the optional per-request language from the query string or the form field.
+
+    Absent or empty means "use the server default", which libs/stt.py resolves.
+    """
+    language = request.args.get("language") or request.form.get("language")
+    if language is None:
+        return None
+    return language.strip().lower() or None
+
+
+def is_valid_language(language: str) -> bool:
+    """Accept "auto" and ISO-like codes only, so junk never reaches Whisper as a 500."""
+    return language == "auto" or bool(LANGUAGE_RE.match(language))
 
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    """Healthcheck — report pool size and available models."""
-    health_status = {
-        "status": "ok",
-        "pool_size": MODEL_POOL_SIZE,
-        "available": MODEL_POOL.qsize(),
-    }
-    return jsonify(health_status), 200
+    """Report service liveness and model pool occupancy; available=0 means all models are busy."""
+    return jsonify({"status": "ok", **model_pool.get_pool_status()}), 200
 
 
 @app.route("/api/stt", methods=["POST"])
 @token_required
 def transcribe():
-    """
-    Transcribe an uploaded audio file.
+    """Transcribe an uploaded audio file.
 
     Accepts multipart/form-data with field ``file`` (any format pydub supports)
-    or raw binary body with Content-Type audio/*. An optional ``language``
+    or a raw binary body with Content-Type audio/*. An optional ``language``
     (query string or form field) overrides the server WHISPER_LANGUAGE default
     for this request; ``auto`` autodetects.
 
     Returns::
         {"text": "transcribed text", "elapsed": 1.23}
     """
-    t0 = time.monotonic()
+    start_time = time.monotonic()
 
-    # Read audio into BytesIO
-    if "file" in request.files:
-        f = request.files["file"]
-        bio = io.BytesIO(f.read())
-        filename = f.filename or "upload"
-    elif request.data:
-        bio = io.BytesIO(request.data)
-        filename = "raw_body"
-    else:
-        return jsonify({"error": "No audio data", "request_id": get_req_id()}), 400
-
-    bio.seek(0)
+    upload = read_audio_upload()
+    if upload is None:
+        return build_error_response("No audio data", 400)
+    bio, filename = upload
     size_kb = len(bio.getvalue()) // 1024
 
-    # Optional per-request language (query string ?language= or a form field),
-    # read after the body so form parsing does not consume the audio stream.
-    # Empty/absent → server WHISPER_LANGUAGE default; "auto" → autodetect.
-    language = request.args.get("language") or request.form.get("language")
-    if language is not None:
-        language = language.strip().lower() or None
-        if language and language != "auto" and not LANGUAGE_RE.match(language):
-            return jsonify({"error": "Invalid language", "request_id": get_req_id()}), 400
+    language = read_language_argument()
+    if language is not None and not is_valid_language(language):
+        return build_error_response("Invalid language", 400)
 
-    # Convert to WAV via pydub (handles mp3, wav, ogg, etc.)
-    # Export as 16kHz mono 16-bit PCM — matches Whisper's expected format,
-    # so stt.py skips the torchaudio resampling step entirely.
     try:
-        from pydub import AudioSegment
-
-        audio = AudioSegment.from_file(bio)
-        channels = audio.split_to_mono()
-        if len(channels) > 1:
-            audio = AudioSegment.from_mono_audiosegments(*channels)
-        audio = audio.set_channels(1).set_frame_rate(16000).set_sample_width(2)
-        wav_bio = io.BytesIO()
-        audio.export(wav_bio, format="wav")
-        wav_bio.seek(0)
-    except Exception as e:
+        wav_bio = audio.convert_to_wav(bio)
+    except Exception as exc:
         logger.error(
             "[%s] Audio conversion failed: %s: %s\n%s",
-            get_req_id(),
-            type(e).__name__,
-            e,
+            get_request_id(),
+            type(exc).__name__,
+            exc,
             traceback.format_exc(),
         )
-        return jsonify({"error": "Invalid audio data", "request_id": get_req_id()}), 400
+        return build_error_response("Invalid audio data", 400)
 
-    # Acquire model from pool
     try:
-        model = MODEL_POOL.get(timeout=120)
+        model = model_pool.acquire_model()
     except queue.Empty:
         logger.warning(
-            "[%s] Model pool exhausted (size=%d, available=%d)",
-            get_req_id(),
-            MODEL_POOL_SIZE,
-            MODEL_POOL.qsize(),
+            "[%s] Model pool exhausted: %s", get_request_id(), model_pool.get_pool_status()
         )
-        return jsonify({"error": "Service Unavailable", "request_id": get_req_id()}), 503
+        return build_error_response("Service Unavailable", 503)
 
-    # Transcribe
     try:
         text = stt.get_stt_bio(wav_bio, model=model, language=language)
-        elapsed = time.monotonic() - t0
+        elapsed = time.monotonic() - start_time
         logger.info(
             "[%s] STT %s (%dkb) - %d chars (%.2fs)",
-            get_req_id(),
+            get_request_id(),
             filename,
             size_kb,
             len(text),
             elapsed,
         )
         return jsonify({"text": text, "elapsed": round(elapsed, 3)}), 200
-    except Exception as e:
+    except Exception as exc:
         logger.error(
             "[%s] STT failed: %s: %s\n%s",
-            get_req_id(),
-            type(e).__name__,
-            e,
+            get_request_id(),
+            type(exc).__name__,
+            exc,
             traceback.format_exc(),
         )
-        return jsonify({"error": "Transcription failed", "request_id": get_req_id()}), 500
+        return build_error_response("Transcription failed", 500)
     finally:
-        MODEL_POOL.put(model)
+        model_pool.release_model(model)
 
 
-# Main
-
-
-def main():
-    init_model_pool(MODEL_POOL_SIZE)
-    if STT_TOKENS:
-        logger.info("Auth: %d static token(s) loaded", len(STT_TOKENS))
+def log_auth_mode() -> None:
+    """State at startup whether the endpoint is protected, so it is never a surprise."""
+    if config.STT_TOKENS:
+        logger.info("Auth: %d static token(s) loaded", len(config.STT_TOKENS))
     else:
         logger.info("Auth: disabled (STT_TOKENS empty)")
 
-    if FLASK_DEBUG:
-        app.run(host=FLASK_HOST, port=FLASK_PORT, debug=FLASK_DEBUG)
-    else:
-        import uvicorn
-        from uvicorn.middleware.wsgi import WSGIMiddleware
 
-        wsgi_app = cast(Any, app.wsgi_app)
-        uvicorn.run(
-            WSGIMiddleware(wsgi_app),
-            host=FLASK_HOST,
-            port=FLASK_PORT,
-            log_level=LOG_LEVEL.lower(),
-            log_config=LOG_CONFIG,
-            access_log=LOG_ACCESS,
-        )
+def run_server() -> None:
+    """Serve the app: the Flask dev server in debug mode, uvicorn otherwise."""
+    if config.STT_DEBUG:
+        app.run(host=config.STT_HOST, port=config.STT_PORT, debug=True)
+        return
+
+    import uvicorn
+    from uvicorn.middleware.wsgi import WSGIMiddleware
+
+    wsgi_app = cast(Any, app.wsgi_app)
+    uvicorn.run(
+        WSGIMiddleware(wsgi_app),
+        host=config.STT_HOST,
+        port=config.STT_PORT,
+        log_level=config.LOG_LEVEL.lower(),
+        log_config=logs.build_uvicorn_log_config(),
+        access_log=config.LOG_ACCESS,
+    )
+
+
+def main():
+    """Entry point: fill the model pool, then serve."""
+    model_pool.init_model_pool()
+    log_auth_mode()
+    run_server()
 
 
 if __name__ == "__main__":

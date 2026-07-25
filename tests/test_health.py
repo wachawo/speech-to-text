@@ -4,6 +4,7 @@
 
 
 def test_health_ok(client):
+    """The endpoint reports the configured pool size and how many models are free."""
     resp = client.get("/api/health")
     assert resp.status_code == 200
     body = resp.get_json()

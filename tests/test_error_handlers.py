@@ -8,6 +8,7 @@ REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
 
 def test_404_shape(client):
+    """An unknown route returns the generic body, not a Flask HTML page."""
     resp = client.get("/api/does-not-exist")
     assert resp.status_code == 404
     body = resp.get_json()
@@ -17,6 +18,7 @@ def test_404_shape(client):
 
 
 def test_405_shape(client):
+    """A wrong method on a known route returns the generic body."""
     resp = client.patch("/api/health")
     assert resp.status_code == 405
     body = resp.get_json()
@@ -26,6 +28,7 @@ def test_405_shape(client):
 
 
 def test_request_id_changes_per_request(client):
+    """Each request gets its own id, so log lines and reports can be matched up."""
     a = client.get("/api/does-not-exist").get_json()["request_id"]
     b = client.get("/api/does-not-exist").get_json()["request_id"]
     assert a != b
