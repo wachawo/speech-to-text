@@ -39,7 +39,7 @@ dependencies = [
     "gunicorn>=22.0.0",
     "pydub>=0.25.1",
     "python-dotenv>=1.0.0",
-    "requests>=2.33.0",
+    "requests>=2.34.2",
 ]
 
 [project.optional-dependencies]

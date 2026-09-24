@@ -33,4 +33,4 @@ soundfile>=0.12.1
 
 # Utilities
 python-dotenv>=1.0.0
-requests>=2.33.0
+requests>=2.34.2
