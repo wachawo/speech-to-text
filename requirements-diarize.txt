@@ -17,4 +17,4 @@ soundfile>=0.12.1
 # its `audio` extra. Without this line AutoProcessor.from_pretrained raises ImportError and the
 # server never finishes starting. Not `transformers[audio]`: that extra also drags in an
 # unconstrained torchaudio, which is exactly what the +cu130 assertion exists to prevent.
-librosa>=0.10.1
+librosa>=0.11.0

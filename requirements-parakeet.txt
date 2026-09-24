@@ -12,4 +12,4 @@ soundfile>=0.12.1
 # ParakeetFeatureExtractor is declared @requires(backends=("torch", "librosa")) and builds its
 # mel filterbank with librosa.filters.mel, the same trap as the diarizer's feature extractor.
 # Not `transformers[audio]`: that extra also drags in an unconstrained torchaudio.
-librosa>=0.10.1
+librosa>=0.11.0

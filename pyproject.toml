@@ -61,14 +61,14 @@ diarize = [
     "transformers @ git+https://github.com/huggingface/transformers@98d39824ed30e684e5122d04a2d9564efffc4965",
     "soundfile>=0.12.1",
     # The checkpoint's feature extractor requires it; transformers does not install it.
-    "librosa>=0.10.1",
+    "librosa>=0.11.0",
 ]
 # The Parakeet transcription backend. No git pin: parakeet_tdt ships in released transformers.
 # An add-on rather than a standalone install, like `diarize`: torch comes with `whisper`.
 parakeet = [
     "transformers>=5.17.0",
     "soundfile>=0.12.1",
-    "librosa>=0.10.1",
+    "librosa>=0.11.0",
 ]
 dev = [
     "black>=26.5.1,<27",
