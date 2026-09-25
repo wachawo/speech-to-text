@@ -74,6 +74,11 @@
   linked from the language switcher at the top of each README.
 
 #### Fixed
+- **Gunicorn starts again.** Since the module split, `gu.py` bound the settings module to the
+  name `config`, which is also a gunicorn setting; gunicorn read it as one and refused to start
+  with `Invalid value for config`. The default `python3 stt_server.py` run was not affected.
+  Gunicorn 26's control socket is turned off in the same file: it defaults to a path under
+  `$HOME`, which the unprivileged server user cannot write, and nothing here uses it.
 - **The container stops cleanly.** `entrypoint.sh` ran the server under `/bin/sh -c` without
   `exec`, so the shell stayed PID 1, never forwarded SIGTERM, and every stop and redeploy
   waited out Docker's 10 s grace period and then SIGKILLed the server with requests in flight

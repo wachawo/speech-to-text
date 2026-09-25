@@ -8,7 +8,11 @@ import os
 import time
 
 # Local imports
-from libs import config, logs
+# Aliased here and only here: gunicorn reads every module-level name in this file that matches
+# one of its settings, `config` is one of them, and a module bound to it stops gunicorn at
+# startup with "Invalid value for config".
+from libs import config as stt_config
+from libs import logs
 
 logs.setup_logging()
 logger = logging.getLogger(__name__)
@@ -17,13 +21,17 @@ logger = logging.getLogger(__name__)
 MODEL_INIT_LOCK_PATH = "/tmp/.stt_model_init.lock"
 
 # Server socket
-bind = f"0.0.0.0:{config.STT_PORT}"
+bind = f"0.0.0.0:{stt_config.STT_PORT}"
 
 # Worker processes - sync is safest for CPU-bound torch/whisper inference.
 # gthread causes hangs because PyTorch's MKL/OpenBLAS thread pools
 # conflict with Gunicorn's threading model.
-workers = config.GUNICORN_WORKERS
+workers = stt_config.GUNICORN_WORKERS
 worker_class = "sync"
+
+# Gunicorn 26 opens a control socket under $HOME by default. The server runs as `stt` with
+# HOME still /root, so it fails and logs an ERROR on every start, and nothing here uses it.
+control_socket_disable = True
 
 # Timeouts
 timeout = 600  # model loading + inference can be slow
