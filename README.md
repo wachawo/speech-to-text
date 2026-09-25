@@ -14,6 +14,7 @@ The project fits local use, batch transcription, and running your own STT server
 * **Safe under concurrency.** The server keeps a pool of pre-loaded Whisper instances, so several requests are transcribed in parallel without reloading the model.
 * **CPU or GPU, same code.** The backend is selected by environment and which Docker image you build. A CUDA card speeds inference up, but everything also runs on CPU.
 * **A CLI client is included.** `stt_client.py` posts local files to the server and prints the result.
+* **A web UI is included.** Upload a file in the browser and read the text, or who said what, served by its own nginx container beside the server.
 
 ### Models
 
@@ -70,6 +71,19 @@ STT_BACKEND=parakeet    # run: transcribe with Parakeet instead of Whisper
 ```
 
 then rebuild with `docker compose up -d --build`. The two failures differ on purpose. Enabling diarization on an image built without it answers `503` for the diarization routes and keeps transcribing. Selecting `STT_BACKEND=parakeet` on an image built without it stops the server at startup with the missing dependency in the log: a transcription service that cannot transcribe should not report itself healthy, and quietly falling back to Whisper would serve a different model than the one configured. The first run downloads each model into `./models`: Whisper, and when enabled about 2.4 GB for Parakeet and 400 MB for the diarizer.
+
+### Web UI
+
+`docker compose up` also starts `stt_www`, an nginx container that serves the browser UI and passes `/api/` through to the server, so the UI and the API share one address.
+
+| Listener | Default port | Set with           |
+| -------- | ------------ | ------------------ |
+| http     | `8080`       | `STT_WWW_PORT`     |
+| https    | `8443`       | `STT_WWW_TLS_PORT` |
+
+Open `http://<host>:8080`. **TRANSCRIBE** takes an audio file and shows the result under the form as plain text or, with diarization enabled, as one block per phrase with its speaker and time, each speaker in its own colour and the phrases where two people talked at once marked; the result can be copied or downloaded as TXT or JSON. **MODELS** shows what `GET /api/models` reports. When `STT_TOKENS` is set, the UI asks for a token once and keeps it in the browser.
+
+The https listener uses a self-signed certificate that the container creates in `./data/certs` on its first start; put a real `stt.crt` and `stt.key` there to replace it. The UI has no build step and no CDN: Vue 2 and its libraries are vendored under `www/vendor`, so it works on a machine with no route to the internet.
 
 ### HTTP API
 
@@ -212,6 +226,8 @@ python3 stt_client.py file1.wav file2.mp3 file3.ogg
 | `DIARIZE_POOL_SIZE`     | `1`                     | pre-loaded diarizer instances                       |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | diarization model cache directory                   |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | speaker activity probability counted as speech      |
+| `STT_WWW_PORT`          | `8080`                  | web UI http port (compose)                          |
+| `STT_WWW_TLS_PORT`      | `8443`                  | web UI https port (compose)                         |
 | `STT_URL`               | `http://localhost:5099` | client: server base URL                             |
 | `STT_TOKEN`             | (empty)                 | client: bearer token sent to the server             |
 
@@ -237,6 +253,9 @@ speech-to-text/
 │   └── diarize.py       # speaker diarization (who spoke when, no text)
 ├── Dockerfile           # GPU build (CUDA 13.0)
 ├── Dockerfile-cpu       # CPU build
+├── Dockerfile-www       # web UI image (nginx)
+├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS
+├── www/                 # web UI: Vue 2 without a build step, libraries vendored
 ├── docs/                # README translations
 └── tests/               # pytest tests, no model downloads and no GPU
 ```

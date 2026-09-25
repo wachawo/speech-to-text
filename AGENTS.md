@@ -4,7 +4,7 @@ Conventions and context for anyone working in this repository, human or tooling.
 
 ## What this is
 
-A single-process Flask + uvicorn HTTP service wrapping `openai-whisper` for speech-to-text. No database, no background worker, no frontend - just `stt_server.py` (app wiring, routes, entry point), `stt_client.py` (a CLI that POSTs files to it), `gu.py` (Gunicorn config and hooks) and the `libs/` package holding everything else: `config.py`, `logs.py`, `errors.py`, `auth.py`, `audio.py`, `model_pool.py`, `stt.py`, `diarize.py`.
+A single-process Flask + uvicorn HTTP service wrapping `openai-whisper` for speech-to-text, with a browser UI in `www/` served by its own nginx container. No database, no background worker - just `stt_server.py` (app wiring, routes, entry point), `stt_client.py` (a CLI that POSTs files to it), `gu.py` (Gunicorn config and hooks) and the `libs/` package holding everything else: `config.py`, `logs.py`, `errors.py`, `auth.py`, `audio.py`, `model_pool.py`, `stt.py`, `diarize.py`.
 
 ## Architecture
 
@@ -29,6 +29,7 @@ A single-process Flask + uvicorn HTTP service wrapping `openai-whisper` for spee
 - **Audio path.** `libs/audio.py::convert_to_wav()` decodes the upload through pydub and exports 16 kHz mono 16-bit WAV to a `BytesIO` before `stt.get_stt_bio()` sees it. The server does the resampling so `libs/stt.py` skips its torchaudio resample branch on the hot path. Changing one side means keeping this contract intact.
 - **Determinism is deliberate.** `get_stt_bio` seeds torch + numpy and decodes with `temperature=0.0, beam_size=1, best_of=1, condition_on_previous_text=False`. Don't relax these without a reason - the goal is stable output for repeated identical inputs.
 - **CPU vs GPU is environment-only.** The same Python code runs both; `COMPUTE_TYPE` (`cpu` / `cuda` / `auto`) plus the chosen Dockerfile/compose file select the backend. `Dockerfile` + `docker-compose.yml` (CUDA 13.0, `torch+cu130`) and `Dockerfile-cpu` + `docker-compose-cpu.yml` are the two parallel images.
+- **The web UI is static files behind nginx.** `stt_www` (`Dockerfile-www`, `nginx/`) serves `www/` and proxies `/api/` to `stt_server`, so the browser and the API share one origin and CORS never comes into it. It follows the sibling text-to-speech project's UI file for file - vendored libraries under `www/vendor` and no CDN, `.vue` screens loaded by httpVueLoader, the same palette and shell - and the two should keep looking alike. `www/` is bind-mounted, so a UI change needs a browser reload, not a rebuild. The UI learns whether a token is needed from a `401` on `GET /api/models`: health is open and says nothing about auth.
 - **Containers start as root, then drop.** `entrypoint.sh` runs as root, chowns the bind-mounted `/opt/models`, `/opt/logs`, `/opt/recs` (host-owned mounts the build-time chown cannot reach) and `exec`s the command as `stt` via `setpriv`. Without it the first `whisper.load_model` dies with `PermissionError`.
 - **The GPU is requested through CDI** (`devices: [nvidia.com/gpu=all]`), not `deploy.resources.reservations.devices`: with the latter a `systemctl daemon-reload` silently revokes device access on cgroup v2, and the failure surfaces as misleading cuDNN/cuBLAS errors. CDI needs `sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml` on the host, regenerated after driver updates.
 
@@ -69,6 +70,7 @@ The project is an installable package. `pip install speech-to-text` gives the HT
 - Diarization: `DIARIZE_ENABLED`, `DIARIZE_MODEL`, `DIARIZE_POOL_SIZE`, `DIARIZE_DOWNLOAD_ROOT`, `DIARIZE_THRESHOLD`. Two knobs, deliberately separate: `DIARIZE` is a compose **build** arg deciding whether the backend is installed at all, `DIARIZE_ENABLED` is the **runtime** switch. Never pin `DIARIZE_ENABLED` in a compose `environment:` block, which overrides `env_file:` and would silently ignore `.env`.
 - Gunicorn: `GUNICORN_WORKERS`
 - Client: `STT_URL`, `STT_TOKEN`
+- Web UI (compose only, never read by the Python code): `STT_WWW_PORT`, `STT_WWW_TLS_PORT`
 
 Model `.pt` files live in `./models/` and are mounted at `/opt/models`, so the cache survives rebuilds.
 

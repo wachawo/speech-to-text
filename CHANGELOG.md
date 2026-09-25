@@ -3,6 +3,14 @@
 ### [Unreleased]
 
 #### Added
+- **A web UI.** `stt_www`, an nginx container beside the server, serves a Vue 2 UI with no
+  build step and passes `/api/` through, so the browser and the API share one address.
+  TRANSCRIBE uploads a file and shows plain text or, with diarization on, who said what with
+  overlapping speech marked, ready to copy or download as TXT or JSON; MODELS shows the
+  catalogue; a token screen appears only when the server asks for one. http on `STT_WWW_PORT`
+  (8080), https with a self-signed certificate on `STT_WWW_TLS_PORT` (8443). It looks and is
+  laid out like the text-to-speech project's UI, and its libraries are vendored, not fetched
+  from a CDN.
 - **NVIDIA Parakeet as a second transcription backend.** `STT_BACKEND=parakeet` serves
   `nvidia/parakeet-tdt-0.6b-v3`: 25 European languages, self-detected, with native
   token-level timestamps. Opt-in at build time (`--build-arg PARAKEET=true`) and needs no

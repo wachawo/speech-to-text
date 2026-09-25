@@ -1,0 +1,87 @@
+<template>
+  <div class="stt-alerts" v-if="wait.length || bars.length">
+    <div class="alert alert-secondary text-center p-1 mb-2" v-if="wait.length">
+      <i class="fa fa-spinner fa-pulse"></i> {{ wait.join(', ') }}
+    </div>
+    <div v-for="bar in bars" :key="bar.kind"
+         class="stt-alert" :class="'stt-alert-' + bar.kind" :role="bar.role">
+      <i class="fa" :class="bar.icon" aria-hidden="true"></i>
+      <span class="stt-alert-msg">{{ bar.text }}</span>
+      <button type="button" class="btn-close" aria-label="Dismiss"
+              @click="dismiss(bar.kind)"></button>
+    </div>
+  </div>
+</template>
+
+<script>
+/* The four message bars every screen carries, above its content, and the
+   spinner strip above them.
+
+   Used everywhere as:
+
+     <stt-alerts :wait="wait" :error.sync="error" :warning.sync="warning"
+                 :info.sync="info" :success.sync="success"></stt-alerts>
+
+   Four strings on the screen's own `data`, one component, and no screen
+   deciding for itself where a failure goes or what colour it is.
+
+   The strip is the screen's wait queue joined - progress, which belongs to
+   the request rather than to the operator, so it is drawn first and has no
+   dismiss control: it goes when the request does.
+*/
+
+/* The order, fixed here rather than by whichever string was set last. A bar
+   that moves between renders is a bar the operator has to read again to find
+   out which one it is, and the one they are most likely to skip is the one
+   that says the write failed.
+
+   The role is the same decision for a screen reader. `alert` interrupts
+   whatever is being spoken; `status` waits its turn. An error and a warning
+   are worth interrupting for - the operator is about to act on a screen that
+   is not saying what they think it says - and a save that worked is not. */
+var BARS = [
+  { kind: 'error',   icon: 'fa-circle-exclamation',   role: 'alert'  },
+  { kind: 'warning', icon: 'fa-triangle-exclamation', role: 'alert'  },
+  { kind: 'info',    icon: 'fa-circle-info',          role: 'status' },
+  { kind: 'success', icon: 'fa-circle-check',         role: 'status' },
+];
+
+module.exports = {
+  props: {
+    wait:    { type: Array, default: function () { return []; } },
+    error:   { type: String, default: '' },
+    warning: { type: String, default: '' },
+    info:    { type: String, default: '' },
+    success: { type: String, default: '' },
+  },
+
+  computed: {
+    /* Only the bars with something to say, in BARS order.
+
+       A screen holding four empty strings renders nothing at all - not four
+       empty boxes, not one collapsed container - so the content below it sits
+       in the same place whether or not the last write had anything to report.
+       Anything that reserved space here would move every row down the moment a
+       message arrived, which is exactly when the operator is looking at
+       them. */
+    bars: function () {
+      var self = this;
+      return BARS.filter(function (bar) {
+        return !!self[bar.kind];
+      }).map(function (bar) {
+        return { kind: bar.kind, icon: bar.icon, role: bar.role, text: self[bar.kind] };
+      });
+    },
+  },
+
+  methods: {
+    /* The dismiss control. `.sync` on the parent turns this into
+       `error = ''`, so the string stays the screen's to own and this component
+       never writes a prop of its own - which Vue would warn about and the next
+       render of the parent would undo anyway. */
+    dismiss: function (kind) {
+      this.$emit('update:' + kind, '');
+    },
+  },
+};
+</script>

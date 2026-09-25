@@ -89,6 +89,53 @@ services:
       - "python3 stt_server.py"
       # - "gunicorn --config gu.py stt_server:app"
 
+  stt_www:
+    build:
+      context: .
+      dockerfile: Dockerfile-www
+    image: stt_www
+    pull_policy: build
+    container_name: stt_www
+    hostname: stt_www
+    restart: unless-stopped
+    networks:
+      - stt_network
+    environment:
+      TZ: America/New_York
+      STT_UPSTREAM: "stt_server:${STT_PORT:-5099}"
+      STT_WWW_TLS_PORT: "${STT_WWW_TLS_PORT:-8443}"
+    ports:
+      - "${STT_WWW_PORT:-8080}:80"
+      # https: browsers hand an audio device only to a secure page, so live capture over the LAN
+      # needs this listener. The certificate is self-signed on first start into ./data/certs.
+      - "${STT_WWW_TLS_PORT:-8443}:443"
+    volumes:
+      - ./www:/usr/share/nginx/html:ro
+      - ./data/certs:/etc/nginx/certs
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    # service_started, not service_healthy: stt_server loads its models before it listens, and the
+    # UI shows that wait itself - nginx answers 502 with a JSON error until the server is up.
+    depends_on:
+      stt_server:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/nginx-healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "128m"
+        max-file: "3"
+
 networks:
   stt_network:
     driver: bridge
