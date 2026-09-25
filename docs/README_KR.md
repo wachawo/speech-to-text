@@ -14,6 +14,8 @@
 * **동시성에 안전함.** 서버는 미리 로드된 Whisper 인스턴스 풀을 유지하므로, 모델을 다시 로드하지 않고도 여러 요청을 병렬로 전사합니다.
 * **CPU 또는 GPU, 동일한 코드.** 백엔드는 환경 변수와 빌드하는 Docker 이미지에 따라 선택됩니다. CUDA 카드는 추론 속도를 높여 주지만, 모든 기능은 CPU에서도 동작합니다.
 * **CLI 클라이언트 포함.** `stt_client.py`는 로컬 파일을 서버로 전송하고 결과를 출력합니다.
+* **실시간 전사.** WebSocket으로 오디오를 스트리밍하면 말하는 대로 구절마다 결과를 돌려받으며, 화자 분리가 켜져 있으면 각 구절에 화자도 함께 지정됩니다.
+* **웹 UI 포함.** 브라우저에서 파일을 업로드하고 텍스트나 누가 무엇을 말했는지를 읽을 수 있습니다. 서버 옆에서 동작하는 전용 nginx 컨테이너가 이를 제공합니다.
 
 ### 모델
 
@@ -43,6 +45,19 @@ docker compose -f docker-compose-cpu.yml up --build    # CPU only
 ```
 
 GPU 빌드는 호스트에 `nvidia-container-toolkit`가 필요합니다. 첫 실행 시 Whisper 모델을 `./models`로 내려받습니다.
+
+### 웹 UI
+
+`docker compose up`은 `stt_www`도 함께 시작합니다. 이는 브라우저 UI를 제공하고 `/api/`를 서버로 넘겨 주는 nginx 컨테이너이므로, UI와 API가 하나의 주소를 공유합니다.
+
+| 리스너 | 기본 포트 | 설정 변수          |
+| ------ | --------- | ------------------ |
+| http   | `8080`    | `STT_WWW_PORT`     |
+| https  | `8443`    | `STT_WWW_TLS_PORT` |
+
+`http://<host>:8080`을 엽니다. **TRANSCRIBE**에는 두 가지 소스가 있습니다. **FILE**은 오디오 파일을 업로드합니다. **DEVICE**는 오디오 입력에서 실시간으로 전사합니다. 입력으로는 마이크나 헤드셋, 스피커나 헤드폰으로 재생되는 모든 소리를 담는 Linux의 `Monitor of ...` 소스, 또는 브라우저 탭에서 재생되는 소리(운영 체제가 허용하면 시스템 전체)를 위한 `Tab or screen audio`를 쓸 수 있습니다. 어느 쪽이든 결과는 폼 아래에 일반 텍스트로 나타나며, 화자 분리가 켜져 있으면 구절마다 화자와 시간이 붙은 블록으로 나타납니다. 화자마다 고유한 색이 붙고, 두 사람이 동시에 말한 구절은 따로 표시됩니다. 실시간 구절은 화자가 말을 멈춘 뒤 약 1초 후에 나타납니다. 결과는 복사하거나 TXT 또는 JSON으로 내려받을 수 있습니다. **MODELS**는 `GET /api/models`가 알려 주는 내용을 보여 줍니다. `STT_TOKENS`가 설정되어 있으면 UI는 토큰을 한 번만 묻고 브라우저에 보관합니다.
+
+브라우저는 안전한 페이지에만 오디오 장치를 넘겨주므로, 네트워크를 통해서는 DEVICE가 https 리스너를 거쳐 동작합니다(`http://localhost`에서도 동작합니다). https 리스너는 컨테이너가 처음 시작할 때 `./data/certs`에 만드는 자체 서명 인증서를 사용합니다. 이를 교체하려면 실제 `stt.crt`와 `stt.key`를 그곳에 두십시오. UI에는 빌드 단계도 CDN도 없습니다. Vue 2와 그 라이브러리는 `www/vendor`에 함께 들어 있으므로, 인터넷에 연결되지 않은 기기에서도 동작합니다.
 
 ### HTTP API
 
@@ -138,6 +153,25 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `overlap`은 다른 사람도 함께 말하고 있던 구절을 표시합니다. NVIDIA는 일반적인 단일 화자 모델을 화자 분리와 짝짓는 것이 겹쳐 말하는 음성을 위해 만들어진 모델과 동등하지 않다고 분명히 밝히고 있습니다. 잘라낸 시간 구간에는 그 구간과 겹치는 모든 목소리가 여전히 들어 있으므로, 그런 구절들은 서로 섞이거나 엉뚱한 화자의 말을 고를 수 있습니다. `overlap`이 표시된 구간은 전사문에서 가장 신뢰하기 어려운 지점으로 다루십시오.
 
+`/api/stream`은 **실시간 전사**를 위한 WebSocket입니다. 오디오는 녹음되는 대로 들어가고, 각 구절은 화자가 말을 멈춘 뒤 약 1초 후에 돌아옵니다. JSON 텍스트 메시지는 제어를, 바이너리 메시지는 오디오를 전달합니다.
+
+1. 클라이언트가 `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}`을 보냅니다. `type`을 제외한 모든 필드는 선택 사항입니다. `token`은 브라우저가 인증하는 방법인데, 브라우저는 WebSocket에 헤더를 설정할 수 없기 때문입니다. 다른 클라이언트는 대신 핸드셰이크 때 `Authorization: Bearer <token>`을 보내도 됩니다.
+2. 서버가 `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}`로 응답합니다.
+3. 클라이언트는 원시 PCM(부호 있는 16비트, 리틀 엔디언, 모노, 16 kHz)을 임의 크기의 바이너리 메시지로 보내고, 끝나면 `{"type": "stop"}`을 보냅니다.
+4. 서버는 구절마다 `segment`를, 약 1초마다 `progress`를 보내고, 닫기 전에 `done`을 보냅니다.
+
+```json
+{ "type": "segment", "id": 3, "start": 6.88, "end": 8.2, "text": "This is the second speaker.", "speaker": 1, "overlap": false }
+{ "type": "progress", "seconds": 12.3 }
+{ "type": "done", "segments": 10, "seconds": 21.87, "elapsed": 22.08 }
+```
+
+오디오는 다른 곳에서 올 수도 있습니다. 시작 메시지에 `"source": "url", "url": "https://..."`를 넣으면 클라이언트는 오디오를 전혀 보내지 않습니다. 서버가 ffmpeg로 그 주소의 스트림을 소스 자체의 속도대로 읽으며, 스트림이 끝나거나 클라이언트가 `stop`을 보낼 때까지 계속합니다. 인터넷 라디오, HLS, RTMP, RTSP, SRT가 동작합니다. 스킴은 `http`, `https`, `rtmp`, `rtmps`, `rtsp`, `srt` 중 하나여야 하며, ffmpeg는 네트워크 프로토콜만 쓰도록 제한되어 있어 URL이나 재생 목록으로 로컬 파일을 읽게 만들 수는 없습니다. 그래도 클라이언트가 고른 주소를 서버가 가져오게 된다는 점은 변하지 않으며, 여기에는 서버 자신의 네트워크에 있는 주소도 포함됩니다. 다른 사람이 접근할 수 있는 서버에는 반드시 `STT_TOKENS`를 설정하십시오.
+
+실패는 `{"type": "error", "error": "<category>", "request_id": "..."}` 하나로 전달되고 그 뒤에 연결이 닫힙니다. 범주는 HTTP 오류 범주에 `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed`가 더해진 것입니다.
+
+구절은 0.6초의 멈춤에서 끝나거나, 15초를 넘기면 가장 조용한 지점에서 끝나며, 업로드와 같은 풀에서 빌린 모델로 따로 전사됩니다. 그래서 풀이 바쁘면 실시간 구절은 실패하지 않고 늦어질 뿐입니다. `diarize`를 쓰면 화자 분리기가 스트리밍 모드로 동작하며 청크에서 청크로 화자 캐시를 이어 가므로, 한 화자는 세션 내내 같은 번호를 유지합니다. 이 소켓은 서버가 uvicorn에서 실행될 때(`python3 stt_server.py`, Docker 기본값)만 존재합니다. Flask 디버그 서버와 gunicorn의 sync 워커는 WebSocket을 지원하지 않습니다.
+
 업로드는 `MAX_CONTENT_LENGTH_MB`(기본 10 MB)로 제한되며, 더 큰 본문은 `413`을 반환합니다.
 
 오류는 형식이 일관됩니다. `error`는 일반적인 범주를 담고, `request_id`는 전체 예외가 기록된 서버 로그와 응답을 연결합니다.
@@ -155,6 +189,12 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 ```bash
 python3 stt_client.py speech.mp3
 python3 stt_client.py file1.wav file2.mp3 file3.ogg
+```
+
+`--stream`은 파일 하나를 말하는 속도로 `/api/stream`에 흘려 보내고, 구절이 돌아올 때마다 출력합니다. `--speakers`를 붙이면 화자도 지정합니다.
+
+```bash
+python3 stt_client.py --stream meeting.wav --speakers --language ru
 ```
 
 ### 환경 변수
@@ -185,6 +225,8 @@ python3 stt_client.py file1.wav file2.mp3 file3.ogg
 | `DIARIZE_POOL_SIZE`     | `1`                     | 미리 로드되는 화자 분리기 인스턴스 수              |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | 화자 분리 모델 캐시 디렉터리                       |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | 음성으로 간주하는 화자 활동 확률                   |
+| `STT_WWW_PORT`          | `8080`                  | 웹 UI http 포트(compose)                            |
+| `STT_WWW_TLS_PORT`      | `8443`                  | 웹 UI https 포트(compose)                           |
 | `STT_URL`               | `http://localhost:5099` | 클라이언트: 서버 기본 URL                          |
 | `STT_TOKEN`             | (비어 있음)             | 클라이언트: 서버로 전송되는 베어러 토큰            |
 
@@ -204,12 +246,17 @@ speech-to-text/
 │   ├── model_pool.py    # pools of pre-loaded Whisper and diarizer instances
 │   ├── catalog.py       # what the server can do, for GET /api/models
 │   ├── align.py         # joins transcription segments to speaker turns
+│   ├── live.py          # the /api/stream websocket: protocol and sessions
+│   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND
 │   └── diarize.py       # speaker diarization (who spoke when, no text)
 ├── Dockerfile           # GPU build (CUDA 13.0)
 ├── Dockerfile-cpu       # CPU build
+├── Dockerfile-www       # web UI image (nginx)
+├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS
+├── www/                 # web UI: Vue 2 without a build step, libraries vendored
 ├── docs/                # README translations
 └── tests/               # pytest tests, no model downloads and no GPU
 ```

@@ -14,6 +14,8 @@ Le projet convient à l'usage local, à la transcription par lots et à l'exploi
 * **Sûr en cas de concurrence.** Le serveur conserve un pool d'instances Whisper préchargées, de sorte que plusieurs requêtes sont transcrites en parallèle sans recharger le modèle.
 * **CPU ou GPU, le même code.** Le backend est sélectionné par l'environnement et par l'image Docker que vous construisez. Une carte CUDA accélère l'inférence, mais tout fonctionne aussi sur CPU.
 * **Un client en ligne de commande est inclus.** `stt_client.py` envoie des fichiers locaux au serveur et affiche le résultat.
+* **Transcription en direct.** Diffusez l'audio via un WebSocket et recevez chaque phrase au fil de la parole, attribuée à un locuteur lorsque la diarisation est activée.
+* **Une interface web est incluse.** Envoyez un fichier depuis le navigateur et lisez le texte, ou qui a dit quoi ; elle est servie par son propre conteneur nginx à côté du serveur.
 
 ### Modèles
 
@@ -43,6 +45,19 @@ docker compose -f docker-compose-cpu.yml up --build    # CPU only
 ```
 
 La construction GPU nécessite `nvidia-container-toolkit` sur l'hôte. Le premier lancement télécharge le modèle Whisper dans `./models`.
+
+### Interface web
+
+`docker compose up` démarre aussi `stt_www`, un conteneur nginx qui sert l'interface du navigateur et transmet `/api/` au serveur, de sorte que l'interface et l'API partagent une même adresse.
+
+| Point d'écoute | Port par défaut | Défini par         |
+| -------------- | --------------- | ------------------ |
+| http           | `8080`          | `STT_WWW_PORT`     |
+| https          | `8443`          | `STT_WWW_TLS_PORT` |
+
+Ouvrez `http://<host>:8080`. **TRANSCRIBE** propose deux sources. **FILE** envoie un fichier audio. **DEVICE** transcrit en direct depuis une entrée audio : un microphone ou un micro-casque, une source `Monitor of ...` sous Linux qui transporte tout ce qui est joué par les haut-parleurs ou les écouteurs, ou `Tab or screen audio` pour ce qui est joué dans un onglet du navigateur, ou dans tout le système lorsque le système d'exploitation le permet. Dans les deux cas, le résultat apparaît sous le formulaire en texte brut ou, avec la diarisation activée, sous forme d'un bloc par phrase avec son locuteur et son horodatage, chaque locuteur dans sa propre couleur et les phrases où deux personnes ont parlé en même temps signalées ; une phrase en direct apparaît environ une seconde après que le locuteur a marqué une pause. Le résultat peut être copié ou téléchargé en TXT ou en JSON. **MODELS** affiche ce que renvoie `GET /api/models`. Lorsque `STT_TOKENS` est défini, l'interface demande un jeton une seule fois et le conserve dans le navigateur.
+
+Les navigateurs ne confient les périphériques audio qu'à une page sécurisée : à travers le réseau, DEVICE fonctionne donc via le point d'écoute https (et sur `http://localhost`). Le point d'écoute https utilise un certificat auto-signé que le conteneur crée dans `./data/certs` à son premier démarrage ; placez-y un vrai `stt.crt` et un vrai `stt.key` pour le remplacer. L'interface n'a ni étape de build ni CDN : Vue 2 et ses bibliothèques sont embarquées dans `www/vendor`, elle fonctionne donc sur une machine sans accès à Internet.
 
 ### API HTTP
 
@@ -138,6 +153,25 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `overlap` signale une phrase pendant laquelle quelqu'un d'autre parlait également. NVIDIA est explicite sur ce point : associer un modèle classique mono-locuteur à la diarisation n'équivaut pas à un modèle conçu pour la parole superposée. Une plage temporelle extraite contient toujours toutes les voix qui la chevauchent, de sorte que ces phrases peuvent fusionner ou retenir les mots du mauvais locuteur. Considérez un segment marqué `overlap` comme l'endroit où la transcription est la moins fiable.
 
+`/api/stream` est un WebSocket de **transcription en direct** : l'audio entre au fur et à mesure de l'enregistrement, et chaque phrase revient environ une seconde après que le locuteur a marqué une pause. Les messages texte JSON portent le contrôle, les messages binaires portent l'audio :
+
+1. Le client envoie `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}`. Tous les champs sauf `type` sont optionnels. `token` est le moyen pour un navigateur de s'authentifier, puisqu'il ne peut pas définir d'en-têtes sur un WebSocket ; les autres clients peuvent envoyer à la place `Authorization: Bearer <token>` lors de la poignée de main.
+2. Le serveur répond `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}`.
+3. Le client envoie du PCM brut - 16 bits signés little-endian, mono, 16 kHz - sous forme de messages binaires de taille quelconque, puis `{"type": "stop"}` lorsqu'il a terminé.
+4. Le serveur envoie un `segment` pour chaque phrase, `progress` environ une fois par seconde, et `done` avant de fermer :
+
+```json
+{ "type": "segment", "id": 3, "start": 6.88, "end": 8.2, "text": "This is the second speaker.", "speaker": 1, "overlap": false }
+{ "type": "progress", "seconds": 12.3 }
+{ "type": "done", "segments": 10, "seconds": 21.87, "elapsed": 22.08 }
+```
+
+L'audio peut aussi venir d'ailleurs. Avec `"source": "url", "url": "https://..."` dans le message de démarrage, le client n'envoie aucun audio : le serveur lit le flux à cette adresse via ffmpeg, au rythme propre de la source, jusqu'à ce qu'il se termine ou que le client envoie `stop`. La radio sur Internet, HLS, RTMP, RTSP et SRT fonctionnent ; le schéma doit être `http`, `https`, `rtmp`, `rtmps`, `rtsp` ou `srt`, et ffmpeg est limité aux protocoles réseau, de sorte qu'une URL ou une playlist ne peut pas lui faire lire un fichier local. Cela amène tout de même le serveur à récupérer une adresse choisie par un client, y compris des adresses de son propre réseau : définissez `STT_TOKENS` sur tout serveur que d'autres peuvent atteindre.
+
+Un échec se traduit par un unique `{"type": "error", "error": "<category>", "request_id": "..."}` suivi d'une fermeture, avec les catégories d'erreur HTTP plus `Invalid start message`, `Invalid audio frame`, `Invalid stream URL` et `Stream source failed`.
+
+Une phrase se termine à une pause de 0,6 s, ou à son moment le plus calme dès qu'elle dépasse 15 s, et elle est transcrite seule avec un modèle emprunté au même pool que les envois, de sorte qu'un pool occupé retarde les phrases en direct au lieu de les faire échouer. Avec `diarize`, le diariseur fonctionne en mode streaming et conserve un cache de locuteurs d'un bloc à l'autre, si bien qu'un locuteur garde le même numéro pendant toute la session. Le socket n'existe que lorsque le serveur tourne sous uvicorn (`python3 stt_server.py`, le mode par défaut de Docker) : le serveur de débogage de Flask et les workers sync de gunicorn ne parlent pas WebSocket.
+
 Les envois sont limités à `MAX_CONTENT_LENGTH_MB` (10 Mo par défaut) ; un corps plus grand renvoie `413`.
 
 Les erreurs sont uniformes : `error` porte une catégorie générique et `request_id` met en corrélation la réponse avec le journal du serveur, où l'exception complète est enregistrée.
@@ -155,6 +189,12 @@ Lorsque `STT_TOKENS` est défini, chaque route à l'exception de `GET /api/healt
 ```bash
 python3 stt_client.py speech.mp3
 python3 stt_client.py file1.wav file2.mp3 file3.ogg
+```
+
+`--stream` joue un fichier dans `/api/stream` au rythme de la parole et affiche chaque phrase dès son retour, avec `--speakers` pour l'attribution des locuteurs :
+
+```bash
+python3 stt_client.py --stream meeting.wav --speakers --language ru
 ```
 
 ### Variables d'environnement
@@ -185,6 +225,8 @@ python3 stt_client.py file1.wav file2.mp3 file3.ogg
 | `DIARIZE_POOL_SIZE`     | `1`                     | nombre d'instances de diarisation préchargées        |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | répertoire de cache des modèles de diarisation       |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | probabilité d'activité d'un locuteur comptée comme parole |
+| `STT_WWW_PORT`          | `8080`                  | port http de l'interface web (compose)              |
+| `STT_WWW_TLS_PORT`      | `8443`                  | port https de l'interface web (compose)             |
 | `STT_URL`               | `http://localhost:5099` | client : URL de base du serveur                      |
 | `STT_TOKEN`             | (vide)                  | client : jeton bearer envoyé au serveur              |
 
@@ -204,12 +246,17 @@ speech-to-text/
 │   ├── model_pool.py    # pools d'instances Whisper et de diarisation préchargées
 │   ├── catalog.py       # ce que le serveur sait faire, pour GET /api/models
 │   ├── align.py         # joint les segments de transcription aux tours de parole
+│   ├── live.py          # le WebSocket /api/stream : protocole et sessions
+│   ├── stream.py        # cœur de la transcription en direct : pauses, phrases, transcription par phrase
 │   ├── stt.py           # wrapper Whisper
 │   ├── parakeet.py      # wrapper NVIDIA Parakeet, le second transcripteur
 │   ├── backends.py      # quel module transcrit, selon STT_BACKEND
 │   └── diarize.py       # diarisation des locuteurs (qui a parlé et quand, sans texte)
 ├── Dockerfile           # Construction GPU (CUDA 13.0)
 ├── Dockerfile-cpu       # Construction CPU
+├── Dockerfile-www       # Image de l'interface web (nginx)
+├── nginx/               # Configuration de stt_www : interface statique, proxy /api/, TLS auto-signé
+├── www/                 # Interface web : Vue 2 sans étape de build, bibliothèques embarquées
 ├── docs/                # Traductions du README
 └── tests/               # Tests pytest, sans téléchargement de modèle ni GPU
 ```
