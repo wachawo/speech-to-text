@@ -3,6 +3,56 @@
 ### [Unreleased]
 
 #### Added
+- **Several pre-loaded transcription models, chosen per request.** `STT_MODELS` lists
+  them as `backend:model[@pool]` entries, for example
+  `whisper:turbo@2,whisper:small.en@1,parakeet:nvidia/parakeet-tdt-0.6b-v3@1`, each with
+  its own pool; `STT_DEFAULT_MODEL` names the one a request without `model` gets, else the
+  first entry serves. Every model still loads at startup and nothing is ever loaded
+  lazily. An entry without `@pool` takes `STT_POOL_SIZE`. With `STT_MODELS` empty the
+  server loads exactly what `STT_BACKEND` / `WHISPER_MODEL` / `PARAKEET_MODEL` chose
+  before. A malformed list, an unknown backend, the same weights listed twice (`turbo`
+  and `large-v3-turbo`) or a default that is not in the list stops the server at startup.
+  A file path is served under its basename without `.pt`, so the host's layout never
+  reaches a client, and its languages are those of the checkpoint that name names
+  (`/models/large-v3.pt` knows what `large-v3` knows). `STT_DEFAULT_MODEL` accepts a path
+  entry by that name or as written in `STT_MODELS`. Two entries one name would select, or
+  an entry served under a backend name, stop startup; a pool size must be plain digits, and
+  an entry without `@pool` stops startup when `STT_POOL_SIZE` is below 1. A path entry's
+  name is judged case-insensitively, so `/models/Tiny.EN.pt` is English-only like `tiny.en`.
+- **`model` on `POST /api/stt` and `POST /api/transcript`**, as a query parameter or a form
+  field: an id, an alias, `backend:model` or a bare backend name. A name nobody knows is
+  `400 Invalid model`; a real model this server did not load is `400 Model not loaded`.
+  Both are checked before the audio is decoded or an instance is borrowed.
+- **`/api/stt` says which model transcribed and in which language.** The response gains
+  `model` (the canonical id) and `language` (the code Whisper detected or used, always `en`
+  for an English-only checkpoint, `null` for Parakeet, which does not report it).
+  `/api/transcript` gains `model`.
+- **`GET /api/models` has one row per loaded model**, each with `id`, `selectable`,
+  `pool_size` and `available`, and the body gains `default_model`. A transcriber with
+  nothing loaded keeps its single row, with `selectable: false`. `default` is still the
+  default model's backend.
+- **`stt_client.py --model NAME --language CODE`.** Both flags accept `--flag VALUE` and
+  `--flag=VALUE` and are sent as form fields only when given; each result line shows the
+  model and language the server used, and `--list` prints one line per model with its
+  selectability and pool.
+- **`GET /api/health` reports every pool.** `default_model` and `models` (per id: backend,
+  pool size, available) join the top-level `pool_size` and `available`, which now describe
+  the default model and are unchanged for a single-model deployment. With `STT_TOKENS`
+  set, the model list is only included for a request carrying a valid token: it is
+  configuration, like `/api/models`, and health itself stays open.
+- **A model select in the web UI.** With several models loaded, TRANSCRIBE offers the
+  selectable rows of `GET /api/models` beside the mode and the language, for the FILE and
+  DEVICE sources alike: FILE sends it as the `model` form field, DEVICE in the stream's
+  start message. The language list is the chosen model's own, the choice is remembered in
+  the browser, and the line above a transcript names the model that produced it. The
+  MODELS screen keys its rows by model id, so two Whisper models no longer collide. A
+  server with one model shows no select and gets no `model`, exactly as before.
+- **`model` in the `/api/stream` start message.** A live session names one of the loaded
+  models the way `/api/stt` does, and every phrase borrows an instance from that model's
+  pool; without it the default model serves. The language is checked against the chosen
+  model, an unknown or unloaded model is one `error` message (`Invalid model` /
+  `Model not loaded`) and a close, and `ready` names the model. `stt_client.py --stream`
+  takes `--model`.
 - **Live transcription in the web UI, and from a URL.** TRANSCRIBE gets a FILE / DEVICE
   switch: DEVICE captures a microphone, a headset, a loopback source or a browser tab's sound
   and shows each phrase as a block as soon as it is transcribed. Browsers allow audio devices
@@ -101,6 +151,23 @@
   with `Invalid value for config`. The default `python3 stt_server.py` run was not affected.
   Gunicorn 26's control socket is turned off in the same file: it defaults to a path under
   `$HOME`, which the unprivileged server user cannot write, and nothing here uses it.
+- **A bearer token with non-ASCII characters is a 401, not a 500.** `hmac.compare_digest`
+  raised `TypeError` on such a string, so such a header failed `/api/stt`
+  with a 500 and, now that health reads the token for its detailed body, made the open
+  `GET /api/health` fail too. Tokens are compared as UTF-8 bytes; health answers 200 with
+  the non-detailed body. A `token` in the `/api/stream` start message holding a lone
+  surrogate (`"\ud800"`), which UTF-8 cannot encode, is `Unauthorized` too, instead of an
+  internal close with a traceback.
+- **A known language outside the model's slice is a 400, not a 500.** `?language=yue` on a
+  99-language checkpoint passed the check and raised inside Whisper; it is now
+  `400 Unsupported language` before any audio is decoded, and on `/api/stream` whose start
+  message names the model an `Unsupported language` error before the session starts; a start
+  message without `model` is checked exactly as before. Only a checkpoint whose list is
+  certain refuses it: a file path whose name matches no known checkpoint (a fine-tune at
+  `/models/my-large-v3-finetune.pt`) still has any known code passed on when the request
+  names no model, because its list is only guessed from the name.
+- **A busy model is still `loaded` in the catalogue.** With every instance in flight the
+  pool was empty and the row fell back to `installed`.
 - **The container stops cleanly.** `entrypoint.sh` ran the server under `/bin/sh -c` without
   `exec`, so the shell stayed PID 1, never forwarded SIGTERM, and every stop and redeploy
   waited out Docker's 10 s grace period and then SIGKILLed the server with requests in flight
@@ -138,6 +205,23 @@
   mounted dirs and drops privileges via `setpriv` before starting the server.
 
 #### Changed
+- **`libs.model_pool` keeps one pool per model.** The module attribute `MODEL_POOL` is
+  replaced by `MODEL_POOLS`, a dict of queues keyed by model id, and `init_model_pool()`
+  no longer takes a `size` argument: each model's size comes from its `STT_MODELS` entry
+  or `STT_POOL_SIZE`. `catalog.describe_transcriber` is replaced by
+  `describe_configured_model` (one loaded model) and `describe_unconfigured_backend` (a
+  transcriber with nothing loaded), and `backends.transcriber()` is gone: every caller
+  resolves `backends.transcriber_for_backend(spec["backend"])` for the model it serves.
+  Code importing `libs` directly needs these new names.
+- **A request that names its model has its `language` checked against that model's own
+  list.** An English-only Whisper given `ru`, or Parakeet given a code outside its 25, is
+  `400 Unsupported language`. A request without `model` keeps the old leniency: an
+  English-only default still quietly transcribes English, and Parakeet still accepts and
+  ignores any value.
+- **The transcriber modules take the model to work on.** `get_model` and `describe_backend`
+  accept `model_name`, and both modules gained `get_stt_result`, `list_aliases`,
+  `list_known_models` and (Parakeet) `resolve_languages`; `get_stt_bio` is now a thin
+  wrapper. Parakeet's catalogue row lists its short name as an alias.
 - **A model backend that fails to load no longer stops the server.** The failure is
   logged and its pool left empty, so `/api/diarize` answers 503 while `/api/stt` keeps
   serving. Previously the exception surfaced inside the Gunicorn `post_fork` hook and

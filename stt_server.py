@@ -15,8 +15,8 @@ from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Local imports
-from libs import align, audio, backends, catalog, config, diarize, live, logs, model_pool
-from libs.auth import token_required
+from libs import align, audio, backends, catalog, config, diarize, live, logs, model_pool, registry
+from libs.auth import is_request_authorized, token_required
 from libs.errors import build_error_response, get_request_id, register_error_handlers
 
 logs.setup_logging()
@@ -88,6 +88,37 @@ def read_language_argument() -> str | None:
     return language.strip().lower() or None
 
 
+def read_model_argument() -> str | None:
+    """Read the optional per-request model from the query string or the form field; empty means default.
+
+    Like read_language_argument, it must run after read_audio_upload: parsing the form
+    consumes the stream a raw-body upload lives in.
+    """
+    model = request.args.get("model") or request.form.get("model")
+    if model is None:
+        return None
+    return model.strip() or None
+
+
+def resolve_request_options() -> tuple[dict[str, Any] | None, str | None, str | None]:
+    """Resolve the request's model and then its language against that model.
+
+    Returns (spec, language, None), or (None, None, error category) for a 400. Both checks run
+    before the audio is decoded and before any instance is borrowed, so a bad request costs
+    nothing. `explicit` is whether the client named a model: one that did gets the language
+    checked against that model's own list, one that did not keeps the lenient behaviour it
+    always had.
+    """
+    requested_model = read_model_argument()
+    spec, error = registry.resolve_request_model(requested_model)
+    if spec is None:
+        return None, None, error
+    language, error = backends.resolve_language(read_language_argument(), spec, explicit=requested_model is not None)
+    if error is not None:
+        return None, None, error
+    return spec, language, None
+
+
 def convert_upload(bio):
     """Turn an uploaded buffer into a 16 kHz mono WAV, or None when it is not decodable audio.
 
@@ -108,23 +139,35 @@ def convert_upload(bio):
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    """Report service liveness and model pool occupancy; available=0 means all models are busy."""
-    return jsonify({"status": "ok", **model_pool.get_pool_status()}), 200
+    """Report service liveness and model pool occupancy.
+
+    Open, so healthchecks need no token. The top-level `pool_size` and `available` describe the
+    default model (available=0 means every instance of it is busy). `default_model` and `models`
+    (every loaded model's pool by id) name the deployment's configuration, so like /api/models
+    they are only included for a caller that passes the token check, or when auth is off.
+    """
+    return jsonify({"status": "ok", **model_pool.get_pool_status(detailed=is_request_authorized())}), 200
 
 
 @app.route("/api/models", methods=["GET"])
 @token_required
 def list_models():
-    """Report the backends this server carries, each with its own language list.
+    """Report the models this server carries, each with its own language list.
 
     Behind the token like every other non-health route: a catalogue publishes the server's
     configuration, including which model is loaded and where it is in its lifecycle.
 
-    `status` is one of `loaded` (an instance is waiting in a pool), `installed` (the weights
-    are on disk but nothing is loaded yet) or `absent`. A backend that is configured but not
-    installed says `absent` and nothing more; the reason is in the log.
+    One row per loaded model (a request may name its `id` as `model`), one row for a
+    transcriber with nothing loaded, and the diarizer when it is on. `status` is one of
+    `loaded` (instances of it exist, idle or busy), `installed` (the weights are on disk but
+    nothing is loaded yet) or `absent`. A backend that is configured but not installed says
+    `absent` and nothing more; the reason is in the log.
 
-    `languages` is per backend and never a union, because the sets genuinely diverge.
+    `selectable` says whether a request may name the row as its `model`, `pool_size` and
+    `available` are that model's pool, and exactly one row has `default` true: its id is the
+    top-level `default_model`, and its backend the top-level `default`.
+
+    `languages` is per row and never a union, because the sets genuinely diverge.
     `accepts_language` says whether `?language=` means anything to that backend at all.
     """
     return jsonify(catalog.list_models()), 200
@@ -136,12 +179,18 @@ def transcribe():
     """Transcribe an uploaded audio file.
 
     Accepts multipart/form-data with field ``file`` (any format pydub supports)
-    or a raw binary body with Content-Type audio/*. An optional ``language``
-    (query string or form field) overrides the server WHISPER_LANGUAGE default
+    or a raw binary body with Content-Type audio/*. An optional ``model`` (query
+    string or form field: an id, an alias, ``backend:model`` or a bare backend
+    name) picks one of the models loaded at startup; without it the default model
+    serves. An optional ``language`` overrides the server WHISPER_LANGUAGE default
     for this request; ``auto`` autodetects.
 
+    ``model`` is the id of the model that transcribed. ``language`` is the code
+    Whisper detected or used (always ``en`` for an English-only checkpoint), or
+    null for a backend that does not report it.
+
     Returns::
-        {"text": "transcribed text", "elapsed": 1.23}
+        {"text": "transcribed text", "elapsed": 1.23, "model": "turbo", "language": "en"}
     """
     start_time = time.monotonic()
 
@@ -151,34 +200,35 @@ def transcribe():
     bio, filename = upload
     size_kb = len(bio.getvalue()) // 1024
 
-    language = read_language_argument()
-    if language is not None:
-        language = backends.resolve_language(language)
-        if language is None:
-            return build_error_response("Invalid language", 400)
+    spec, language, error = resolve_request_options()
+    if spec is None:
+        return build_error_response(error or "Invalid model", 400)
 
     wav_bio = convert_upload(bio)
     if wav_bio is None:
         return build_error_response("Invalid audio data", 400)
 
     try:
-        model = model_pool.acquire_model()
+        model = model_pool.acquire_model(model_id=spec["id"])
     except queue.Empty:
         logger.warning("[%s] Model pool exhausted: %s", get_request_id(), model_pool.get_pool_status())
         return build_error_response("Service Unavailable", 503)
 
     try:
-        text = backends.transcriber().get_stt_bio(wav_bio, model=model, language=language)
+        result = backends.transcriber_for_backend(spec["backend"]).get_stt_result(wav_bio, model=model, language=language)
+        text = result["text"]
         elapsed = time.monotonic() - start_time
         logger.info(
-            "[%s] STT %s (%dkb) - %d chars (%.2fs)",
+            "[%s] STT %s (%dkb) model=%s language=%s - %d chars (%.2fs)",
             get_request_id(),
             filename,
             size_kb,
+            spec["id"],
+            result["language"],
             len(text),
             elapsed,
         )
-        return jsonify({"text": text, "elapsed": round(elapsed, 3)}), 200
+        return jsonify({"text": text, "elapsed": round(elapsed, 3), "model": spec["id"], "language": result["language"]}), 200
     except Exception as exc:
         logger.error(
             "[%s] STT failed: %s: %s\n%s",
@@ -189,7 +239,7 @@ def transcribe():
         )
         return build_error_response("Transcription failed", 500)
     finally:
-        model_pool.release_model(model)
+        model_pool.release_model(model, model_id=spec["id"])
 
 
 @app.route("/api/diarize", methods=["POST"])
@@ -270,14 +320,14 @@ def run_diarization(wav_bio):
         model_pool.release_diarizer(diarizer)
 
 
-def run_transcription(wav_bio, language):
-    """Transcribe the buffer with a pooled model, releasing it before anything else runs."""
-    model = model_pool.acquire_model()
+def run_transcription(wav_bio, language, spec):
+    """Transcribe the buffer with an instance of the chosen model, releasing it before anything else runs."""
+    model = model_pool.acquire_model(model_id=spec["id"])
     try:
         wav_bio.seek(0)
-        return backends.transcriber().get_stt_segments(wav_bio, model=model, language=language)
+        return backends.transcriber_for_backend(spec["backend"]).get_stt_segments(wav_bio, model=model, language=language)
     finally:
-        model_pool.release_model(model)
+        model_pool.release_model(model, model_id=spec["id"])
 
 
 @app.route("/api/transcript", methods=["POST"])
@@ -285,8 +335,10 @@ def run_transcription(wav_bio, language):
 def transcribe_by_speaker():
     """Transcribe an uploaded file and attribute each part of it to a speaker.
 
-    Accepts the same body shapes as /api/stt. Diarization runs first and its instance is
-    released before a transcription model is borrowed, so no request ever holds one of each.
+    Accepts the same body shapes and the same ``model`` and ``language`` options as /api/stt.
+    Diarization runs first and its instance is released before a transcription model is
+    borrowed, so no request ever holds one of each. ``model`` in the response is the id of the
+    model that transcribed.
 
     `turns` is the diarizer's raw output and `segments` is the join, kept as two fields rather
     than one fused list so a caller who distrusts the attribution can still see what the
@@ -298,7 +350,7 @@ def transcribe_by_speaker():
     overlaps it, so those segments may merge or select the wrong speaker's words.
 
     Returns::
-        {"segments": [...], "turns": [...], "speakers": 2, "text": "...", "elapsed": 1.23}
+        {"segments": [...], "turns": [...], "speakers": 2, "text": "...", "elapsed": 1.23, "model": "turbo"}
     """
     if not config.DIARIZE_ENABLED:
         logger.warning("[%s] Speaker transcript requested while diarization is disabled", get_request_id())
@@ -315,11 +367,9 @@ def transcribe_by_speaker():
     bio, filename = upload
     size_kb = len(bio.getvalue()) // 1024
 
-    language = read_language_argument()
-    if language is not None:
-        language = backends.resolve_language(language)
-        if language is None:
-            return build_error_response("Invalid language", 400)
+    spec, language, error = resolve_request_options()
+    if spec is None:
+        return build_error_response(error or "Invalid model", 400)
 
     wav_bio = convert_upload(bio)
     if wav_bio is None:
@@ -335,7 +385,7 @@ def transcribe_by_speaker():
         return build_error_response("Diarization failed", 500)
 
     try:
-        segments = run_transcription(wav_bio, language)
+        segments = run_transcription(wav_bio, language, spec)
     except queue.Empty:
         logger.warning("[%s] Model pool exhausted: %s", get_request_id(), model_pool.get_pool_status())
         return build_error_response("Service Unavailable", 503)
@@ -347,10 +397,11 @@ def transcribe_by_speaker():
     elapsed = time.monotonic() - start_time
     speakers = align.count_speakers(attributed)
     logger.info(
-        "[%s] Transcript %s (%dkb) - %d segments, %d speakers (%.2fs)",
+        "[%s] Transcript %s (%dkb) model=%s - %d segments, %d speakers (%.2fs)",
         get_request_id(),
         filename,
         size_kb,
+        spec["id"],
         len(attributed),
         speakers,
         elapsed,
@@ -365,6 +416,7 @@ def transcribe_by_speaker():
                 # their leading space, so this reproduces exactly what /api/stt would return.
                 "text": "".join(segment["text"] for segment in segments).strip(),
                 "elapsed": round(elapsed, 3),
+                "model": spec["id"],
             }
         ),
         200,
@@ -428,7 +480,7 @@ def run_server() -> None:
 
 
 def main():
-    """Entry point: fill the model pool, then serve."""
+    """Entry point: fill every model's pool, then serve."""
     model_pool.init_model_pool()
     model_pool.init_diarizer_pool()
     log_auth_mode()

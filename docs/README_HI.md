@@ -32,6 +32,19 @@ Whisper कई मॉडल आकारों में आता है। ब
 
 केवल-अंग्रेज़ी वेरिएंट (`tiny.en`, `base.en`, `small.en`, `medium.en`) अंग्रेज़ी ऑडियो पर थोड़े अधिक सटीक होते हैं। डिफ़ॉल्ट `turbo` है, जो GPU पर अंग्रेज़ी के लिए सबसे अच्छा सर्व-समावेशी विकल्प है।
 
+#### कई मॉडल
+
+`STT_MODELS` स्टार्टअप पर कई ट्रांसक्रिप्शन मॉडल लोड करता है, हर एक का अपना पूल होता है, और हर अनुरोध `model` से उनमें से एक चुन सकता है। प्रविष्टियाँ अल्पविराम से अलग `backend:model[@pool]` रूप में होती हैं:
+
+```bash
+STT_MODELS=whisper:turbo@2,whisper:small.en@1,parakeet:nvidia/parakeet-tdt-0.6b-v3@1
+STT_DEFAULT_MODEL=turbo    # बिना `model` वाले अनुरोध का मॉडल; खाली होने पर पहली प्रविष्टि
+```
+
+चुनाव केवल स्टार्टअप पर लोड किए गए मॉडलों में से होता है: कोई अनुरोध कभी डाउनलोड या लोडिंग शुरू नहीं करता, और जो मॉडल लोड नहीं है उसे `400` के साथ अस्वीकार किया जाता है। सूची का हर मॉडल सर्वर चलने तक मेमोरी लेता है, मोटे तौर पर पूरी सूची पर जोड़ा गया `वर्कर x (पूल x मॉडल का आकार)`, और साथ में डायराइज़र। GPU पर `turbo@2,small@1,parakeet@1` प्रति प्रोसेस लगभग 12 + 2 + 3 = 17 GB है। gunicorn में हर sync वर्कर एक समय में एक ही अनुरोध संभालता है, इसलिए हर प्रविष्टि को `@1` दें और `GUNICORN_WORKERS` से स्केल करें। बिना `@pool` वाली प्रविष्टि को `STT_POOL_SIZE` मिलता है, जो Docker के बाहर 8 है, इसलिए `@N` स्पष्ट रूप से लिखें। कई बड़े मॉडल लोड करने में एक से अधिक समय लगता है, इसलिए यदि स्टार्टअप के दौरान कंटेनर unhealthy चिह्नित हो जाए तो compose फ़ाइल में healthcheck का `start_period` बढ़ाएँ।
+
+`STT_MODELS` खाली होने पर `STT_BACKEND`, `WHISPER_MODEL` और `PARAKEET_MODEL` पहले की तरह एकमात्र मॉडल चुनते हैं, और सर्वर ठीक वही लोड करता है जो पहले करता था; प्रतिक्रियाओं में केवल नए फ़ील्ड जुड़ते हैं। इसके सेट होने पर ये चर तय नहीं करते कि क्या लोड होगा। Docker में `STT_MODELS` और `STT_DEFAULT_MODEL` को `.env` में रखें, compose के `environment:` ब्लॉक में नहीं, जो `.env` को ओवरराइड करता है। Parakeet प्रविष्टि के लिए अब भी `PARAKEET=true` के साथ बनी इमेज चाहिए, और अज्ञात बैकएंड, दो बार सूचीबद्ध एक ही वेट (`turbo` और `large-v3-turbo`) या सूची में न मौजूद `STT_DEFAULT_MODEL` होने पर सर्वर शुरू होने से इनकार करता है। फ़ाइल पथ के रूप में दिया गया मॉडल `.pt` के बिना उसके फ़ाइल नाम से उपलब्ध कराया जाता है, ताकि पथ कभी किसी क्लाइंट तक न पहुँचे। `STT_DEFAULT_MODEL` ऐसी प्रविष्टि को उसी नाम से या `STT_MODELS` में ठीक जैसा लिखा है उसी पथ से बता सकता है, और उसकी भाषाएँ उस चेकपॉइंट की होती हैं जिसका नाम फ़ाइल नाम में है: `/models/large-v3.pt` वही जानता है जो `large-v3` जानता है। दो प्रविष्टियाँ जो एक ही नाम से परोसी जाएँगी (`/a/model.pt` और `/b/model.pt`), या कोई प्रविष्टि जो किसी बैकएंड के नाम से परोसी जाएगी (`/models/parakeet.pt`), स्टार्टअप पर सर्वर को रोक देती हैं।
+
 ### त्वरित प्रारंभ (Docker)
 
 सर्वर चलाने का सबसे आसान तरीका Docker के साथ है। मॉडल फ़ाइलें होस्ट पर `./models` में कैश की जाती हैं, इसलिए वे कंटेनर के पुनर्निर्माण के बाद भी बनी रहती हैं।
@@ -55,7 +68,7 @@ GPU बिल्ड को होस्ट पर `nvidia-container-toolkit` क
 | http  | `8080`      | `STT_WWW_PORT`     |
 | https | `8443`      | `STT_WWW_TLS_PORT` |
 
-`http://<host>:8080` खोलें। **TRANSCRIBE** के दो स्रोत हैं। **FILE** एक ऑडियो फ़ाइल अपलोड करता है। **DEVICE** किसी ऑडियो इनपुट से लाइव ट्रांसक्राइब करता है: माइक्रोफ़ोन या हेडसेट, Linux पर `Monitor of ...` स्रोत जो स्पीकर या हेडफ़ोन से बजने वाली हर चीज़ को लाता है, या `Tab or screen audio`, जो ब्राउज़र टैब में बज रही चीज़ के लिए है, या जहाँ OS अनुमति दे वहाँ पूरे सिस्टम के लिए। दोनों ही स्थितियों में परिणाम फ़ॉर्म के नीचे सादे टेक्स्ट के रूप में दिखता है या, डायराइज़ेशन सक्षम होने पर, हर वाक्यांश के लिए एक ब्लॉक के रूप में जिसमें उसका स्पीकर और समय होता है, हर स्पीकर अपने रंग में, और जिन वाक्यांशों में दो लोग एक साथ बोले वे चिह्नित होते हैं; लाइव वाक्यांश स्पीकर के रुकने के लगभग एक सेकंड बाद दिखता है। परिणाम को कॉपी किया जा सकता है या TXT अथवा JSON के रूप में डाउनलोड किया जा सकता है। **MODELS** वही दिखाता है जो `GET /api/models` बताता है। जब `STT_TOKENS` सेट होता है, तो UI एक बार टोकन माँगता है और उसे ब्राउज़र में रखता है।
+`http://<host>:8080` खोलें। **TRANSCRIBE** के दो स्रोत हैं। **FILE** एक ऑडियो फ़ाइल अपलोड करता है। **DEVICE** किसी ऑडियो इनपुट से लाइव ट्रांसक्राइब करता है: माइक्रोफ़ोन या हेडसेट, Linux पर `Monitor of ...` स्रोत जो स्पीकर या हेडफ़ोन से बजने वाली हर चीज़ को लाता है, या `Tab or screen audio`, जो ब्राउज़र टैब में बज रही चीज़ के लिए है, या जहाँ OS अनुमति दे वहाँ पूरे सिस्टम के लिए। दोनों ही स्थितियों में परिणाम फ़ॉर्म के नीचे सादे टेक्स्ट के रूप में दिखता है या, डायराइज़ेशन सक्षम होने पर, हर वाक्यांश के लिए एक ब्लॉक के रूप में जिसमें उसका स्पीकर और समय होता है, हर स्पीकर अपने रंग में, और जिन वाक्यांशों में दो लोग एक साथ बोले वे चिह्नित होते हैं; लाइव वाक्यांश स्पीकर के रुकने के लगभग एक सेकंड बाद दिखता है। परिणाम को कॉपी किया जा सकता है या TXT अथवा JSON के रूप में डाउनलोड किया जा सकता है। कई मॉडल लोड होने पर (`STT_MODELS`), मोड और भाषा के पास एक मॉडल चयन दोनों स्रोतों के लिए मॉडल चुनता है, जो `GET /api/models` से भरा जाता है, और भाषा सूची चुने गए मॉडल के अनुसार बदलती है। **MODELS** वही दिखाता है जो `GET /api/models` बताता है। जब `STT_TOKENS` सेट होता है, तो UI एक बार टोकन माँगता है और उसे ब्राउज़र में रखता है।
 
 ब्राउज़र ऑडियो डिवाइस केवल सुरक्षित पेज को देते हैं, इसलिए नेटवर्क पर DEVICE https लिसनर के माध्यम से काम करता है (और `http://localhost` पर भी)। https लिसनर एक स्व-हस्ताक्षरित (self-signed) प्रमाणपत्र का उपयोग करता है जिसे कंटेनर पहली बार शुरू होने पर `./data/certs` में बनाता है; उसे बदलने के लिए वहाँ असली `stt.crt` और `stt.key` रख दें। UI में न कोई बिल्ड चरण है और न कोई CDN: Vue 2 और उसकी लाइब्रेरियाँ `www/vendor` में साथ रखी गई हैं, इसलिए यह इंटरनेट तक पहुँच न रखने वाली मशीन पर भी काम करता है।
 
@@ -74,21 +87,41 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
   --data-binary @speech.wav
 ```
 
-`GET /api/health` पूल की स्थिति लौटाता है। `available` का 0 तक गिरना यह दर्शाता है कि हर मॉडल इस समय उपयोग में है:
+`GET /api/health` पूलों की स्थिति लौटाता है। शीर्ष-स्तर के `pool_size` और `available` डिफ़ॉल्ट मॉडल का वर्णन करते हैं, यानी वह मॉडल जिसकी प्रतीक्षा बिना `model` वाला अनुरोध करता है; `available` का 0 तक गिरना मतलब उसका हर इंस्टेंस इस समय काम में है। `models` हर लोड किए गए मॉडल को उसके id से बताता है:
 
 ```json
-{ "status": "ok", "pool_size": 4, "available": 3, "diarize": false }
+{ "status": "ok", "pool_size": 2, "available": 1, "diarize": false, "default_model": "turbo",
+  "models": { "turbo": { "backend": "whisper", "pool_size": 2, "available": 1 },
+              "nvidia/parakeet-tdt-0.6b-v3": { "backend": "parakeet", "pool_size": 1, "available": 1 } } }
 ```
 
-`POST /api/stt` या तो `file` नामक एक `multipart/form-data` फ़ील्ड स्वीकार करता है, या एक कच्चा (raw) `audio/*` बॉडी। एक वैकल्पिक `language` (query string या form field) उस अनुरोध के लिए सर्वर डिफ़ॉल्ट को ओवरराइड करता है; `auto` स्वतः पहचान करता है। सफल होने पर यह टेक्स्ट और बीते हुए सेकंड लौटाता है:
+जब `STT_TOKENS` सेट होता है, तो `default_model` और `models` केवल वैध टोकन वाले अनुरोध के जवाब में शामिल होते हैं: `GET /api/models` की तरह ये सर्वर का कॉन्फ़िगरेशन बताते हैं। बिना टोकन वाला हेल्थचेक अब भी `status`, `pool_size`, `available` और `diarize` पाता है।
+
+`POST /api/stt` या तो `file` नाम का `multipart/form-data` फ़ील्ड या कच्चा `audio/*` बॉडी स्वीकार करता है। वैकल्पिक `model` (क्वेरी स्ट्रिंग या फ़ॉर्म फ़ील्ड) लोड किए गए मॉडलों में से एक चुनता है: उसका id, कोई उपनाम (`large-v3-turbo`, `parakeet-tdt-0.6b-v3`), `backend:model` रूप, या केवल बैकएंड का नाम, जिसका अर्थ है डिफ़ॉल्ट मॉडल यदि वह उसी बैकएंड का है, अन्यथा उस बैकएंड का पहला मॉडल। `model` न होने पर डिफ़ॉल्ट मॉडल उत्तर देता है। वैकल्पिक `language` (क्वेरी स्ट्रिंग या फ़ॉर्म फ़ील्ड) उस अनुरोध के लिए सर्वर के डिफ़ॉल्ट को बदल देता है; `auto` अपने आप पहचान करता है। सफल होने पर यह टेक्स्ट, बीते हुए सेकंड, ट्रांसक्राइब करने वाला मॉडल और भाषा लौटाता है: वह कोड जो Whisper ने पहचाना या इस्तेमाल किया (केवल-अंग्रेज़ी मॉडल के लिए हमेशा `en`), या Parakeet के लिए `null`, जो भाषा नहीं बताता।
+
+```bash
+curl -X POST 'localhost:5099/api/stt?model=turbo&language=en' -F file=@speech.mp3
+```
 
 ```json
-{ "text": "transcribed text", "elapsed": 1.23 }
+{ "text": "transcribed text", "elapsed": 1.23, "model": "turbo", "language": "en" }
 ```
 
-भाषा कोड (`ru`) के रूप में या उसके अंग्रेज़ी नाम (`russian`) से दी जा सकती है; जो मॉडल नहीं जानता उसे ट्रांसक्रिप्शन के बीच में विफल होने के बजाय `400` के साथ अस्वीकार किया जाता है। `GET /api/models` बताता है कि वह क्या जानता है। यह केवल उन बैकएंड पर लागू होता है जो भाषा स्वीकार करते हैं (`accepts_language: true`)। Parakeet भाषा खुद पहचानता है और मान को अनदेखा करता है, और जिस भाषण के बारे में वह अनिश्चित हो उसे बिना बताए छोड़ सकता है: बहुभाषी रिकॉर्डिंग में वह अल्पसंख्यक भाषा के लिए कुछ भी नहीं लौटा सकता।
+भाषा कोड (`ru`) के रूप में या उसके अंग्रेज़ी नाम (`russian`) के रूप में दी जा सकती है; जिसे मॉडल नहीं जानता उसे ट्रांसक्रिप्शन के बीच में विफल होने के बजाय `400` के साथ अस्वीकार किया जाता है। हर मॉडल क्या जानता है, यह `GET /api/models` बताता है। `language` की जाँच कितनी सख़्त है, यह मॉडल पर और इस पर निर्भर करता है कि अनुरोध ने मॉडल का नाम दिया या नहीं:
 
-`GET /api/models` बताता है कि यह सर्वर क्या-क्या रखता है, ताकि किसी क्लाइंट को अनुमान न लगाना पड़े। हर बैकएंड अपनी अलग भाषा-सूची लाता है, क्योंकि ये समूह वास्तव में एक-दूसरे से भिन्न हैं और एक मिली-जुली सूची अलग-अलग हर बैकएंड के लिए ग़लत होती।
+| मॉडल | कौन सा `language` लेता है | बिना `model` का अनुरोध | `model` वाला अनुरोध |
+| --- | --- | --- | --- |
+| बहुभाषी Whisper | उसकी सूची का कोड या अंग्रेज़ी नाम | सूची के बाहर `400 Unsupported language` | वही |
+| केवल-अंग्रेज़ी Whisper (`.en`) | `en` और `auto` | कोई दूसरा ज्ञात कोड अंग्रेज़ी की तरह ट्रांसक्राइब होता है | `400 Unsupported language` |
+| Parakeet | कोई नहीं, यह भाषा ख़ुद पहचानता है | कोई भी मान स्वीकार और अनदेखा | उसकी सूची का कोड, अन्यथा `400` |
+
+Parakeet केवल कोड स्वीकार करता है, अंग्रेज़ी नाम नहीं, और जिस भाषण के बारे में वह अनिश्चित हो उसे बिना बताए छोड़ सकता है: कई भाषाओं वाली रिकॉर्डिंग में वह अल्पसंख्यक भाषा के लिए कुछ भी न लौटाए, ऐसा हो सकता है।
+
+ऐसा Whisper फ़ाइल पाथ जिसका नाम किसी ज्ञात चेकपॉइंट से मेल नहीं खाता, जैसे `/models/my-large-v3-finetune.pt` पर रखा फ़ाइन-ट्यून, उसकी भाषा सूची केवल उस नाम से अनुमानित होती है। इसलिए `model` के बिना आया अनुरोध उसे पहले की तरह कोई भी ज्ञात कोड दे देता है; जो अनुरोध उसका नाम लेता है, उसे अब भी अनुमानित सूची से जाँचा जाता है।
+
+इन दो विकल्पों की `400` त्रुटियाँ हैं `Invalid model` (कोई बैकएंड यह नाम नहीं जानता), `Model not loaded` (असली मॉडल जिसे इस सर्वर ने लोड नहीं किया), `Invalid language` (यह कोई भाषा ही नहीं) और `Unsupported language` (असली भाषा जिसे चुना गया मॉडल नहीं लेता)। चारों ऑडियो डिकोड होने से पहले लौटाई जाती हैं।
+
+`GET /api/models` बताता है कि यह सर्वर क्या-क्या रखता है, ताकि क्लाइंट को अनुमान न लगाना पड़े। हर लोड किए गए मॉडल की अपनी पंक्ति होती है, और ऐसा ही हर उस ट्रांसक्राइबर का जिसका कोई मॉडल लोड नहीं (`selectable: false`) और डायराइज़र का भी। हर पंक्ति अपनी भाषा सूची लाती है, क्योंकि ये समूह सचमुच अलग हैं और मिलाई गई सूची अपने आप में हर मॉडल के लिए ग़लत होगी।
 
 ```bash
 curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
@@ -97,17 +130,23 @@ curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
 ```json
 {
   "default": "whisper",
+  "default_model": "turbo",
   "models": [
-    { "backend": "whisper", "model": "turbo", "aliases": ["large-v3-turbo"], "status": "loaded",
+    { "id": "turbo", "backend": "whisper", "model": "turbo", "aliases": ["large-v3-turbo"], "status": "loaded",
+      "selectable": true, "default": true, "pool_size": 2, "available": 2,
       "multilingual": true, "accepts_language": true, "languages_source": "derived",
-      "languages": ["en", "zh", "de", "..."], "default_language": "en", "default": true },
-    { "backend": "diarize", "model": "nvidia/Nemotron-3-Diarization", "status": "installed",
-      "accepts_language": false, "languages": null, "max_speakers": 8, "default": false }
+      "languages": ["en", "zh", "de", "..."], "default_language": "en" },
+    { "id": "small.en", "backend": "whisper", "model": "small.en", "aliases": [], "status": "loaded",
+      "selectable": true, "default": false, "pool_size": 1, "available": 1,
+      "multilingual": false, "accepts_language": true, "languages": ["en"], "default_language": "en" },
+    { "id": "nvidia/Nemotron-3-Diarization", "backend": "diarize", "model": "nvidia/Nemotron-3-Diarization",
+      "status": "installed", "selectable": false, "default": false, "pool_size": 1, "available": 0,
+      "accepts_language": false, "languages": null, "max_speakers": 8 }
   ]
 }
 ```
 
-`status` तब `loaded` होता है जब कोई इंस्टेंस पूल में प्रतीक्षा कर रहा हो, `installed` तब जब वेट्स डिस्क पर मौजूद हों लेकिन अभी कुछ लोड न हुआ हो, और अन्यथा `absent`। ऐसा बैकएंड जो कॉन्फ़िगर है पर इंस्टॉल नहीं, केवल `absent` कहता है और उससे अधिक कुछ नहीं; कारण लॉग में जाता है। `accepts_language` बताता है कि उस बैकएंड के लिए `?language=` का कोई अर्थ है या नहीं। डायराइज़र खाली सूची के बजाय `null` भाषाएँ लौटाता है, क्योंकि वह किसी भी भाषा में टेक्स्ट नहीं बनाता।
+`id` वह है जो अनुरोध `model` के रूप में भेजता है, और ठीक एक पंक्ति में `default: true` होता है: उसका id `default_model` है और उसका बैकएंड शीर्ष-स्तर का `default` है। `pool_size` और `available` उस मॉडल के पूल का वर्णन करते हैं। `status` तब `loaded` होता है जब मॉडल के इंस्टेंस मौजूद हों, खाली हों या व्यस्त, `installed` तब जब वेट डिस्क पर हों पर अभी कुछ लोड न हुआ हो, और बाक़ी मामलों में `absent`। जो बैकएंड कॉन्फ़िगर है पर इंस्टॉल नहीं, वह केवल `absent` बताता है; कारण लॉग में जाता है। `accepts_language` बताता है कि उस बैकएंड के लिए `?language=` का कोई मतलब है या नहीं। डायराइज़र ख़ाली सूची के बजाय `null` भाषाएँ बताता है, क्योंकि वह किसी भी भाषा में टेक्स्ट नहीं बनाता।
 
 CLI क्लाइंट भी यही एंडपॉइंट पढ़ता है:
 
@@ -128,11 +167,11 @@ curl -X POST localhost:5099/api/diarize -F file=@meeting.wav
 
 इन संख्याओं के बारे में दो बातें। अंतराल एक-दूसरे पर ओवरलैप कर सकते हैं, क्योंकि हर स्पीकर चैनल का मूल्यांकन अलग से होता है, इसलिए एक साथ बोलते दो लोग समान सेकंडों को कवर करने वाले दो अंतराल बनाते हैं। और लेबल केवल इसी एक रिकॉर्डिंग में स्थितियाँ हैं, इस क्रम में कि कौन पहले बोला: वे पहचान नहीं हैं, और अगले अनुरोध में उसी व्यक्ति को अलग संख्या मिलती है। किसी स्पीकर का नाम बताने के लिए एक एनरोलमेंट चरण चाहिए, जो इस सेवा में नहीं है। अधिकतम आठ स्पीकर अलग-अलग पहचाने जाते हैं।
 
-दो ट्रांसक्रिप्शन बैकएंड उपलब्ध हैं। **Whisper** डिफ़ॉल्ट है और `language` स्वीकार करता है। **Parakeet** (`nvidia/parakeet-tdt-0.6b-v3`) 25 यूरोपीय भाषाओं को कवर करता है, भाषा स्वयं पहचान लेता है और इसलिए कोई `language` तर्क लेता ही नहीं, जिसे `GET /api/models` `accepts_language: false` के रूप में बताता है। इसे `PARAKEET=true` के साथ बनाई गई इमेज पर `STT_BACKEND=parakeet` से चुनें; यह डिप्लॉय-समय का चयन है, प्रति-अनुरोध का नहीं, क्योंकि दूसरा स्थायी रूप से लोड मॉडल हर वर्कर में वेट्स का दूसरा सेट होगा।
+दो ट्रांसक्रिप्शन बैकएंड उपलब्ध हैं। **Whisper** डिफ़ॉल्ट है और `language` स्वीकार करता है। **Parakeet** (`nvidia/parakeet-tdt-0.6b-v3`) 25 यूरोपीय भाषाएँ कवर करता है, भाषा ख़ुद पहचानता है और इसलिए कोई `language` तर्क स्वीकार ही नहीं करता, जिसे `GET /api/models` `accepts_language: false` के रूप में बताता है। इसके लिए `PARAKEET=true` के साथ बनी इमेज चाहिए। पूरे सर्वर के लिए इसे `STT_BACKEND=parakeet` से चुनें, या `STT_MODELS` के ज़रिए Whisper के साथ लोड करें और हर अनुरोध में `model` से चुनें। अनुरोध केवल स्टार्टअप पर लोड किए गए मॉडलों में से चुनता है, और हर लोड किया गया मॉडल हर वर्कर में अपने वेट रखता है, इसलिए मेमोरी वर्करों की संख्या गुणा पूलों का योग होती है।
 
 कोई भी बैकएंड ओवरलैप-सजग (overlap-aware) नहीं है। NVIDIA का ओवरलैप-सजग मॉडल केवल एक NeMo चेकपॉइंट के रूप में आता है, और NeMo इस प्रोजेक्ट के CUDA बिल्ड से भिन्न PyTorch को पिन करता है, इसलिए यहाँ उसे इंस्टॉल नहीं किया जा सकता।
 
-`POST /api/transcript` यह उत्तर देता है कि **किसने क्या कहा**: यह एक ही ऑडियो पर डायराइज़ेशन और ट्रांसक्रिप्शन दोनों चलाता है और उन्हें समय के आधार पर जोड़ता है। इसके लिए डायराइज़ेशन सक्षम होना चाहिए, अन्यथा यह `503` लौटाता है।
+`POST /api/transcript` यह उत्तर देता है कि **किसने क्या कहा**: यह एक ही ऑडियो पर डायराइज़ेशन और ट्रांसक्रिप्शन दोनों चलाता है और उन्हें समय के आधार पर जोड़ता है। इसके लिए डायराइज़ेशन सक्षम होना चाहिए, अन्यथा यह `503` लौटाता है। यह `/api/stt` जैसे ही `model` और `language` स्वीकार करता है और ट्रांसक्राइब करने वाले मॉडल का नाम `model` में देता है।
 
 ```bash
 curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
@@ -145,7 +184,8 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
   "turns": [ { "speaker": 0, "start": 0.51, "end": 4.24 }, { "speaker": 1, "start": 4.0, "end": 9.81 } ],
   "speakers": 2,
   "text": "so where are we green since this morning",
-  "elapsed": 3.41
+  "elapsed": 3.41,
+  "model": "turbo"
 }
 ```
 
@@ -155,8 +195,8 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `/api/stream` **लाइव ट्रांसक्रिप्शन** के लिए एक वेबसॉकेट है: ऑडियो रिकॉर्ड होते-होते भीतर जाता है, और हर वाक्यांश स्पीकर के रुकने के लगभग एक सेकंड बाद वापस आता है। JSON टेक्स्ट संदेश नियंत्रण ले जाते हैं, बाइनरी संदेश ऑडियो:
 
-1. क्लाइंट `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}` भेजता है। `type` को छोड़कर हर फ़ील्ड वैकल्पिक है। `token` वह तरीका है जिससे ब्राउज़र प्रमाणीकरण करता है, क्योंकि वह वेबसॉकेट पर हेडर सेट नहीं कर सकता; अन्य क्लाइंट इसके बजाय हैंडशेक पर `Authorization: Bearer <token>` भेज सकते हैं।
-2. सर्वर `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}` के साथ उत्तर देता है।
+1. क्लाइंट `{"type": "start", "model": "turbo", "language": "ru", "diarize": true, "token": "<token>"}` भेजता है। `type` को छोड़कर हर फ़ील्ड वैकल्पिक है। `model` लोड किए गए मॉडलों में से एक को उसी तरह चुनता है जैसे `/api/stt` पर `model` करता है, और भाषा उसी मॉडल के विरुद्ध जाँची जाती है; इसके बिना डिफ़ॉल्ट मॉडल काम करता है और भाषा को पहले की तरह केवल इस बात के लिए जाँचा जाता है कि वह कोई भाषा है या नहीं, इसलिए डिफ़ॉल्ट मॉडल जिस कोड को नहीं जानता वह किसी वाक्यांश को ट्रांसक्राइब करते समय विफल होता है। `token` वह तरीका है जिससे ब्राउज़र प्रमाणीकरण करता है, क्योंकि वह वेबसॉकेट पर हेडर सेट नहीं कर सकता; अन्य क्लाइंट इसके बजाय हैंडशेक पर `Authorization: Bearer <token>` भेज सकते हैं।
+2. सर्वर `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "model": "turbo", "language": "ru", "diarize": true, "source": "client"}` के साथ उत्तर देता है।
 3. क्लाइंट कच्चा PCM - signed 16-bit, little-endian, मोनो, 16 kHz - किसी भी आकार के बाइनरी संदेशों के रूप में भेजता है, और काम पूरा होने पर `{"type": "stop"}` भेजता है।
 4. सर्वर हर वाक्यांश के लिए एक `segment`, लगभग हर सेकंड एक `progress`, और बंद करने से पहले `done` भेजता है:
 
@@ -189,12 +229,16 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 ```bash
 python3 stt_client.py speech.mp3
 python3 stt_client.py file1.wav file2.mp3 file3.ogg
+python3 stt_client.py --model small.en --language en speech.mp3
+python3 stt_client.py --list
 ```
+
+`--model` और `--language` (`--model=NAME` रूप में भी) केवल दिए जाने पर भेजे जाते हैं, अन्यथा सर्वर का डिफ़ॉल्ट लागू होता है; हर परिणाम पंक्ति सर्वर द्वारा इस्तेमाल किया गया मॉडल और भाषा दिखाती है। `--list` डिफ़ॉल्ट मॉडल और हर मॉडल के लिए एक पंक्ति छापता है, जिसमें उसकी स्थिति, क्या अनुरोध उसे चुन सकता है, उसका पूल और उसकी भाषाएँ होती हैं।
 
 `--stream` एक फ़ाइल को बोलने की गति से `/api/stream` में चलाता है और हर वाक्यांश लौटते ही उसे प्रिंट करता है, स्पीकर आरोपण के लिए `--speakers` के साथ:
 
 ```bash
-python3 stt_client.py --stream meeting.wav --speakers --language ru
+python3 stt_client.py --stream meeting.wav --speakers --model turbo --language ru
 ```
 
 ### पर्यावरण चर (Environment variables)
@@ -205,7 +249,7 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | ----------------------- | ----------------------- | --------------------------------------------------- |
 | `STT_HOST`              | `0.0.0.0`               | सर्वर बाइंड पता                                      |
 | `STT_PORT`              | `5099`                  | सर्वर पोर्ट                                          |
-| `STT_POOL_SIZE`         | `8`                     | पहले से लोड किए गए Whisper इंस्टेंस की संख्या         |
+| `STT_POOL_SIZE`         | `8`                     | प्रति मॉडल इंस्टेंस; बिना `@pool` वाली `STT_MODELS` प्रविष्टि का डिफ़ॉल्ट |
 | `STT_TOKENS`            | (खाली)                  | अल्पविराम से अलग किए गए मान्य टोकन; खाली होने पर auth निष्क्रिय |
 | `STT_DEBUG`             | `false`                 | Flask डिबग मोड                                      |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | MB में अधिकतम अपलोड आकार; बड़ा बॉडी `413` लौटाता है   |
@@ -213,11 +257,13 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `GUNICORN_WORKERS`      | `4`                     | वर्कर प्रक्रियाएँ (केवल gunicorn)                     |
 | `LOG_LEVEL`             | `INFO`                  | लॉगिंग स्तर                                          |
 | `LOG_ACCESS`            | `false`                 | uvicorn एक्सेस लाइनें लॉग करें                       |
-| `WHISPER_MODEL`         | `small.en`              | Whisper मॉडल नाम (जैसे `small.en`, `turbo`)          |
-| `WHISPER_LANGUAGE`      | `en`                    | डिफ़ॉल्ट ट्रांसक्रिप्शन भाषा                          |
+| `WHISPER_MODEL`         | `small.en`              | Whisper मॉडल नाम (जैसे `small.en`, `turbo`) (जब `STT_MODELS` खाली हो) |
+| `WHISPER_LANGUAGE`      | `en`                    | हर Whisper मॉडल की डिफ़ॉल्ट भाषा |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | मॉडल कैश डायरेक्टरी (Docker में `/opt/models`)        |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda`, या `auto`                             |
-| `STT_BACKEND`           | `whisper`               | ट्रांसक्रिप्शन बैकएंड: `whisper` या `parakeet`         |
+| `STT_BACKEND`           | `whisper`               | ट्रांसक्रिप्शन बैकएंड: `whisper` या `parakeet` (जब `STT_MODELS` खाली हो) |
+| `STT_MODELS`            | (खाली)                  | एक साथ कई मॉडल: अल्पविराम से अलग `backend:model[@pool]` |
+| `STT_DEFAULT_MODEL`     | (खाली)                  | बिना `model` वाले अनुरोध का मॉडल; खाली होने पर `STT_MODELS` की पहली प्रविष्टि |
 | `PARAKEET_MODEL`        | `nvidia/parakeet-tdt-0.6b-v3` | Parakeet मॉडल id                                    |
 | `PARAKEET_DOWNLOAD_ROOT`| `models`                | Parakeet मॉडल कैश डायरेक्टरी                         |
 | `DIARIZE_ENABLED`       | `false`                 | `POST /api/diarize` सक्षम करें (`DIARIZE=true` इमेज चाहिए) |
@@ -243,14 +289,15 @@ speech-to-text/
 │   ├── errors.py        # uniform JSON error responses and Flask error handlers
 │   ├── auth.py          # optional static-token authentication
 │   ├── audio.py         # upload -> 16 kHz mono WAV conversion
-│   ├── model_pool.py    # pools of pre-loaded Whisper and diarizer instances
+│   ├── model_pool.py    # a pool per transcription model, and one for the diarizer
 │   ├── catalog.py       # what the server can do, for GET /api/models
 │   ├── align.py         # joins transcription segments to speaker turns
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
-│   ├── backends.py      # which module transcribes, per STT_BACKEND
+│   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
+│   ├── registry.py      # which models are loaded and what a request may select
 │   └── diarize.py       # speaker diarization (who spoke when, no text)
 ├── Dockerfile           # GPU build (CUDA 13.0)
 ├── Dockerfile-cpu       # CPU build

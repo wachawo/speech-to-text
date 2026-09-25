@@ -25,7 +25,7 @@
         </div>
       </div>
 
-      <!-- Mode and language: the screen's own, the same for every source. -->
+      <!-- Model, mode and language: the screen's own, the same for every source. -->
       <slot name="options" :busy="busy"></slot>
 
       <div style="margin-left: auto"></div>
@@ -64,16 +64,16 @@
    Two requests behind one button. Speakers is POST /api/transcript -
    diarization first, then transcription, joined into segments that each name a
    speaker. Text is POST /api/stt - the words alone. Both take the file as the
-   multipart field `file` and the language as the form field `language` when
-   one is chosen.
+   multipart field `file`, and the model and the language as the form fields
+   `model` and `language` when one is chosen.
 
-   The screen owns the mode and the language (they are the same for every
-   source) and hands this the values to send; the answer goes back up as a
-   `result` event, and the screen draws it. Used as:
+   The screen owns the model, the mode and the language (they are the same
+   for every source) and hands this the values to send; the answer goes back
+   up as a `result` event, and the screen draws it. Used as:
 
-     <stt-file-source :mode="mode" :language="language" :compact="!!result"
-                      @result="showResult">
-       <template #options="{ busy }">...the mode and language selects...</template>
+     <stt-file-source :model="model" :mode="mode" :language="language"
+                      :compact="!!result" @result="showResult">
+       <template #options="{ busy }">...the model, mode and language selects...</template>
      </stt-file-source>
 */
 
@@ -87,8 +87,10 @@ module.exports = {
   mixins: [SttWait],
 
   props: {
-    // What the request carries: 'speakers' or 'text', and a language code,
-    // 'auto', or '' for none. Already reconciled with what the server offers.
+    // What the request carries: a model id or '' for the server default,
+    // 'speakers' or 'text', and a language code, 'auto', or '' for none.
+    // Already reconciled with what the server offers.
+    model: { type: String, default: '' },
     mode: { type: String, default: 'text' },
     language: { type: String, default: '' },
     // A transcript is on the screen: the drop zone shrinks to one line.
@@ -222,9 +224,11 @@ module.exports = {
       if (!this.canTranscribe) return;
       var file = this.file;
       var mode = this.mode === 'speakers' ? 'speakers' : 'text';
+      var model = this.model;
       var language = this.language;
       var body = new FormData();
       body.append('file', file, file.name);
+      if (model) body.append('model', model);
       if (language) body.append('language', language);
       this.error = '';
       this.warning = '';
@@ -241,7 +245,11 @@ module.exports = {
       // it, and a header set here would drop the boundary.
       this.$http.post(mode === 'speakers' ? '/api/transcript' : '/api/stt', body)
         .then(function (resp) {
-          self.$emit('result', { mode: mode, name: file.name, language: language, data: resp.data || {} });
+          var data = resp.data || {};
+          // The model the server says transcribed, which is the default's id
+          // when none was chosen.
+          var used = typeof data.model === 'string' ? data.model : model;
+          self.$emit('result', { mode: mode, name: file.name, model: used, language: language, data: data });
         })
         .catch(function (err) { self.error = self.$apiError(err); })
         .finally(function () {

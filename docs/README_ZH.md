@@ -32,6 +32,19 @@ Whisper 提供多种模型尺寸。更大的模型更准确但更慢；更小的
 
 仅英语的变体（`tiny.en`、`base.en`、`small.en`、`medium.en`）在英语音频上略微更准确。默认值是 `turbo`，它是 GPU 上英语转录的最佳综合选择。
 
+#### 多个模型
+
+`STT_MODELS` 在启动时加载多个转录模型，每个模型都有自己的池，并让每个请求通过 `model` 从中选择一个。条目以逗号分隔，格式为 `backend:model[@pool]`：
+
+```bash
+STT_MODELS=whisper:turbo@2,whisper:small.en@1,parakeet:nvidia/parakeet-tdt-0.6b-v3@1
+STT_DEFAULT_MODEL=turbo    # 不带 `model` 的请求所用的模型；为空表示第一个条目
+```
+
+只能在启动时加载的模型中选择：请求从不会触发下载或加载，未加载的模型会以 `400` 拒绝。列表中的每个模型在服务器运行期间都会占用内存，大致为 `worker 数 x（池大小 x 模型大小）` 在整个列表上的总和，再加上说话人分离器。在 GPU 上，`turbo@2,small@1,parakeet@1` 每个进程约占 12 + 2 + 3 = 17 GB。在 gunicorn 下，每个 sync worker 一次只处理一个请求，因此请给每个条目设 `@1`，并通过 `GUNICORN_WORKERS` 扩展。没有 `@pool` 的条目使用 `STT_POOL_SIZE`，在 Docker 之外它是 8，因此请显式写出 `@N`。加载多个大模型比加载一个更慢，如果容器在启动期间被标记为 unhealthy，请调大 compose 文件中 healthcheck 的 `start_period`。
+
+`STT_MODELS` 为空时，`STT_BACKEND`、`WHISPER_MODEL` 和 `PARAKEET_MODEL` 像以前一样选择唯一的模型，服务器加载的内容与以前完全相同；响应只是多了一些字段。设置之后，这些变量不再决定加载什么。在 Docker 中，请把 `STT_MODELS` 和 `STT_DEFAULT_MODEL` 写进 `.env`，而不是 compose 的 `environment:` 块，后者会覆盖 `.env`。Parakeet 条目仍然需要用 `PARAKEET=true` 构建的镜像；遇到未知后端、同一权重被列出两次（`turbo` 和 `large-v3-turbo`）或不在列表中的 `STT_DEFAULT_MODEL` 时，服务器会拒绝启动。以文件路径给出的模型以去掉 `.pt` 的文件名对外提供，因此路径永远不会传到客户端。`STT_DEFAULT_MODEL` 可以用这个名称，也可以用与 `STT_MODELS` 中写法完全一致的路径来指定这样的条目；它的语言就是文件名所指检查点的语言：`/models/large-v3.pt` 支持的语言与 `large-v3` 相同。两个会以同一名称提供的条目（`/a/model.pt` 和 `/b/model.pt`），或会以后端名称提供的条目（`/models/parakeet.pt`），都会让服务器在启动时停止。
+
 ### 快速开始（Docker）
 
 运行服务器最简单的方式是使用 Docker。模型文件缓存在主机的 `./models` 中，因此在容器重建后仍会保留。
@@ -55,7 +68,7 @@ GPU 构建需要主机上安装 `nvidia-container-toolkit`。首次运行会将 
 | http  | `8080`   | `STT_WWW_PORT`     |
 | https | `8443`   | `STT_WWW_TLS_PORT` |
 
-打开 `http://<host>:8080`。**TRANSCRIBE** 有两种来源。**FILE** 上传一个音频文件。**DEVICE** 从音频输入实时转录：可以是麦克风或耳麦；Linux 上的 `Monitor of ...` 音源，它承载通过扬声器或耳机播放的一切声音；或者 `Tab or screen audio`，用于浏览器标签页中播放的声音，在操作系统允许的情况下也可以是整个系统的声音。无论哪种方式，结果都会显示在表单下方：要么是纯文本，要么在启用说话人分离时按语句分块显示，每块带有说话人和时间，每个说话人使用各自的颜色，两人同时说话的语句会被标记出来；实时语句会在说话人停顿约一秒后出现。结果可以复制，也可以下载为 TXT 或 JSON。**MODELS** 显示 `GET /api/models` 报告的内容。设置了 `STT_TOKENS` 时，界面只会询问一次令牌，并将其保存在浏览器中。
+打开 `http://<host>:8080`。**TRANSCRIBE** 有两种来源。**FILE** 上传一个音频文件。**DEVICE** 从音频输入实时转录：可以是麦克风或耳麦；Linux 上的 `Monitor of ...` 音源，它承载通过扬声器或耳机播放的一切声音；或者 `Tab or screen audio`，用于浏览器标签页中播放的声音，在操作系统允许的情况下也可以是整个系统的声音。无论哪种方式，结果都会显示在表单下方：要么是纯文本，要么在启用说话人分离时按语句分块显示，每块带有说话人和时间，每个说话人使用各自的颜色，两人同时说话的语句会被标记出来；实时语句会在说话人停顿约一秒后出现。结果可以复制，也可以下载为 TXT 或 JSON。加载了多个模型时（`STT_MODELS`），模式和语言旁边的模型选择框为两种来源选择模型，选项来自 `GET /api/models`，语言列表随所选模型变化。**MODELS** 显示 `GET /api/models` 报告的内容。设置了 `STT_TOKENS` 时，界面只会询问一次令牌，并将其保存在浏览器中。
 
 浏览器只会把音频设备交给安全页面，因此通过网络访问时，DEVICE 需要经由 https 监听端口使用（在 `http://localhost` 上也可以）。https 监听端口使用自签名证书，由容器在首次启动时创建于 `./data/certs`；把真正的 `stt.crt` 和 `stt.key` 放到那里即可替换它。界面没有构建步骤，也不依赖 CDN：Vue 2 及其依赖库已随项目放在 `www/vendor` 下，因此在无法访问互联网的机器上也能工作。
 
@@ -74,21 +87,41 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
   --data-binary @speech.wav
 ```
 
-`GET /api/health` 返回池状态。`available` 降为 0 意味着每个模型当前都在使用中：
+`GET /api/health` 返回池状态。顶层的 `pool_size` 和 `available` 描述默认模型，即不带 `model` 的请求所等待的模型；`available` 降为 0 意味着它的每个实例都在使用中。`models` 按 id 报告每个已加载的模型：
 
 ```json
-{ "status": "ok", "pool_size": 4, "available": 3, "diarize": false }
+{ "status": "ok", "pool_size": 2, "available": 1, "diarize": false, "default_model": "turbo",
+  "models": { "turbo": { "backend": "whisper", "pool_size": 2, "available": 1 },
+              "nvidia/parakeet-tdt-0.6b-v3": { "backend": "parakeet", "pool_size": 1, "available": 1 } } }
 ```
 
-`POST /api/stt` 接受名为 `file` 的 `multipart/form-data` 字段，或一个原始的 `audio/*` 请求体。可选的 `language`（查询字符串或表单字段）会针对该请求覆盖服务器默认值；`auto` 表示自动检测。成功时返回文本和耗费的秒数：
+设置了 `STT_TOKENS` 时，只有携带有效令牌的请求才会在响应中得到 `default_model` 和 `models`：与 `GET /api/models` 一样，它们会暴露服务器的配置。不带令牌的健康检查仍然会得到 `status`、`pool_size`、`available` 和 `diarize`。
+
+`POST /api/stt` 接受名为 `file` 的 `multipart/form-data` 字段，或一个原始的 `audio/*` 请求体。可选的 `model`（查询字符串或表单字段）从已加载的模型中选择一个：可以是它的 id、别名（`large-v3-turbo`、`parakeet-tdt-0.6b-v3`）、`backend:model` 形式，或者只写后端名称；后端名称表示默认模型（如果它属于该后端），否则表示该后端的第一个模型。不带 `model` 时由默认模型处理。可选的 `language`（查询字符串或表单字段）会为该请求覆盖服务器默认值；`auto` 表示自动检测。成功时返回文本、耗时秒数、执行转录的模型以及语言：即 Whisper 检测到或使用的代码（仅英语模型始终为 `en`），Parakeet 不报告语言，因此为 `null`。
+
+```bash
+curl -X POST 'localhost:5099/api/stt?model=turbo&language=en' -F file=@speech.mp3
+```
 
 ```json
-{ "text": "transcribed text", "elapsed": 1.23 }
+{ "text": "transcribed text", "elapsed": 1.23, "model": "turbo", "language": "en" }
 ```
 
-语言可以用代码（`ru`）或其英文名称（`russian`）给出；模型不认识的值会以 `400` 拒绝，而不是在转写中途失败。`GET /api/models` 会列出它认识的语言。 这仅适用于接受语言参数的后端（`accepts_language: true`）。Parakeet 会自行检测语言并忽略该值，而且可能在不作任何提示的情况下丢弃它不确定的语音：在多语言录音中，它可能对少数语言完全不返回任何内容。
+语言可以用代码（`ru`）或其英文名称（`russian`）给出；模型不认识的值会以 `400` 拒绝，而不是在转录中途失败。`GET /api/models` 列出每个模型认识的语言。对 `language` 的检查有多严格，取决于模型以及请求是否指定了模型：
 
-`GET /api/models` 会报告本服务器所具备的能力，因此客户端无需猜测。每个后端都带有自己的语言列表，因为这些集合确实存在差异，而一个合并后的列表对任何单独的后端来说都是错误的。
+| 模型 | 接受的 `language` | 不带 `model` 的请求 | 带 `model` 的请求 |
+| --- | --- | --- | --- |
+| 多语言 Whisper | 其列表中的代码或英文名称 | 列表之外返回 `400 Unsupported language` | 相同 |
+| 仅英语 Whisper（`.en`） | `en` 和 `auto` | 其他已知代码按英语转录 | `400 Unsupported language` |
+| Parakeet | 无，它自行检测语言 | 任何值都被接受并忽略 | 其列表中的代码，否则 `400` |
+
+Parakeet 只接受代码，不接受英文名称，而且可能在不作任何提示的情况下丢掉它没有把握的语音：在多语言混合的录音中，它可能对少数语言完全不返回任何内容。
+
+如果 Whisper 文件路径的名称与任何已知检查点都不匹配，例如放在 `/models/my-large-v3-finetune.pt` 的微调模型，它的语言列表只是根据名称推测的，因此不带 `model` 的请求会像以前一样把任何已知代码直接传给它；指定了该模型的请求仍按推测的列表检查。
+
+这两个选项的 `400` 错误是 `Invalid model`（没有任何后端认识该名称）、`Model not loaded`（真实存在但本服务器未加载的模型）、`Invalid language`（根本不是一种语言）和 `Unsupported language`（真实存在但所选模型不接受的语言）。这四种错误都在解码音频之前返回。
+
+`GET /api/models` 会报告本服务器所具备的能力，因此客户端无需猜测。每个已加载的模型都有自己的一行，没有加载任何模型的转录后端（`selectable: false`）和说话人分离器也各有一行。每一行都带有自己的语言列表，因为这些集合确实不同，合并后的列表对任何一个模型单独来看都是错误的。
 
 ```bash
 curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
@@ -97,17 +130,23 @@ curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
 ```json
 {
   "default": "whisper",
+  "default_model": "turbo",
   "models": [
-    { "backend": "whisper", "model": "turbo", "aliases": ["large-v3-turbo"], "status": "loaded",
+    { "id": "turbo", "backend": "whisper", "model": "turbo", "aliases": ["large-v3-turbo"], "status": "loaded",
+      "selectable": true, "default": true, "pool_size": 2, "available": 2,
       "multilingual": true, "accepts_language": true, "languages_source": "derived",
-      "languages": ["en", "zh", "de", "..."], "default_language": "en", "default": true },
-    { "backend": "diarize", "model": "nvidia/Nemotron-3-Diarization", "status": "installed",
-      "accepts_language": false, "languages": null, "max_speakers": 8, "default": false }
+      "languages": ["en", "zh", "de", "..."], "default_language": "en" },
+    { "id": "small.en", "backend": "whisper", "model": "small.en", "aliases": [], "status": "loaded",
+      "selectable": true, "default": false, "pool_size": 1, "available": 1,
+      "multilingual": false, "accepts_language": true, "languages": ["en"], "default_language": "en" },
+    { "id": "nvidia/Nemotron-3-Diarization", "backend": "diarize", "model": "nvidia/Nemotron-3-Diarization",
+      "status": "installed", "selectable": false, "default": false, "pool_size": 1, "available": 0,
+      "accepts_language": false, "languages": null, "max_speakers": 8 }
   ]
 }
 ```
 
-当有实例在池中等待时，`status` 为 `loaded`；当权重已在磁盘上但尚未加载任何实例时为 `installed`；其余情况为 `absent`。已配置但未安装的后端只会返回 `absent`，不作其他说明；原因记录在日志中。`accepts_language` 说明 `?language=` 对该后端是否有任何意义。说话人分离器报告的 `languages` 为 `null` 而非空列表，因为它不产生任何语言的文本。
+`id` 是请求作为 `model` 传入的值，并且恰好有一行的 `default` 为 `true`：它的 id 就是 `default_model`，它的后端就是顶层的 `default`。`pool_size` 和 `available` 描述该模型的池。当模型的实例存在（无论空闲还是忙碌）时，`status` 为 `loaded`；当权重已在磁盘上但尚未加载任何内容时为 `installed`；其他情况为 `absent`。已配置但未安装的后端只报告 `absent`，原因写入日志。`accepts_language` 表示 `?language=` 对该后端是否有意义。说话人分离器报告的语言为 `null` 而不是空列表，因为它不产生任何语言的文本。
 
 命令行客户端读取的是同一个接口：
 
@@ -128,11 +167,11 @@ curl -X POST localhost:5099/api/diarize -F file=@meeting.wav
 
 关于这些数字有两点说明。时间区间可能重叠，因为每个说话人通道都是单独评分的，所以两个人同时说话会产生覆盖相同秒数的两个区间。而这些编号只是这一次录音中的位置，按谁先开口排序：它们不是身份标识，同一个人在下一次请求中会得到不同的编号。要给说话人命名，需要一个本服务所不具备的声纹注册步骤。最多可区分八个说话人。
 
-有两种转录后端可供选择。**Whisper** 是默认后端，接受 `language` 参数。**Parakeet**（`nvidia/parakeet-tdt-0.6b-v3`）覆盖 25 种欧洲语言，它自行检测语言，因此完全不接受 `language` 参数，`GET /api/models` 会把这一点报告为 `accepts_language: false`。要选用它，需要在以 `PARAKEET=true` 构建的镜像上设置 `STT_BACKEND=parakeet`；这是部署时的选择，而不是逐请求的选择，因为多一个常驻模型就意味着每个工作进程中都要多出一套权重。
+有两种转录后端可用。**Whisper** 是默认后端，接受 `language`。**Parakeet**（`nvidia/parakeet-tdt-0.6b-v3`）支持 25 种欧洲语言，会自行检测语言，因此完全不接受 `language` 参数，`GET /api/models` 将其报告为 `accepts_language: false`。它需要用 `PARAKEET=true` 构建的镜像。可以用 `STT_BACKEND=parakeet` 为整个服务器选择它，也可以通过 `STT_MODELS` 把它与 Whisper 一起加载，并在每个请求中用 `model` 选择。请求只能在启动时加载的模型中选择，而每个已加载的模型都在每个 worker 中保留自己的权重，因此内存等于 worker 数乘以各池之和。
 
 两个后端都不支持重叠语音。NVIDIA 支持重叠语音的模型只以 NeMo checkpoint 的形式发布，而 NeMo 锁定的 PyTorch 版本与本项目的 CUDA 构建不同，因此无法在这里安装。
 
-`POST /api/transcript` 回答的是**谁说了什么**：它对同一段音频同时运行说话人分离和转录，并按时间将二者连接起来。它需要启用说话人分离，否则返回 `503`。
+`POST /api/transcript` 回答的是**谁说了什么**：它对同一段音频同时运行说话人分离和转录，并按时间将二者连接起来。它需要启用说话人分离，否则返回 `503`。它接受与 `/api/stt` 相同的 `model` 和 `language`，并在 `model` 中给出执行转录的模型。
 
 ```bash
 curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
@@ -145,7 +184,8 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
   "turns": [ { "speaker": 0, "start": 0.51, "end": 4.24 }, { "speaker": 1, "start": 4.0, "end": 9.81 } ],
   "speakers": 2,
   "text": "so where are we green since this morning",
-  "elapsed": 3.41
+  "elapsed": 3.41,
+  "model": "turbo"
 }
 ```
 
@@ -155,8 +195,8 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `/api/stream` 是一个用于**实时转录**的 WebSocket：音频边录制边送入，每个语句会在说话人停顿约一秒后返回。JSON 文本消息承载控制信息，二进制消息承载音频：
 
-1. 客户端发送 `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}`。除 `type` 外的所有字段都是可选的。`token` 是浏览器进行身份验证的方式，因为浏览器无法在 WebSocket 上设置请求头；其他客户端也可以改为在握手时发送 `Authorization: Bearer <token>`。
-2. 服务器回应 `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}`。
+1. 客户端发送 `{"type": "start", "model": "turbo", "language": "ru", "diarize": true, "token": "<token>"}`。除 `type` 外的所有字段都是可选的。`model` 与 `/api/stt` 的 `model` 一样，从已加载的模型中选择一个，语言也按该模型检查；省略时使用默认模型，语言也像以前一样只检查它是否是一种语言，因此默认模型不认识的代码会在转录某个短语时失败。`token` 是浏览器进行身份验证的方式，因为浏览器无法在 WebSocket 上设置请求头；其他客户端也可以改为在握手时发送 `Authorization: Bearer <token>`。
+2. 服务器回应 `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "model": "turbo", "language": "ru", "diarize": true, "source": "client"}`。
 3. 客户端以任意大小的二进制消息发送原始 PCM（有符号 16 位、小端序、单声道、16 kHz），完成后发送 `{"type": "stop"}`。
 4. 服务器为每个语句发送一条 `segment`，大约每秒发送一次 `progress`，并在关闭前发送 `done`：
 
@@ -189,12 +229,16 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 ```bash
 python3 stt_client.py speech.mp3
 python3 stt_client.py file1.wav file2.mp3 file3.ogg
+python3 stt_client.py --model small.en --language en speech.mp3
+python3 stt_client.py --list
 ```
+
+`--model` 和 `--language`（也可写作 `--model=NAME`）只有在给出时才会发送，否则使用服务器默认值；每一行结果都会显示服务器使用的模型和语言。`--list` 输出默认模型，并为每个模型输出一行，包括状态、请求能否选择它、它的池以及语言。
 
 `--stream` 会以正常语速把一个文件播放到 `/api/stream`，并在每个语句返回时将其打印出来；加上 `--speakers` 可标注说话人：
 
 ```bash
-python3 stt_client.py --stream meeting.wav --speakers --language ru
+python3 stt_client.py --stream meeting.wav --speakers --model turbo --language ru
 ```
 
 ### 环境变量
@@ -205,7 +249,7 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | ----------------------- | ----------------------- | -------------------------------------------------- |
 | `STT_HOST`              | `0.0.0.0`               | 服务器绑定地址                                     |
 | `STT_PORT`              | `5099`                  | 服务器端口                                         |
-| `STT_POOL_SIZE`         | `8`                     | 预加载的 Whisper 实例数量                          |
+| `STT_POOL_SIZE`         | `8`                     | 每个模型的实例数；没有 `@pool` 的 `STT_MODELS` 条目的默认值 |
 | `STT_TOKENS`            | （空）                  | 逗号分隔的有效令牌；为空则禁用鉴权                 |
 | `STT_DEBUG`             | `false`                 | Flask 调试模式                                     |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | 最大上传大小（MB）；更大的请求体返回 `413`         |
@@ -213,11 +257,13 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `GUNICORN_WORKERS`      | `4`                     | 工作进程数量（仅 gunicorn）                        |
 | `LOG_LEVEL`             | `INFO`                  | 日志级别                                           |
 | `LOG_ACCESS`            | `false`                 | 记录 uvicorn 访问日志行                            |
-| `WHISPER_MODEL`         | `small.en`              | Whisper 模型名称（例如 `small.en`、`turbo`）       |
-| `WHISPER_LANGUAGE`      | `en`                    | 默认转录语言                                       |
+| `WHISPER_MODEL`         | `small.en`              | Whisper 模型名称（例如 `small.en`、`turbo`）（`STT_MODELS` 为空时） |
+| `WHISPER_LANGUAGE`      | `en`                    | 所有 Whisper 模型的默认语言 |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | 模型缓存目录（Docker 中为 `/opt/models`）          |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`、`cuda` 或 `auto`                            |
-| `STT_BACKEND`           | `whisper`               | 转录后端：`whisper` 或 `parakeet`                  |
+| `STT_BACKEND`           | `whisper`               | 转录后端：`whisper` 或 `parakeet`（`STT_MODELS` 为空时） |
+| `STT_MODELS`            | （空）                     | 同时使用多个模型：逗号分隔的 `backend:model[@pool]` |
+| `STT_DEFAULT_MODEL`     | （空）                     | 不带 `model` 的请求所用的模型；为空表示 `STT_MODELS` 的第一个条目 |
 | `PARAKEET_MODEL`        | `nvidia/parakeet-tdt-0.6b-v3` | Parakeet 模型 id                                   |
 | `PARAKEET_DOWNLOAD_ROOT` | `models`                | Parakeet 模型缓存目录                              |
 | `DIARIZE_ENABLED`       | `false`                 | 启用 `POST /api/diarize`（需 `DIARIZE=true` 镜像） |
@@ -243,14 +289,15 @@ speech-to-text/
 │   ├── errors.py        # uniform JSON error responses and Flask error handlers
 │   ├── auth.py          # optional static-token authentication
 │   ├── audio.py         # upload -> 16 kHz mono WAV conversion
-│   ├── model_pool.py    # pools of pre-loaded Whisper and diarizer instances
+│   ├── model_pool.py    # a pool per transcription model, and one for the diarizer
 │   ├── catalog.py       # what the server can do, for GET /api/models
 │   ├── align.py         # joins transcription segments to speaker turns
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
-│   ├── backends.py      # which module transcribes, per STT_BACKEND
+│   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
+│   ├── registry.py      # which models are loaded and what a request may select
 │   └── diarize.py       # speaker diarization (who spoke when, no text)
 ├── Dockerfile           # GPU build (CUDA 13.0)
 ├── Dockerfile-cpu       # CPU build

@@ -16,6 +16,9 @@ services:
       TZ: America/New_York
       STT_HOST: "0.0.0.0"
       STT_PORT: "${STT_PORT:-5099}"
+      # One instance per model: this is also the pool of every STT_MODELS entry without @pool.
+      # STT_MODELS and STT_DEFAULT_MODEL are deliberately NOT set here: they come from .env
+      # through env_file, which this block would override.
       STT_POOL_SIZE: "1"
       STT_DEBUG: "false"
       MAX_CONTENT_LENGTH_MB: "10"

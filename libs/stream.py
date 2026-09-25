@@ -207,20 +207,24 @@ def encode_wav(samples: np.ndarray) -> io.BytesIO:
     return bio
 
 
-def transcribe_utterance(buffer: dict[str, Any], utterance: dict[str, int], language: str | None) -> list[dict[str, Any]]:
-    """Transcribe one utterance with a pooled model and return its segments in stream time.
+def transcribe_utterance(
+    buffer: dict[str, Any], utterance: dict[str, int], language: str | None, spec: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Transcribe one utterance with a pooled instance of the session's model; segments in stream time.
 
     The model is borrowed for this utterance only and returned at once: the pool is shared with
     every upload, and a session that held a model for its whole length would starve them all.
-    Raises queue.Empty when no model frees up in time.
+    `spec` is the model the start message chose (libs/registry.py), and the instance goes back
+    to that model's own pool. Raises queue.Empty when no instance frees up in time.
     """
     samples = read_samples(buffer, utterance["start"], utterance["end"])
     offset = utterance["start"] / SAMPLE_RATE
-    model = model_pool.acquire_model()
+    model = model_pool.acquire_model(model_id=spec["id"])
     try:
-        segments = backends.transcriber().get_stt_segments(encode_wav(samples), model=model, language=language)
+        transcriber = backends.transcriber_for_backend(spec["backend"])
+        segments = transcriber.get_stt_segments(encode_wav(samples), model=model, language=language)
     finally:
-        model_pool.release_model(model)
+        model_pool.release_model(model, model_id=spec["id"])
     timed = []
     for segment in segments:
         text = segment["text"].strip()

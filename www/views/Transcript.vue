@@ -67,9 +67,11 @@
 
      <stt-transcript :result="result"></stt-transcript>
 
-   where `result` is {mode, name, language, data}: `mode` 'speakers' or 'text',
-   `name` the recording's file name (the downloads are saved under it),
-   `language` what the request asked for ('' for the server default), and
+   where `result` is {mode, name, model, language, data}: `mode` 'speakers'
+   or 'text', `name` the recording's file name (the downloads are saved under
+   it), `model` the id of the model that transcribed ('' when the server did
+   not say), `language` what the request asked for ('' for the server
+   default), and
    `data` the server's JSON as sent - JSON saves exactly that.
 
    A live session adds `live: true`, `listening` (between START and STOP),
@@ -174,6 +176,7 @@ module.exports = {
     summary: function () {
       var result = this.result;
       var parts = [result.name];
+      if (result.model) parts.push(result.model);
       if (result.language) parts.push(result.language === 'auto' ? 'language detected' : result.language);
       if (result.mode === 'speakers') {
         var count = Number(result.data.speakers) || 0;

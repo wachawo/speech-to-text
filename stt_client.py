@@ -33,6 +33,12 @@ STREAM_SAMPLE_RATE = 16000
 STREAM_FRAME_SECONDS = 0.1
 
 
+def build_form_fields(model: str | None, language: str | None) -> dict[str, str]:
+    """The multipart fields to send; empty values are left out so the server default applies."""
+    fields = {"model": model, "language": language}
+    return {name: value for name, value in fields.items() if value}
+
+
 def build_headers() -> dict[str, str]:
     """Build the request headers, adding the bearer token only when one is configured."""
     if not config.STT_TOKEN:
@@ -47,34 +53,44 @@ def fetch_models() -> dict:
     return resp.json()
 
 
+def format_languages(languages: list[str] | None) -> str:
+    """One readable string for a language list, truncated after LANGUAGES_SHOWN codes."""
+    if languages is None:
+        return "-"
+    if len(languages) > LANGUAGES_SHOWN:
+        return f"{', '.join(languages[:LANGUAGES_SHOWN])} (+{len(languages) - LANGUAGES_SHOWN} more)"
+    return ", ".join(languages)
+
+
 def log_models() -> None:
-    """Print what the server carries: one line per backend, languages truncated to stay readable."""
+    """Print what the server carries: the default model, then one line per model.
+
+    An older server sends neither `id`, `selectable`, `pool_size` nor `default_model`, so every
+    field is read with a fallback rather than assumed.
+    """
     catalogue = fetch_models()
-    logger.info("Default backend: %s", catalogue.get("default", "?"))
+    logger.info("Default model: %s", catalogue.get("default_model") or catalogue.get("default", "?"))
     for row in catalogue.get("models", []):
-        languages = row.get("languages")
-        if languages is None:
-            spoken = "-"
-        elif len(languages) > LANGUAGES_SHOWN:
-            spoken = f"{', '.join(languages[:LANGUAGES_SHOWN])} (+{len(languages) - LANGUAGES_SHOWN} more)"
-        else:
-            spoken = ", ".join(languages)
         logger.info(
-            "%-9s %-34s %-9s lang=%-5s %s",
+            "%-34s %-9s %-9s sel=%-3s pool=%s/%s lang=%-3s %s",
+            row.get("id") or row.get("model", "?"),
             row.get("backend", "?"),
-            row.get("model", "?"),
             row.get("status", "?"),
+            "yes" if row.get("selectable", row.get("default")) else "no",
+            row.get("available", "?"),
+            row.get("pool_size", "?"),
             "yes" if row.get("accepts_language") else "no",
-            spoken,
+            format_languages(row.get("languages")),
         )
 
 
-def transcribe_file(filepath: str) -> dict:
+def transcribe_file(filepath: str, model: str | None = None, language: str | None = None) -> dict:
     """Post a single file to /api/stt and return the decoded JSON response."""
     with open(filepath, "rb") as audio_file:
         resp = requests.post(
             f"{config.STT_URL}/api/stt",
             files={"file": (os.path.basename(filepath), audio_file)},
+            data=build_form_fields(model, language),
             headers=build_headers(),
             timeout=REQUEST_TIMEOUT,
         )
@@ -82,8 +98,8 @@ def transcribe_file(filepath: str) -> dict:
     return resp.json()
 
 
-def transcribe_and_log(filepath: str, position: str) -> None:
-    """Transcribe one file and log the result, or the reason it failed."""
+def transcribe_and_log(filepath: str, position: str, model: str | None = None, language: str | None = None) -> None:
+    """Transcribe one file and log the result, including the model and language the server used."""
     if not os.path.isfile(filepath):
         logger.warning("%s SKIP %s - not found", position, filepath)
         return
@@ -91,7 +107,7 @@ def transcribe_and_log(filepath: str, position: str) -> None:
     size_kb = os.path.getsize(filepath) // 1024
     start_time = time.monotonic()
     try:
-        result = transcribe_file(filepath)
+        result = transcribe_file(filepath, model=model, language=language)
     except requests.HTTPError as exc:
         resp = exc.response
         logger.error("%s %s: %s %s %s", position, filepath, resp.status_code, resp.reason, resp.text)
@@ -108,10 +124,12 @@ def transcribe_and_log(filepath: str, position: str) -> None:
         return
 
     logger.info(
-        "%s %s (%dkb) -> %s (server=%.2fs total=%.2fs)",
+        "%s %s (%dkb) [%s/%s] -> %s (server=%.2fs total=%.2fs)",
         position,
         filepath,
         size_kb,
+        result.get("model", "?"),
+        result.get("language") or "-",
         result.get("text", ""),
         result.get("elapsed", 0),
         time.monotonic() - start_time,
@@ -154,16 +172,25 @@ def log_stream_event(event: dict) -> None:
         logger.error("Stream refused: %s (request %s)", event["error"], event["request_id"])
 
 
-def stream_file(filepath: str, language: str | None, speakers: bool) -> None:
+def build_start_message(language: str | None, speakers: bool, model: str | None = None) -> dict:
+    """The stream's start message; `model` goes in only when given, so the server default applies otherwise."""
+    message = {"type": "start", "language": language, "diarize": speakers}
+    if model:
+        message["model"] = model
+    return message
+
+
+def stream_file(filepath: str, language: str | None, speakers: bool, model: str | None = None) -> None:
     """Stream one file to /api/stream as if it were live and log every segment as it comes back."""
     pcm = read_stream_pcm(filepath)
     logger.info("Streaming %s (%.1fs) to %s", filepath, len(pcm) / 2 / STREAM_SAMPLE_RATE, build_stream_url())
     with connect(build_stream_url(), additional_headers=build_headers()) as websocket:
-        websocket.send(json.dumps({"type": "start", "language": language, "diarize": speakers}))
+        websocket.send(json.dumps(build_start_message(language, speakers, model)))
         ready = json.loads(websocket.recv())
         if ready["type"] != "ready":
             log_stream_event(ready)
             return
+        logger.info("Stream ready - model %s (%s)", ready.get("model") or "-", ready.get("backend") or "-")
         sender = threading.Thread(target=send_stream_audio, args=(websocket, pcm), daemon=True)
         sender.start()
         for message in websocket:
@@ -173,14 +200,21 @@ def stream_file(filepath: str, language: str | None, speakers: bool) -> None:
                 break
 
 
-def main():
-    """Entry point: transcribe every file given on the command line, list the models, or stream one file."""
+def build_parser() -> argparse.ArgumentParser:
+    """The command line: files to upload, or --list, or --stream with its options."""
     parser = argparse.ArgumentParser(description="Client for stt_server (STT_URL, STT_TOKEN from the environment).")
     parser.add_argument("files", nargs="*", help="audio files to transcribe with POST /api/stt")
     parser.add_argument("--list", action="store_true", help="list the models and languages the server carries")
     parser.add_argument("--stream", metavar="FILE", help="stream one file over /api/stream in real time")
     parser.add_argument("--speakers", action="store_true", help="with --stream: attribute each segment to a speaker")
-    parser.add_argument("--language", help="with --stream: a language code, or auto")
+    parser.add_argument("--model", help="a model the server loaded: an id, an alias, backend:model or a backend name")
+    parser.add_argument("--language", help="a language code, an English name, or auto")
+    return parser
+
+
+def main():
+    """Entry point: transcribe every file given on the command line, list the models, or stream one file."""
+    parser = build_parser()
     args = parser.parse_args()
 
     if not (args.files or args.list or args.stream):
@@ -192,14 +226,14 @@ def main():
             if args.list:
                 log_models()
             else:
-                stream_file(args.stream, args.language, args.speakers)
+                stream_file(args.stream, args.language, args.speakers, args.model)
         except Exception as exc:
             logger.error("%s: %s\n%s", type(exc).__name__, exc, traceback.format_exc())
             sys.exit(1)
         return
 
     for index, filepath in enumerate(args.files, 1):
-        transcribe_and_log(filepath, f"[{index}/{len(args.files)}]")
+        transcribe_and_log(filepath, f"[{index}/{len(args.files)}]", model=args.model, language=args.language)
 
 
 if __name__ == "__main__":

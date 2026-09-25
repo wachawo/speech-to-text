@@ -17,7 +17,7 @@
     <stt-alerts :wait="wait" :error.sync="error" :warning.sync="warning"
                 :info.sync="info" :success.sync="success"></stt-alerts>
 
-    <!-- One row per backend GET /api/models reports, as it reports it. No
+    <!-- One row per model GET /api/models reports, as it reports it. No
          row tint: the STATUS word carries the state, and on a server with
          one backend loaded out of three, painting the rest would turn most of
          the table one colour. -->
@@ -39,7 +39,7 @@
               <td class="td-ellipsis">Backend</td>
               <td class="td-ellipsis">Model</td>
               <td class="td-ellipsis">Status</td>
-              <td class="td-ellipsis" title="The backend this server transcribes with">Default</td>
+              <td class="td-ellipsis" title="The model a request that names none is transcribed with">Default</td>
               <td class="td-ellipsis" title="Whether a request's language means anything to this backend">Accepts language</td>
               <td class="td-ellipsis">Languages</td>
               <td class="td-ellipsis">Max speakers</td>
@@ -49,7 +49,7 @@
             <!-- A row with a language list opens it; a row without one (the
                  diarizer produces no text) opens nothing and does not look as
                  if it would. -->
-            <tr v-for="row in rows" :key="row.backend"
+            <tr v-for="row in rows" :key="row.id || row.backend"
                 :class="{ 'cursor-pointer': hasLanguages(row) }"
                 :title="hasLanguages(row) ? 'Show the ' + row.languages.length + ' languages' : null"
                 @click="openLanguages(row)">
@@ -101,14 +101,16 @@
 </template>
 
 <script>
-/* What the server carries: GET /api/models, one row per backend - the
-   transcription backends with their own language lists, and the diarizer.
-   Read-only - a backend is installed at image build time and chosen in the
-   server's environment, neither of which belongs behind a button here. */
+/* What the server carries: GET /api/models, one row per loaded model and per
+   transcription backend with nothing loaded, each with its own language list,
+   and the diarizer. Read-only - a backend is installed at image build time and
+   its models chosen in the server's environment, neither of which belongs
+   behind a button here; which loaded model transcribes is chosen per request
+   on the transcribe screen. */
 
 var STATUS_TITLES = {
   loaded: 'In memory and answering requests',
-  installed: 'On disk but not loaded - the server environment decides which backend runs',
+  installed: 'On disk but not loaded - the server environment decides which models are loaded',
   absent: 'Not installed in this image',
 };
 

@@ -51,11 +51,14 @@ def on_starting(server):
 def post_fork(server, worker):
     """Initialize the model pools in each worker after fork.
 
-    A file lock serializes workers so only one downloads the model at a time;
-    the rest load from the cached .pt file on disk.
+    A file lock serializes workers so only one downloads the models at a time;
+    the rest load from the cache on disk. Every model in STT_MODELS loads under
+    the same lock, so a first run downloads each of them exactly once.
 
-    With sync workers each process handles one request at a time, so
-    STT_POOL_SIZE=1 per worker is enough.
+    With sync workers each process handles one request at a time, so one
+    instance per model per worker (STT_POOL_SIZE=1, or @1 on every STT_MODELS
+    entry) is enough; concurrency comes from GUNICORN_WORKERS, and every extra
+    instance only costs memory in every worker.
     """
     # Prevent torch from spawning extra threads - one worker = one inference at a time.
     os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -67,7 +70,12 @@ def post_fork(server, worker):
 
     with open(MODEL_INIT_LOCK_PATH, "w") as lock_file:
         fcntl.flock(lock_file, fcntl.LOCK_EX)
-        logger.info("Worker %s (pid %s): lock acquired, loading model(s)...", worker.age, worker.pid)
+        logger.info(
+            "Worker %s (pid %s): lock acquired, loading %d model(s)...",
+            worker.age,
+            worker.pid,
+            len(stt_config.STT_MODELS) or 1,
+        )
         # Imported here, not at module scope: torch must never be loaded in the master.
         from libs.model_pool import init_diarizer_pool, init_model_pool
 

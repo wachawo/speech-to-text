@@ -19,7 +19,7 @@
         </div>
       </div>
 
-      <!-- Mode and language: the screen's own, the same for every source. -->
+      <!-- Model, mode and language: the screen's own, the same for every source. -->
       <slot name="options" :busy="active || !usable"></slot>
 
       <div style="margin-left: auto"></div>
@@ -69,8 +69,9 @@
 
    The session, in order:
    1. START opens the input (the browser may ask first).
-   2. A websocket to /api/stream; the first message is `start`, with the mode
-      and language the screen hands down and the stored token, if any.
+   2. A websocket to /api/stream; the first message is `start`, with the
+      model, mode and language the screen hands down and the stored token, if
+      any.
    3. On `ready` - never before it - the capture starts and each 100 ms frame
       goes out as one binary message.
    4. `segment` messages append to the transcript as they arrive; `progress`
@@ -124,8 +125,10 @@ module.exports = {
   mixins: [SttWait],
 
   props: {
-    // What the session asks for: 'speakers' or 'text', and a language code,
-    // 'auto', or '' for none. Already reconciled with what the server offers.
+    // What the session asks for: a model id or '' for the server default,
+    // 'speakers' or 'text', and a language code, 'auto', or '' for none.
+    // Already reconciled with what the server offers.
+    model: { type: String, default: '' },
     mode: { type: String, default: 'text' },
     language: { type: String, default: '' },
     // Passed to every source; there is no drop zone here to shrink.
@@ -365,9 +368,10 @@ module.exports = {
 
     /* A browser cannot set headers on a websocket, so the token rides in the
        first message. Absent fields are left out rather than sent empty: an
-       omitted language is the server's default. */
+       omitted model or language is the server's default. */
     startMessage: function () {
       var message = { type: 'start', diarize: this.mode === 'speakers' };
+      if (this.model) message.model = this.model;
       if (this.language) message.language = this.language;
       var token = this.$store.state.auth.token;
       if (token) message.token = token;
@@ -405,6 +409,8 @@ module.exports = {
         mode: message.diarize ? 'speakers' : 'text',
         name: (track && track.label) || this.selectedLabel,
         stem: 'live-' + fileStamp(),
+        // The model `ready` names: the chosen one, or the server's default.
+        model: typeof message.model === 'string' ? message.model : this.model,
         language: this.language,
         live: true,
         listening: true,

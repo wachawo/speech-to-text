@@ -6,8 +6,7 @@ import io
 import queue
 import re
 
-from libs import model_pool
-from tests.helpers import make_wav
+from tests.helpers import get_default_pool, make_wav
 
 REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
@@ -19,7 +18,7 @@ def assert_error_shape(body):
 
 
 def raise_runtime_error(bio, model=None, device=None, language=None):
-    """Stand in for stt.get_stt_bio() and fail, to exercise the 500 path."""
+    """Stand in for stt.get_stt_result() and fail, to exercise the 500 path."""
     raise RuntimeError("transcription exploded")
 
 
@@ -74,7 +73,7 @@ def test_pool_exhausted(client, monkeypatch):
         """Stand in for Queue.get() and report the pool as exhausted."""
         raise queue.Empty
 
-    monkeypatch.setattr(model_pool.MODEL_POOL, "get", raise_queue_empty)
+    monkeypatch.setattr(get_default_pool(), "get", raise_queue_empty)
 
     wav = make_wav(duration_ms=50)
     resp = client.post(
@@ -90,7 +89,7 @@ def test_pool_exhausted(client, monkeypatch):
 
 def test_transcription_failure_no_leak(client, monkeypatch, stt_module):
     """A backend failure returns a generic 500 without leaking the exception."""
-    monkeypatch.setattr(stt_module, "get_stt_bio", raise_runtime_error)
+    monkeypatch.setattr(stt_module, "get_stt_result", raise_runtime_error)
 
     wav = make_wav(duration_ms=50)
     resp = client.post(
@@ -108,7 +107,7 @@ def test_transcription_failure_no_leak(client, monkeypatch, stt_module):
 
 def test_model_returned_to_pool_after_failure(client, monkeypatch, stt_module):
     """A failing transcription still returns its model, so the pool cannot drain."""
-    monkeypatch.setattr(stt_module, "get_stt_bio", raise_runtime_error)
+    monkeypatch.setattr(stt_module, "get_stt_result", raise_runtime_error)
 
     wav = make_wav(duration_ms=50)
     client.post(
@@ -116,4 +115,4 @@ def test_model_returned_to_pool_after_failure(client, monkeypatch, stt_module):
         data={"file": (io.BytesIO(wav), "sample.wav")},
         content_type="multipart/form-data",
     )
-    assert model_pool.MODEL_POOL.qsize() == 1
+    assert get_default_pool().qsize() == 1

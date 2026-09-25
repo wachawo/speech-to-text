@@ -37,7 +37,11 @@ services:
       # pinning it would silently ignore the value in .env, which is where every document says
       # to put it. It is a runtime switch; DIARIZE above is the build arg. Turning it on for an
       # image built without the backend answers 503 and logs why, rather than failing to start.
-      # STT_BACKEND selects the transcriber; parakeet needs a PARAKEET=true image.
+      # STT_BACKEND selects the transcriber when STT_MODELS is empty; parakeet needs a
+      # PARAKEET=true image. STT_MODELS and STT_DEFAULT_MODEL, which load several models side
+      # by side, are deliberately NOT set here: they come from .env through env_file, which this
+      # block would override. An STT_MODELS entry without @pool gets STT_POOL_SIZE, pinned to 1
+      # above; several large models also take longer to load than the healthcheck start_period.
       STT_BACKEND: "${STT_BACKEND:-whisper}"
       PARAKEET_DOWNLOAD_ROOT: "/opt/models"
       DIARIZE_POOL_SIZE: "1"

@@ -5,21 +5,24 @@
 import io
 import re
 
-from tests.helpers import make_wav
+import pytest
+
+from libs import config, model_pool
+from tests.helpers import make_model_sentinel, make_wav
 
 REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
 
 def capture_language(stt_module, monkeypatch) -> dict:
-    """Swap get_stt_bio for a stub that records the language it was called with."""
+    """Swap get_stt_result for a stub that records the language it was called with."""
     seen = {}
 
     def record_language(bio, model=None, device=None, language=None):
-        """Stand in for stt.get_stt_bio() and remember the language argument."""
+        """Stand in for stt.get_stt_result() and remember the language argument."""
         seen["language"] = language
-        return "stub transcription"
+        return {"text": "stub transcription", "language": language}
 
-    monkeypatch.setattr(stt_module, "get_stt_bio", record_language)
+    monkeypatch.setattr(stt_module, "get_stt_result", record_language)
     return seen
 
 
@@ -105,3 +108,123 @@ def test_a_typo_is_still_refused(client):
     resp = client.post("/api/stt?language=russsian", data=make_wav(), content_type="audio/wav")
     assert resp.status_code == 400
     assert resp.get_json()["error"] == "Invalid language"
+
+
+def post_language(client, query):
+    """POST a short WAV to /api/stt with the given query string."""
+    return client.post(f"/api/stt?{query}", data=make_wav(), content_type="audio/wav")
+
+
+def use_legacy_model(monkeypatch, backend, model_id):
+    """Switch the single-model deployment to another backend or checkpoint, with a pool to match."""
+    monkeypatch.setattr(config, "STT_BACKEND", backend)
+    monkeypatch.setattr(config, "WHISPER_MODEL" if backend == "whisper" else "PARAKEET_MODEL", model_id)
+    pool = model_pool.get_model_pool(model_id)
+    pool.put(make_model_sentinel(model_id))
+
+
+def test_an_explicit_english_only_model_refuses_another_language(multi_client):
+    """A client that chose tiny.en is told `ru` is not something that model does."""
+    resp = post_language(multi_client, "model=tiny.en&language=ru")
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Unsupported language"
+
+
+@pytest.mark.parametrize("language", ["en", "auto"])
+def test_an_explicit_english_only_model_takes_english_and_auto(multi_client, language):
+    """English, and autodetect, are fine on an English-only model."""
+    assert post_language(multi_client, f"model=tiny.en&language={language}").status_code == 200
+
+
+def test_a_name_is_resolved_for_an_explicit_model(multi_client, stt_module, monkeypatch):
+    """`russian` still reaches the backend as `ru` when the model is named."""
+    seen = capture_language(stt_module, monkeypatch)
+    assert post_language(multi_client, "model=small.en-stub&language=russian").status_code == 200
+    assert seen["language"] == "ru"
+
+
+def test_garbage_is_invalid_for_an_explicit_model(multi_client):
+    """A value that is no language at all is `Invalid language`, not `Unsupported language`."""
+    resp = post_language(multi_client, "model=small.en-stub&language=zz")
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Invalid language"
+
+
+def test_a_known_language_outside_the_models_slice_is_a_400(client):
+    """`de` is a real code the default stub model does not know: a 400 now, where it used to be a 500."""
+    resp = post_language(client, "language=de")
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Unsupported language"
+
+
+def test_an_english_only_default_keeps_accepting_other_codes(client, stt_module, monkeypatch):
+    """Without `model`, an English-only checkpoint is handed `ru` as before, and the response says `en`."""
+    use_legacy_model(monkeypatch, "whisper", "tiny.en")
+    seen = {}
+    original = stt_module.get_stt_result
+
+    def record_language(bio, model=None, device=None, language=None):
+        """Stand in for stt.get_stt_result(), remembering the language before answering like the stub."""
+        seen["language"] = language
+        return original(bio, model=model, device=device, language=language)
+
+    monkeypatch.setattr(stt_module, "get_stt_result", record_language)
+    resp = post_language(client, "language=ru")
+    assert resp.status_code == 200
+    assert seen["language"] == "ru"
+    assert resp.get_json()["language"] == "en"
+
+
+def test_an_explicit_parakeet_takes_a_listed_code(multi_client):
+    """A code from Parakeet's own list is accepted as a hint; the model reports no language."""
+    resp = post_language(multi_client, "model=parakeet&language=ru")
+    assert resp.status_code == 200
+    assert resp.get_json()["language"] is None
+
+
+def test_an_explicit_parakeet_refuses_an_unlisted_code(multi_client):
+    """A client that chose Parakeet read its list, so a code outside it is a mistake worth a 400."""
+    resp = post_language(multi_client, "model=parakeet&language=de")
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Unsupported language"
+
+
+def test_a_parakeet_default_still_ignores_any_value(client, monkeypatch):
+    """Without `model`, Parakeet accepts and ignores even garbage, exactly as it always did."""
+    use_legacy_model(monkeypatch, "parakeet", "nvidia/parakeet-tdt-0.6b-v3")
+    resp = post_language(client, "language=zz")
+    assert resp.status_code == 200
+    assert resp.get_json()["model"] == "nvidia/parakeet-tdt-0.6b-v3"
+
+
+def test_a_legacy_path_model_accepts_what_its_checkpoint_knows(client, stt_module, monkeypatch):
+    """WHISPER_MODEL=/models/turbo.pt is judged as turbo: `de` passes, as it did before model selection."""
+    monkeypatch.setattr(config, "WHISPER_MODEL", "/models/turbo.pt")
+    monkeypatch.setattr(model_pool, "MODEL_POOLS", {})
+    model_pool.get_model_pool("turbo").put(make_model_sentinel("turbo"))
+    seen = capture_language(stt_module, monkeypatch)
+    resp = client.post("/api/stt?language=de", data=make_wav(), content_type="audio/wav")
+    assert resp.status_code == 200
+    assert seen["language"] == "de"
+    assert resp.get_json()["model"] == "turbo"
+
+
+def test_a_path_model_of_no_known_checkpoint_passes_the_code_on(client, stt_module, monkeypatch):
+    """WHISPER_MODEL=/models/my-large-v3-finetune.pt matches no checkpoint name: `de` reaches it, as before."""
+    monkeypatch.setattr(config, "WHISPER_MODEL", "/models/my-large-v3-finetune.pt")
+    monkeypatch.setattr(model_pool, "MODEL_POOLS", {})
+    model_pool.get_model_pool("my-large-v3-finetune").put(make_model_sentinel("my-large-v3-finetune"))
+    seen = capture_language(stt_module, monkeypatch)
+    resp = client.post("/api/stt?language=de", data=make_wav(), content_type="audio/wav")
+    assert resp.status_code == 200
+    assert seen["language"] == "de"
+
+
+def test_an_explicit_english_only_path_model_refuses_another_language(client, monkeypatch):
+    """`whisper:/opt/tiny.en.pt` is served as tiny.en and knows English only, like the named checkpoint."""
+    monkeypatch.setattr(config, "STT_MODELS", config.parse_model_list("whisper:/opt/tiny.en.pt@1"))
+    monkeypatch.setattr(model_pool, "MODEL_POOLS", {})
+    model_pool.get_model_pool("tiny.en").put(make_model_sentinel("tiny.en"))
+    resp = post_language(client, "model=tiny.en&language=ru")
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Unsupported language"

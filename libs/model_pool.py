@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Pools of pre-loaded models - neither Whisper nor the diarizer is thread-safe, so requests borrow one."""
+"""Pools of pre-loaded models - no transcriber and no diarizer is thread-safe, so requests borrow one."""
 
 import logging
 import queue
@@ -9,7 +9,7 @@ import traceback
 from typing import Any
 
 # Local imports
-from libs import backends, config, diarize
+from libs import backends, config, diarize, registry
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,13 @@ MODEL_ACQUIRE_TIMEOUT = 120
 # including the healthcheck.
 DIARIZER_ACQUIRE_TIMEOUT = 30
 
-MODEL_POOL: queue.Queue = queue.Queue()
+# One queue per transcription model, keyed by its canonical id. A request names the model it
+# wants and borrows from that model's queue only, so an instance always goes back where it came
+# from and no caller has to check what kind of model it was handed.
+MODEL_POOLS: dict[str, queue.Queue] = {}
+# How many instances of each model were created. A model whose every instance is busy has an
+# empty queue and is still loaded, which is what this counter lets the catalogue tell apart.
+MODELS_LOADED: dict[str, int] = {}
 DIARIZER_POOL: queue.Queue = queue.Queue()
 
 # How many diarizers actually loaded. Zero with diarization switched on means loading failed,
@@ -30,26 +36,33 @@ DIARIZER_POOL: queue.Queue = queue.Queue()
 DIARIZERS_LOADED = 0
 
 
-def init_model_pool(size: int | None = None) -> None:
-    """Pre-load Whisper instances into the pool. Called once per process at startup.
+def init_model_pool() -> None:
+    """Validate the model list, then pre-load every model's instances into its own queue.
 
-    The size is read at call time rather than bound as a default argument, so a test or a
-    caller that changes `config.MODEL_POOL_SIZE` is actually obeyed.
+    Called once per process at startup. Each model loads exactly its spec's pool_size, the
+    number health, the catalogue and the startup log report. A model that fails to load raises:
+    a transcription service that cannot load a configured model must not report itself healthy.
+    Sizes are read at call time, so a test or a caller that changes `config.MODEL_POOL_SIZE` is
+    actually obeyed.
     """
-    size = config.MODEL_POOL_SIZE if size is None else size
-    transcriber = backends.transcriber()
-    logger.info("Initializing %d %s model instances...", size, backends.transcriber_name())
-    for number in range(1, size + 1):
-        start_time = time.monotonic()
-        MODEL_POOL.put(transcriber.get_model())
-        logger.info("Model #%d ready (%.2fs)", number, time.monotonic() - start_time)
-    logger.info("Model pool ready: %d instances", MODEL_POOL.qsize())
+    registry.validate_model_specs()
+    for spec in registry.get_model_specs():
+        count = spec["pool_size"]
+        transcriber = backends.transcriber_for_backend(spec["backend"])
+        pool = get_model_pool(spec["id"])
+        logger.info("Initializing %d %s model instances of %s...", count, spec["backend"], spec["id"])
+        for number in range(1, count + 1):
+            start_time = time.monotonic()
+            pool.put(transcriber.get_model(model_name=spec["model"]))
+            MODELS_LOADED[spec["id"]] = MODELS_LOADED.get(spec["id"], 0) + 1
+            logger.info("Model %s #%d ready (%.2fs)", spec["id"], number, time.monotonic() - start_time)
+    logger.info("Model pools ready: %s", registry.describe_model_specs())
 
 
 def init_diarizer_pool(size: int | None = None) -> None:
     """Pre-load diarizer instances into their own pool, or do nothing when diarization is off.
 
-    A separate queue rather than a second kind of entry in MODEL_POOL: that queue hands out
+    A separate queue rather than a second kind of entry in MODEL_POOLS: a queue hands out
     whatever is at its head and has no notion of kind, so mixing the two would make every
     caller check what it got.
     """
@@ -83,14 +96,35 @@ def init_diarizer_pool(size: int | None = None) -> None:
     logger.info("Diarizer pool ready: %d instances", DIARIZER_POOL.qsize())
 
 
-def acquire_model(timeout: int = MODEL_ACQUIRE_TIMEOUT) -> Any:
-    """Take a Whisper model out of the pool; raises queue.Empty when none frees up in time."""
-    return MODEL_POOL.get(timeout=timeout)
+def get_model_pool(model_id: str | None = None) -> queue.Queue:
+    """The queue of one model; None means the default model."""
+    model_id = registry.get_default_model_id() if model_id is None else model_id
+    return MODEL_POOLS.setdefault(model_id, queue.Queue())
 
 
-def release_model(model: Any) -> None:
-    """Return a Whisper model to the pool so the next request can use it."""
-    MODEL_POOL.put(model)
+def acquire_model(timeout: int = MODEL_ACQUIRE_TIMEOUT, model_id: str | None = None) -> Any:
+    """Take an instance of the given (or default) model; raises queue.Empty when none frees up in time."""
+    return get_model_pool(model_id).get(timeout=timeout)
+
+
+def release_model(model: Any, model_id: str | None = None) -> None:
+    """Return an instance to the pool of the model it came from."""
+    get_model_pool(model_id).put(model)
+
+
+def count_available(model_id: str) -> int:
+    """How many instances of a model are idle right now; zero for a model with no pool."""
+    pool = MODEL_POOLS.get(model_id)
+    return pool.qsize() if pool is not None else 0
+
+
+def is_model_loaded(model_id: str) -> bool:
+    """Whether instances of this model exist, busy or idle: MODELS_LOADED > 0 or a non-empty queue.
+
+    The queue alone is not enough: a model whose every instance is in flight has an empty queue,
+    and reporting it as merely installed would be wrong exactly when it is busiest.
+    """
+    return MODELS_LOADED.get(model_id, 0) > 0 or count_available(model_id) > 0
 
 
 def diarizer_ready() -> bool:
@@ -112,13 +146,26 @@ def release_diarizer(diarizer: Any) -> None:
     DIARIZER_POOL.put(diarizer)
 
 
-def get_pool_status() -> dict[str, Any]:
-    """Report both pools: the configured sizes and how many instances are currently free."""
+def get_pool_status(detailed: bool = True) -> dict[str, Any]:
+    """Report the default model's pool at the top level, the diarizer, and with `detailed` every model.
+
+    The top-level `pool_size` and `available` describe the default model, because that is the
+    pool a request without `model` waits on; with STT_MODELS empty they are what they always were.
+    `default_model` and `models` name what this server loaded, which is configuration: the open
+    /api/health only adds them for a caller that /api/models would also serve.
+    """
+    default_spec = registry.get_default_spec()
     status: dict[str, Any] = {
-        "pool_size": config.MODEL_POOL_SIZE,
-        "available": MODEL_POOL.qsize(),
+        "pool_size": default_spec["pool_size"],
+        "available": count_available(default_spec["id"]),
         "diarize": config.DIARIZE_ENABLED,
     }
+    if detailed:
+        status["default_model"] = default_spec["id"]
+        status["models"] = {
+            spec["id"]: {"backend": spec["backend"], "pool_size": spec["pool_size"], "available": count_available(spec["id"])}
+            for spec in registry.get_model_specs()
+        }
     if config.DIARIZE_ENABLED:
         status["diarize_pool_size"] = config.DIARIZE_POOL_SIZE
         status["diarize_available"] = DIARIZER_POOL.qsize()

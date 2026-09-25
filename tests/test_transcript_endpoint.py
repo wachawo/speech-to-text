@@ -7,7 +7,7 @@ import queue
 import re
 
 from libs import model_pool
-from tests.helpers import make_wav
+from tests.helpers import get_default_pool, make_wav
 
 REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
@@ -71,14 +71,14 @@ def test_unknown_language_refused_before_any_model_is_borrowed(diarize_client):
     resp = diarize_client.post("/api/transcript?language=zz", data=make_wav(), content_type="audio/wav")
     assert resp.status_code == 400
     assert resp.get_json()["error"] == "Invalid language"
-    assert model_pool.MODEL_POOL.qsize() == 1
+    assert get_default_pool().qsize() == 1
     assert model_pool.DIARIZER_POOL.qsize() == 1
 
 
 def test_both_instances_are_returned_to_their_pools(diarize_client):
     """A served request leaves both pools exactly as it found them."""
     post_audio(diarize_client)
-    assert model_pool.MODEL_POOL.qsize() == 1
+    assert get_default_pool().qsize() == 1
     assert model_pool.DIARIZER_POOL.qsize() == 1
 
 
@@ -95,7 +95,7 @@ def test_a_transcription_failure_still_returns_the_diarizer(diarize_client, monk
     assert resp.status_code == 500
     assert resp.get_json()["error"] == "Transcription failed"
     assert "transcription exploded" not in resp.get_data(as_text=True)
-    assert model_pool.MODEL_POOL.qsize() == 1
+    assert get_default_pool().qsize() == 1
     assert model_pool.DIARIZER_POOL.qsize() == 1
 
 
@@ -111,4 +111,4 @@ def test_diarizer_pool_exhausted(diarize_client, monkeypatch):
     resp = post_audio(diarize_client)
     assert resp.status_code == 503
     assert resp.get_json()["error"] == "Service Unavailable"
-    assert model_pool.MODEL_POOL.qsize() == 1
+    assert get_default_pool().qsize() == 1

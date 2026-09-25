@@ -53,12 +53,15 @@ def resolve_device(device: str | None = None) -> str:
     return device
 
 
-def get_model(device: str | None = None) -> whisper.Whisper:
-    """Load one Whisper model instance onto the resolved device, downloading it if needed."""
+def get_model(device: str | None = None, model_name: str | None = None) -> whisper.Whisper:
+    """Load one Whisper model instance onto the resolved device, downloading it if needed.
+
+    `model_name` None means WHISPER_MODEL, the single-model deployment's checkpoint.
+    """
     device = resolve_device(device)
     os.makedirs(config.WHISPER_DOWNLOAD_ROOT, exist_ok=True)
     return whisper.load_model(
-        config.WHISPER_MODEL,
+        config.WHISPER_MODEL if model_name is None else model_name,
         device=device,
         download_root=config.WHISPER_DOWNLOAD_ROOT,
     )
@@ -95,10 +98,15 @@ def read_waveform(bio: io.BytesIO) -> np.ndarray:
 
 
 def resolve_languages(model_name: str) -> list[str]:
-    """The language codes a Whisper checkpoint accepts, without loading it."""
-    if model_name.endswith(".en"):
+    """The language codes a Whisper checkpoint accepts, without loading it.
+
+    A file path is judged by its name: `/models/large-v3.pt` knows 100 codes, `/models/tiny.en.pt` one.
+    The name is lower-cased because a path keeps its case: `/models/Tiny.EN.pt` is tiny.en too.
+    """
+    name = config.build_model_name(model_name).lower()
+    if name.endswith(".en"):
         return ["en"]
-    return list(LANGUAGES)[: 100 if model_name in LANGUAGES_100 else 99]
+    return list(LANGUAGES)[: 100 if name in LANGUAGES_100 else 99]
 
 
 def normalize_language_code(language: str) -> str | None:
@@ -128,17 +136,28 @@ def is_installed(model_name: str | None = None) -> bool:
     return os.path.isfile(os.path.join(config.WHISPER_DOWNLOAD_ROOT, filename))
 
 
-def describe_backend() -> dict:
-    """Describe this backend for GET /api/models, loading nothing."""
-    model_name = config.WHISPER_MODEL
+def list_aliases(model_name: str) -> list[str]:
+    """Other names whisper downloads the same checkpoint under (`turbo` and `large-v3-turbo`)."""
     url = whisper._MODELS.get(model_name)
-    aliases = sorted(name for name, other in whisper._MODELS.items() if name != model_name and other == url) if url else []
+    if not url:
+        return []
+    return sorted(name for name, other in whisper._MODELS.items() if name != model_name and other == url)
+
+
+def list_known_models() -> list[str]:
+    """Every checkpoint name whisper can download, aliases included, whether loaded or not."""
+    return sorted(whisper._MODELS)
+
+
+def describe_backend(model_name: str | None = None) -> dict:
+    """Describe one Whisper checkpoint for GET /api/models, loading nothing; None means WHISPER_MODEL."""
+    model_name = config.WHISPER_MODEL if model_name is None else model_name
     return {
         "backend": "whisper",
         "model": model_name,
-        "aliases": aliases,
+        "aliases": list_aliases(model_name),
         "status": "installed" if is_installed(model_name) else "absent",
-        "multilingual": not model_name.endswith(".en"),
+        "multilingual": not config.build_model_name(model_name).lower().endswith(".en"),
         "accepts_language": True,
         "languages_source": "derived",
         "languages": resolve_languages(model_name),
@@ -146,18 +165,21 @@ def describe_backend() -> dict:
     }
 
 
-def get_stt_bio(
+def get_stt_result(
     bio: io.BytesIO,
     model: whisper.Whisper | None = None,
     device: str | None = None,
     language: str | None = None,
-) -> str:
-    """Transcribe a WAV buffer and return the text.
+) -> dict:
+    """Transcribe a WAV buffer and return `{"text", "language"}`.
 
     A 16 kHz mono buffer (what the server always sends) skips the resampling
     step. Without an explicit `model` one is loaded on the spot, which is slow -
     the server passes an instance borrowed from the pool. Decoding is seeded and
     greedy so the same audio always produces the same text.
+
+    `language` is the code whisper detected or was told. An English-only checkpoint always
+    decodes English, even when it was handed another code, so it honestly reports `en`.
     """
     if model is None:
         model = get_model(device=device)
@@ -174,8 +196,19 @@ def get_stt_bio(
         condition_on_previous_text=False,
     )
     text = result["text"].strip()
-    logger.debug("Transcribed %d chars", len(text))
-    return text
+    detected = result.get("language") if model.is_multilingual else "en"
+    logger.debug("Transcribed %d chars (language %s)", len(text), detected)
+    return {"text": text, "language": detected}
+
+
+def get_stt_bio(
+    bio: io.BytesIO,
+    model: whisper.Whisper | None = None,
+    device: str | None = None,
+    language: str | None = None,
+) -> str:
+    """Transcribe a WAV buffer and return the text alone; see get_stt_result."""
+    return get_stt_result(bio, model=model, device=device, language=language)["text"]
 
 
 def get_stt_segments(
@@ -186,7 +219,7 @@ def get_stt_segments(
 ) -> list[dict]:
     """Transcribe a WAV buffer and return its segments with their times.
 
-    The same unmodified decode as get_stt_bio, keeping `result["segments"]` instead of
+    The same unmodified decode as get_stt_result, keeping `result["segments"]` instead of
     discarding it. Deliberately NOT `word_timestamps=True`: that flag rewrites `seek` from the
     end of the last word and clears segments of zero duration, whose tokens then never reach
     the text, so it can change the transcription the rest of this module fixes on purpose.
