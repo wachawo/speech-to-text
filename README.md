@@ -14,6 +14,7 @@ The project fits local use, batch transcription, and running your own STT server
 * **Safe under concurrency.** The server keeps a pool of pre-loaded Whisper instances, so several requests are transcribed in parallel without reloading the model.
 * **CPU or GPU, same code.** The backend is selected by environment and which Docker image you build. A CUDA card speeds inference up, but everything also runs on CPU.
 * **A CLI client is included.** `stt_client.py` posts local files to the server and prints the result.
+* **Live transcription.** Stream audio over a websocket and get each phrase back as it is spoken, attributed to a speaker when diarization is on.
 * **A web UI is included.** Upload a file in the browser and read the text, or who said what, served by its own nginx container beside the server.
 
 ### Models
@@ -179,6 +180,23 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `overlap` marks a phrase during which somebody else was also talking. NVIDIA is explicit that pairing a conventional single-speaker model with diarization is not equivalent to a model built for overlapping speech: an extracted time range still contains every voice that overlaps it, so those phrases may merge or select the wrong speaker's words. Treat a segment marked `overlap` as a place the transcript is least trustworthy.
 
+`/api/stream` is a websocket for **live transcription**: audio goes in as it is recorded, and each phrase comes back about a second after the speaker pauses. JSON text messages carry control, binary messages carry audio:
+
+1. The client sends `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}`. Every field but `type` is optional. `token` is how a browser authenticates, since it cannot set headers on a websocket; other clients may send `Authorization: Bearer <token>` on the handshake instead.
+2. The server answers `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true}`.
+3. The client sends raw PCM - signed 16-bit little-endian, mono, 16 kHz - as binary messages of any size, and `{"type": "stop"}` when it is done.
+4. The server sends a `segment` for every phrase, `progress` about once a second, and `done` before it closes:
+
+```json
+{ "type": "segment", "id": 3, "start": 6.88, "end": 8.2, "text": "This is the second speaker.", "speaker": 1, "overlap": false }
+{ "type": "progress", "seconds": 12.3 }
+{ "type": "done", "segments": 10, "seconds": 21.87, "elapsed": 22.08 }
+```
+
+A failure is one `{"type": "error", "error": "<category>", "request_id": "..."}` followed by a close, with the HTTP error categories plus `Invalid start message` and `Invalid audio frame`.
+
+A phrase ends at a pause of 0.6 s, or at its quietest moment once it runs past 15 s, and is transcribed on its own with a model borrowed from the same pool as the uploads, so a busy pool delays live phrases rather than failing them. With `diarize`, the diarizer runs in its streaming mode and carries a speaker cache from chunk to chunk, so a speaker keeps the same number for the whole session. The socket exists only when the server runs under uvicorn (`python3 stt_server.py`, the Docker default): the Flask debug server and gunicorn's sync workers do not speak websocket.
+
 Uploads are capped at `MAX_CONTENT_LENGTH_MB` (10 MB by default); a larger body returns `413`.
 
 Errors are uniform: `error` carries a generic category and `request_id` correlates the response with the server log, where the full exception is recorded.
@@ -196,6 +214,12 @@ When `STT_TOKENS` is set, every route except `GET /api/health` must carry `Autho
 ```bash
 python3 stt_client.py speech.mp3
 python3 stt_client.py file1.wav file2.mp3 file3.ogg
+```
+
+`--stream` plays one file into `/api/stream` at the speed of speech and prints each phrase as it comes back, with `--speakers` for speaker attribution:
+
+```bash
+python3 stt_client.py --stream meeting.wav --speakers --language ru
 ```
 
 ### Environment variables
@@ -247,6 +271,8 @@ speech-to-text/
 │   ├── model_pool.py    # pools of pre-loaded Whisper and diarizer instances
 │   ├── catalog.py       # what the server can do, for GET /api/models
 │   ├── align.py         # joins transcription segments to speaker turns
+│   ├── live.py          # the /api/stream websocket: protocol and sessions
+│   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND

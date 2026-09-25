@@ -3,6 +3,13 @@
 ### [Unreleased]
 
 #### Added
+- **Live transcription over a websocket, `/api/stream`.** The client sends raw 16 kHz PCM and
+  gets each phrase back as soon as the speaker pauses - a median of 0.9 s after the end of the
+  phrase on the deployment GPU. With `diarize` the diarizer runs in its streaming mode and
+  keeps a speaker cache for the whole session, so speaker numbers hold for as long as it runs.
+  Every phrase borrows a model from the same pool as the uploads and gives it back, so a live
+  session delays under load instead of starving the uploads. `stt_client.py --stream` plays a
+  file into it in real time.
 - **A web UI.** `stt_www`, an nginx container beside the server, serves a Vue 2 UI with no
   build step and passes `/api/` through, so the browser and the API share one address.
   TRANSCRIBE uploads a file and shows plain text or, with diarization on, who said what with
