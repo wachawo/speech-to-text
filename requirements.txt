@@ -34,3 +34,4 @@ soundfile>=0.12.1
 # Utilities
 python-dotenv>=1.2.3
 requests>=2.34.2
+websockets>=13.0

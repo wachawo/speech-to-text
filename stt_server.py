@@ -15,15 +15,12 @@ from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Local imports
-from libs import align, audio, backends, catalog, config, diarize, logs, model_pool
+from libs import align, audio, backends, catalog, config, diarize, live, logs, model_pool
 from libs.auth import token_required
 from libs.errors import build_error_response, get_request_id, register_error_handlers
 
 logs.setup_logging()
 logger = logging.getLogger(__name__)
-
-# The value that asks the backend to detect the language rather than be told it.
-AUTODETECT = "auto"
 
 # Path whose access log is demoted to DEBUG so healthchecks do not flood the log.
 QUIET_PATH = "/api/health"
@@ -91,23 +88,6 @@ def read_language_argument() -> str | None:
     return language.strip().lower() or None
 
 
-def resolve_language(language: str) -> str | None:
-    """Resolve a requested language against what the backend actually knows.
-
-    Returns the code to pass on, or None when the backend knows no such language, which the
-    caller turns into a 400. A shape check cannot do this job in either direction: `zz` looks
-    like a code and is not one, and `russian` is not a code but is a spelling Whisper accepts.
-    """
-    if language == AUTODETECT:
-        return AUTODETECT
-    transcriber = backends.transcriber()
-    # A backend that detects the language itself has no table to check against and no argument
-    # to honour, so the value is accepted and ignored rather than refused on a foreign table.
-    if not hasattr(transcriber, "normalize_language_code"):
-        return language
-    return transcriber.normalize_language_code(language)
-
-
 def convert_upload(bio):
     """Turn an uploaded buffer into a 16 kHz mono WAV, or None when it is not decodable audio.
 
@@ -173,7 +153,7 @@ def transcribe():
 
     language = read_language_argument()
     if language is not None:
-        language = resolve_language(language)
+        language = backends.resolve_language(language)
         if language is None:
             return build_error_response("Invalid language", 400)
 
@@ -337,7 +317,7 @@ def transcribe_by_speaker():
 
     language = read_language_argument()
     if language is not None:
-        language = resolve_language(language)
+        language = backends.resolve_language(language)
         if language is None:
             return build_error_response("Invalid language", 400)
 
@@ -399,18 +379,46 @@ def log_auth_mode() -> None:
         logger.info("Auth: disabled (STT_TOKENS empty)")
 
 
+def build_asgi_app(wsgi_app):
+    """One ASGI app for uvicorn: the live stream socket, and everything else into Flask.
+
+    Dispatched on the path rather than mounted: Starlette-style mounting strips the prefix, and
+    Flask would then see `/health` for `/api/health` and answer its own 404. Here every public URL
+    stays exactly what it was.
+    """
+    from uvicorn.middleware.wsgi import WSGIMiddleware
+
+    http_app = WSGIMiddleware(wsgi_app)
+
+    async def asgi_app(scope, receive, send):
+        """Route one ASGI connection by its type and path."""
+        if scope["type"] == "websocket":
+            if scope["path"] == live.STREAM_PATH:
+                await live.handle_stream(scope, receive, send)
+            else:
+                # Closing before accepting is how ASGI refuses a handshake: the client sees a 403.
+                await send({"type": "websocket.close", "code": live.CLOSE_POLICY})
+            return
+        await http_app(scope, receive, send)
+
+    return asgi_app
+
+
 def run_server() -> None:
-    """Serve the app: the Flask dev server in debug mode, uvicorn otherwise."""
+    """Serve the app: the Flask dev server in debug mode, uvicorn otherwise.
+
+    The live stream exists only under uvicorn: neither the Flask dev server nor Gunicorn's sync
+    workers speak websocket.
+    """
     if config.STT_DEBUG:
         app.run(host=config.STT_HOST, port=config.STT_PORT, debug=True)
         return
 
     import uvicorn
-    from uvicorn.middleware.wsgi import WSGIMiddleware
 
     wsgi_app = cast(Any, app.wsgi_app)
     uvicorn.run(
-        WSGIMiddleware(wsgi_app),
+        build_asgi_app(wsgi_app),
         host=config.STT_HOST,
         port=config.STT_PORT,
         log_level=config.LOG_LEVEL.lower(),
