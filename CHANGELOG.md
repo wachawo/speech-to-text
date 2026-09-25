@@ -3,6 +3,13 @@
 ### [Unreleased]
 
 #### Added
+- **Live transcription in the web UI, and from a URL.** TRANSCRIBE gets a FILE / DEVICE
+  switch: DEVICE captures a microphone, a headset, a loopback source or a browser tab's sound
+  and shows each phrase as a block as soon as it is transcribed. Browsers allow audio devices
+  only on a secure page, so over the network this works through the https listener.
+  `/api/stream` also takes `"source": "url"`: the server reads internet radio, HLS, RTMP, RTSP
+  or SRT itself through ffmpeg, which is held to network protocols so a URL or a playlist
+  cannot make it read a local file.
 - **Live transcription over a websocket, `/api/stream`.** The client sends raw 16 kHz PCM and
   gets each phrase back as soon as the speaker pauses - a median of 0.9 s after the end of the
   phrase on the deployment GPU. With `diarize` the diarizer runs in its streaming mode and

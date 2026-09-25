@@ -299,10 +299,14 @@ applyTheme(startingTheme);
    An empty string means "not chosen": for the mode, the screen picks Speakers
    when the server can diarize and Text when it cannot; for the language, it is
    the server's own default, so a browser that never chose follows the
-   deployment rather than a value baked into this file. */
+   deployment rather than a value baked into this file; for the source, FILE;
+   for the device, the browser's default input.
+
+   A group is written whole, so a screen saving one field starts from the
+   stored group and changes only its own - see $savePrefs. */
 const PREFS_PREFIX = 'stt.';
 const PREFS = {
-  transcribe: { mode: '', language: '' },
+  transcribe: { mode: '', language: '', source: '', device: '' },
 };
 
 const validatePrefs = function (name, value) {
@@ -498,13 +502,16 @@ Vue.prototype.$saveTheme = function (next) {
 
 /* Write one preference group: to storage and to the store, as a new object.
 
-   The value goes through the same validation as a stored one, so a caller
-   cannot put a field in the store that a reload would not bring back. Answers
-   false when the browser refused to keep it; the choice holds until the tab
-   is reloaded either way. */
+   `value` holds only the fields being changed; the rest of the group is kept
+   as it is in the store, so two screens (or two sources on one screen) that
+   each remember their own field cannot reset each other's. The result goes
+   through the same validation as a stored one, so a caller cannot put a field
+   in the store that a reload would not bring back. Answers false when the
+   browser refused to keep it; the choice holds until the tab is reloaded
+   either way. */
 Vue.prototype.$savePrefs = function (name, value) {
   if (!PREFS[name]) return false;
-  var clean = validatePrefs(name, value);
+  var clean = validatePrefs(name, Object.assign({}, store.state[name], value));
   var box = browserStorage();
   var kept = false;
   if (box) {
@@ -615,19 +622,25 @@ axios.interceptors.request.use(function (config) {
   return config;
 });
 
-/* A 401 from any request means the token is gone or wrong, so it is forgotten
-   and the operator is sent to sign in with the destination kept. A request
-   marked `probe` is excluded: its caller reads the 401 itself - the guard as
-   "sign in first", the sign-in screen as "wrong token". The mark is an axios
-   config field rather than a header, so it never leaves the browser. */
+/* The token was refused: forget it and send the operator to sign in, with the
+   screen they were on kept for afterwards. One place for every way a refusal
+   arrives - an HTTP 401 below, or an `Unauthorized` error on the live
+   websocket, which has no status code to intercept. */
+const signInAgain = function () {
+  Vue.prototype.$saveToken('');
+  if (router.currentRoute.name !== 'login') goto(loginRoute(router.currentRoute));
+};
+Vue.prototype.$signInAgain = signInAgain;
+
+/* A 401 from any request means the token is gone or wrong. A request marked
+   `probe` is excluded: its caller reads the 401 itself - the guard as "sign
+   in first", the sign-in screen as "wrong token". The mark is an axios config
+   field rather than a header, so it never leaves the browser. */
 axios.interceptors.response.use(
   function (resp) { return resp; },
   function (err) {
     var probe = err && err.config && err.config.probe;
-    if (unauthorized(err) && !probe) {
-      Vue.prototype.$saveToken('');
-      if (router.currentRoute.name !== 'login') goto(loginRoute(router.currentRoute));
-    }
+    if (unauthorized(err) && !probe) signInAgain();
     return Promise.reject(err);
   }
 );

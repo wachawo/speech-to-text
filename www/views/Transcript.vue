@@ -35,15 +35,25 @@
         </div>
         <div class="stt-block-text">{{ segment.text || '-' }}</div>
       </div>
-      <div v-if="segments.length === 0" class="stt-block">
+      <div v-if="segments.length === 0 && !result.listening" class="stt-block">
         <div class="stt-block-text text-secondary">No speech recognised</div>
       </div>
     </template>
 
-    <!-- The words alone: one block, no speakers to tell apart. -->
-    <div v-else class="stt-block">
-      <div class="stt-block-text" v-if="result.data.text">{{ result.data.text }}</div>
+    <!-- The words alone: one block, no speakers to tell apart. A live
+         session without speakers still arrives phrase by phrase, so its
+         phrases are joined into the one block as they come. -->
+    <div v-else-if="plainText || !result.listening" class="stt-block">
+      <div class="stt-block-text" v-if="plainText">{{ plainText }}</div>
       <div class="stt-block-text text-secondary" v-else>No speech recognised</div>
+    </div>
+
+    <!-- A live session between phrases. Nothing arrives while someone is
+         talking - a phrase comes back after they pause - so this is what says
+         the capture is working. -->
+    <div v-if="result.listening" class="stt-listening">
+      <i class="fa fa-ear-listen" aria-hidden="true"></i>
+      Listening - each phrase appears about a second after the speaker pauses
     </div>
   </div>
 </template>
@@ -61,6 +71,12 @@
    `name` the recording's file name (the downloads are saved under it),
    `language` what the request asked for ('' for the server default), and
    `data` the server's JSON as sent - JSON saves exactly that.
+
+   A live session adds `live: true`, `listening` (between START and STOP),
+   `seconds` (audio the server has received), `stem` (the name its downloads
+   are saved under - a device label is no file name) and `messages` (every
+   message the server sent but `progress`, which is what JSON saves), and its
+   segments grow while it is on the screen.
 */
 
 /* Speaker labels are positions, and the name says so. */
@@ -105,6 +121,20 @@ module.exports = {
     return { overlapNote: OVERLAP_NOTE };
   },
 
+  watch: {
+    /* A phrase arrived in a live session. The page follows it only if the
+       reader was already at the bottom: someone who has scrolled up to read
+       an earlier phrase must not be pulled away from it by the next one. The
+       check runs here, before the new block is drawn - afterwards the page is
+       taller and nobody is at the bottom any more. */
+    segmentCount: function () {
+      if (!this.result.live || !this.atBottom()) return;
+      this.$nextTick(function () {
+        window.scrollTo(0, document.documentElement.scrollHeight);
+      });
+    },
+  },
+
   created: function () {
     // Kept off `data`: nothing renders from it.
     this.downloadUrl = '';
@@ -115,6 +145,17 @@ module.exports = {
   },
 
   computed: {
+    segmentCount: function () {
+      return this.segments.length;
+    },
+
+    /* The text of a Text result: the server's `text` for a file, the phrases
+       so far for a live session, which sends no text of its own. */
+    plainText: function () {
+      if (!this.result.live) return this.result.data.text || '';
+      return this.segments.map(function (segment) { return segment.text || ''; }).join(' ').trim();
+    },
+
     segments: function () {
       var data = this.result.data;
       return (data && Array.isArray(data.segments)) ? data.segments : [];
@@ -123,11 +164,13 @@ module.exports = {
     /* The file name the downloads are saved under: the recording's own,
        without its extension. */
     fileStem: function () {
+      if (this.result.stem) return this.result.stem;
       var name = this.result.name || '';
       return name.replace(/\.[^.]*$/, '') || 'transcript';
     },
 
-    /* "dialog.wav - ru - 2 speakers - transcribed in 0.9 s" */
+    /* "dialog.wav - ru - 2 speakers - transcribed in 0.9 s", or for a live
+       session "<device> - ru - 2 speakers - 21.9 s of audio". */
     summary: function () {
       var result = this.result;
       var parts = [result.name];
@@ -136,7 +179,8 @@ module.exports = {
         var count = Number(result.data.speakers) || 0;
         parts.push(count + (count === 1 ? ' speaker' : ' speakers'));
       }
-      parts.push('transcribed in ' + this.$fmtSeconds(result.data.elapsed));
+      if (result.live) parts.push(this.$fmtSeconds(result.seconds) + ' of audio');
+      else parts.push('transcribed in ' + this.$fmtSeconds(result.data.elapsed));
       return parts.join(' - ');
     },
 
@@ -145,7 +189,7 @@ module.exports = {
        has to survive into every copy of a transcript, not only the screen. */
     transcriptText: function () {
       var self = this;
-      if (this.result.mode !== 'speakers') return (this.result.data.text || '') + '\n';
+      if (this.result.mode !== 'speakers') return this.plainText + '\n';
       return this.segments.map(function (segment) {
         var label = self.speakerLabel(segment);
         if (segment.overlap) label += (label ? ' ' : '') + '(overlap)';
@@ -155,6 +199,12 @@ module.exports = {
   },
 
   methods: {
+    /* Whether the page is scrolled to its end, give or take a line. */
+    atBottom: function () {
+      var page = document.documentElement;
+      return window.innerHeight + window.scrollY >= page.scrollHeight - 48;
+    },
+
     fmtRange: function (segment) {
       return this.$fmtStamp(segment.start) + ' - ' + this.$fmtStamp(segment.end);
     },
@@ -212,8 +262,10 @@ module.exports = {
       this.saveFile(this.fileStem + '.txt', this.transcriptText, 'text/plain;charset=utf-8');
     },
 
+    /* What the server said, as it said it: the answer to the upload, or
+       every message of a live session but the progress ticks. */
     downloadJson: function () {
-      var json = JSON.stringify(this.result.data, null, 2) + '\n';
+      var json = JSON.stringify(this.result.messages || this.result.data, null, 2) + '\n';
       this.saveFile(this.fileStem + '.json', json, 'application/json;charset=utf-8');
     },
 

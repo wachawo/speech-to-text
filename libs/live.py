@@ -7,6 +7,9 @@ little-endian, mono, 16 kHz) as binary messages, then `{"type": "stop"}`. The se
 `ready`, then a `segment` for every phrase as soon as it is transcribed, `progress` about once a
 second, and `done` before it closes. Any failure is one `error` message and a close.
 
+With `"source": "url"` in the start message the client sends no audio: the server reads the
+stream at that address itself, through ffmpeg, until it ends or the client says stop.
+
 This is plain ASGI, not Flask: a WSGI app cannot hold a socket open. Blocking model calls go to
 a worker thread so the event loop keeps receiving audio while a phrase is being transcribed.
 """
@@ -20,6 +23,7 @@ import traceback
 import uuid
 from collections import deque
 from typing import Any
+from urllib.parse import urlsplit
 
 import numpy as np
 
@@ -36,6 +40,18 @@ START_TIMEOUT = 10
 # How often `progress` reports the audio received, in seconds of audio.
 PROGRESS_SECONDS = 1.0
 
+# What a URL source may be. Network media protocols only: ffmpeg also reads local files and a
+# dozen pseudo-protocols (file:, concat:, data:, pipe:), and a playlist fetched over http can
+# point at any of them, so the scheme is checked here and ffmpeg is held to a whitelist below.
+URL_SCHEMES = ("http", "https", "rtmp", "rtmps", "rtsp", "srt")
+FFMPEG_PROTOCOLS = "http,https,tls,tcp,udp,rtp,rtmp,rtmps,rtsp,srt,hls,crypto,httpproxy"
+
+# How long ffmpeg may wait on a silent connection before giving up, in microseconds.
+FFMPEG_RW_TIMEOUT = 15_000_000
+
+# Bytes read from ffmpeg at a time: 100 ms of 16 kHz mono 16-bit audio.
+FFMPEG_READ_BYTES = 3200
+
 # Close codes (RFC 6455): normal, policy violation (auth), unsupported data (a malformed
 # message), try again later (a busy pool) and internal error.
 CLOSE_NORMAL = 1000
@@ -49,6 +65,7 @@ CLOSE_CODES = {
     "Invalid start message": CLOSE_UNSUPPORTED,
     "Invalid language": CLOSE_UNSUPPORTED,
     "Invalid audio frame": CLOSE_UNSUPPORTED,
+    "Invalid stream URL": CLOSE_UNSUPPORTED,
     "Diarization disabled": CLOSE_TRY_LATER,
     "Diarization unavailable": CLOSE_TRY_LATER,
     "Service Unavailable": CLOSE_TRY_LATER,
@@ -91,12 +108,27 @@ def check_start(scope: dict[str, Any], start: Any) -> tuple[str | None, dict[str
         if language is None:
             return "Invalid language", {}
 
+    source = start.get("source") or "client"
+    url = start.get("url")
+    if source not in ("client", "url"):
+        return "Invalid start message", {}
+    if source == "url" and not is_allowed_url(url):
+        return "Invalid stream URL", {}
+
     speakers = bool(start.get("diarize"))
     if speakers and not config.DIARIZE_ENABLED:
         return "Diarization disabled", {}
     if speakers and not model_pool.diarizer_ready():
         return "Diarization unavailable", {}
-    return None, {"language": language, "diarize": speakers}
+    return None, {"language": language, "diarize": speakers, "source": source, "url": url}
+
+
+def is_allowed_url(url: Any) -> bool:
+    """Whether a URL source is a network address in one of the schemes ffmpeg is allowed to read."""
+    if not isinstance(url, str):
+        return False
+    parts = urlsplit(url.strip())
+    return parts.scheme.lower() in URL_SCHEMES and bool(parts.hostname)
 
 
 def new_session(options: dict[str, Any], request_id: str) -> dict[str, Any]:
@@ -104,6 +136,7 @@ def new_session(options: dict[str, Any], request_id: str) -> dict[str, Any]:
     return {
         "request_id": request_id,
         "language": options["language"],
+        "url": options["url"] if options["source"] == "url" else None,
         "buffer": stream.new_buffer(),
         "segmenter": stream.new_segmenter(),
         "diarization": stream.new_diarization() if options["diarize"] else None,
@@ -167,6 +200,101 @@ async def read_client_audio(session: dict[str, Any], receive, send_event) -> str
             continue
         if isinstance(control, dict) and control.get("type") == "stop":
             return "stop"
+
+
+async def start_ffmpeg(url: str):
+    """Start ffmpeg decoding the URL into the stream protocol's PCM on its stdout.
+
+    `-re` reads at the source's own pace: a finite file behind the URL then behaves like a
+    broadcast instead of arriving all at once, and a live source is unaffected.
+    """
+    return await asyncio.create_subprocess_exec(
+        "ffmpeg",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-protocol_whitelist",
+        FFMPEG_PROTOCOLS,
+        "-rw_timeout",
+        str(FFMPEG_RW_TIMEOUT),
+        "-re",
+        "-i",
+        url,
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        str(stream.SAMPLE_RATE),
+        "-f",
+        "s16le",
+        "pipe:1",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+
+async def pump_ffmpeg(session: dict[str, Any], process, send_event) -> str:
+    """Move ffmpeg's output into the session until it ends. Returns "stop", or an error on failure."""
+    assert process.stdout is not None and process.stderr is not None
+    carry = b""
+    while True:
+        data = await process.stdout.read(FFMPEG_READ_BYTES)
+        if not data:
+            break
+        data = carry + data
+        # A read can end mid-sample; the odd byte waits for the next one.
+        whole = len(data) - len(data) % stream.SAMPLE_WIDTH
+        carry = data[whole:]
+        stream.append_samples(session["buffer"], np.frombuffer(data[:whole], dtype="<i2"))
+        queue_utterances(session)
+        await report_progress(session, send_event)
+    returncode = await process.wait()
+    if returncode == 0:
+        return "stop"
+    detail = (await process.stderr.read()).decode("utf-8", "replace").strip()
+    logger.warning("[%s] Stream source ended (ffmpeg exit %s): %s", session["request_id"], returncode, detail[-500:])
+    # A source that never produced a sample failed; one that broke off after an hour of audio
+    # still has phrases in flight, and those are finished rather than thrown away.
+    return "Stream source failed" if session["buffer"]["total"] == 0 else "stop"
+
+
+async def watch_control(receive) -> str:
+    """With a URL source the socket carries only control: returns "stop" or "disconnect"."""
+    while True:
+        message = await receive()
+        if message["type"] == "websocket.disconnect":
+            return "disconnect"
+        try:
+            control = json.loads(message.get("text") or "")
+        except ValueError:
+            continue
+        if isinstance(control, dict) and control.get("type") == "stop":
+            return "stop"
+
+
+async def read_url_audio(session: dict[str, Any], url: str, receive, send_event) -> str:
+    """Take audio from a URL until it ends, the client says stop, or the client goes away.
+
+    Returns "stop", "disconnect" or an error category. ffmpeg never outlives the session.
+    """
+    logger.info("[%s] Stream source: %s", session["request_id"], url)
+    process = await start_ffmpeg(url)
+    pump = asyncio.create_task(pump_ffmpeg(session, process, send_event))
+    control = asyncio.create_task(watch_control(receive))
+    try:
+        await asyncio.wait({pump, control}, return_when=asyncio.FIRST_COMPLETED)
+        if pump.done():
+            return pump.result()
+        return control.result()
+    finally:
+        for task in (pump, control):
+            if not task.done():
+                await stop_task(task)
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
 
 
 def find_keep_from(session: dict[str, Any]) -> int:
@@ -280,7 +408,10 @@ async def stop_task(task: asyncio.Task) -> None:
 async def run_session(session: dict[str, Any], receive, send, send_event) -> None:
     """Read audio and transcribe it concurrently until the stream ends, fails or is dropped."""
     request_id = session["request_id"]
-    reader = asyncio.create_task(read_client_audio(session, receive, send_event))
+    if session["url"]:
+        reader = asyncio.create_task(read_url_audio(session, session["url"], receive, send_event))
+    else:
+        reader = asyncio.create_task(read_client_audio(session, receive, send_event))
     worker = asyncio.create_task(run_worker(session, send_event))
     try:
         await asyncio.wait({reader, worker}, return_when=asyncio.FIRST_COMPLETED)
@@ -342,8 +473,9 @@ async def handle_stream(scope: dict[str, Any], receive, send) -> None:
 
     session = new_session(options, request_id)
     logger.info(
-        "[%s] Stream started - backend %s, language %s, diarize %s",
+        "[%s] Stream started - source %s, backend %s, language %s, diarize %s",
         request_id,
+        options["source"],
         backends.transcriber_name(),
         options["language"] or "default",
         "on" if options["diarize"] else "off",
@@ -355,6 +487,7 @@ async def handle_stream(scope: dict[str, Any], receive, send) -> None:
             "backend": backends.transcriber_name(),
             "language": options["language"],
             "diarize": options["diarize"],
+            "source": options["source"],
         }
     )
     try:

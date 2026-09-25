@@ -82,9 +82,9 @@ then rebuild with `docker compose up -d --build`. The two failures differ on pur
 | http     | `8080`       | `STT_WWW_PORT`     |
 | https    | `8443`       | `STT_WWW_TLS_PORT` |
 
-Open `http://<host>:8080`. **TRANSCRIBE** takes an audio file and shows the result under the form as plain text or, with diarization enabled, as one block per phrase with its speaker and time, each speaker in its own colour and the phrases where two people talked at once marked; the result can be copied or downloaded as TXT or JSON. **MODELS** shows what `GET /api/models` reports. When `STT_TOKENS` is set, the UI asks for a token once and keeps it in the browser.
+Open `http://<host>:8080`. **TRANSCRIBE** has two sources. **FILE** uploads an audio file. **DEVICE** transcribes live from an audio input: a microphone or a headset, a `Monitor of ...` source on Linux that carries whatever plays through the speakers or headphones, or `Tab or screen audio` for what plays in a browser tab, or in the whole system where the OS allows it. Either way the result appears under the form as plain text or, with diarization enabled, as one block per phrase with its speaker and time, each speaker in its own colour and the phrases where two people talked at once marked; a live phrase appears about a second after the speaker pauses. The result can be copied or downloaded as TXT or JSON. **MODELS** shows what `GET /api/models` reports. When `STT_TOKENS` is set, the UI asks for a token once and keeps it in the browser.
 
-The https listener uses a self-signed certificate that the container creates in `./data/certs` on its first start; put a real `stt.crt` and `stt.key` there to replace it. The UI has no build step and no CDN: Vue 2 and its libraries are vendored under `www/vendor`, so it works on a machine with no route to the internet.
+Browsers hand audio devices only to a secure page, so over the network DEVICE works through the https listener (and on `http://localhost`). The https listener uses a self-signed certificate that the container creates in `./data/certs` on its first start; put a real `stt.crt` and `stt.key` there to replace it. The UI has no build step and no CDN: Vue 2 and its libraries are vendored under `www/vendor`, so it works on a machine with no route to the internet.
 
 ### HTTP API
 
@@ -183,7 +183,7 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 `/api/stream` is a websocket for **live transcription**: audio goes in as it is recorded, and each phrase comes back about a second after the speaker pauses. JSON text messages carry control, binary messages carry audio:
 
 1. The client sends `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}`. Every field but `type` is optional. `token` is how a browser authenticates, since it cannot set headers on a websocket; other clients may send `Authorization: Bearer <token>` on the handshake instead.
-2. The server answers `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true}`.
+2. The server answers `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}`.
 3. The client sends raw PCM - signed 16-bit little-endian, mono, 16 kHz - as binary messages of any size, and `{"type": "stop"}` when it is done.
 4. The server sends a `segment` for every phrase, `progress` about once a second, and `done` before it closes:
 
@@ -193,7 +193,9 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 { "type": "done", "segments": 10, "seconds": 21.87, "elapsed": 22.08 }
 ```
 
-A failure is one `{"type": "error", "error": "<category>", "request_id": "..."}` followed by a close, with the HTTP error categories plus `Invalid start message` and `Invalid audio frame`.
+The audio can also come from somewhere else. With `"source": "url", "url": "https://..."` in the start message the client sends no audio at all: the server reads the stream at that address through ffmpeg, at the source's own pace, until it ends or the client sends `stop`. Internet radio, HLS, RTMP, RTSP and SRT work; the scheme must be `http`, `https`, `rtmp`, `rtmps`, `rtsp` or `srt`, and ffmpeg is held to network protocols only, so a URL or a playlist cannot make it read a local file. It still makes the server fetch an address a client chose, including addresses on its own network: set `STT_TOKENS` on any server others can reach.
+
+A failure is one `{"type": "error", "error": "<category>", "request_id": "..."}` followed by a close, with the HTTP error categories plus `Invalid start message`, `Invalid audio frame`, `Invalid stream URL` and `Stream source failed`.
 
 A phrase ends at a pause of 0.6 s, or at its quietest moment once it runs past 15 s, and is transcribed on its own with a model borrowed from the same pool as the uploads, so a busy pool delays live phrases rather than failing them. With `diarize`, the diarizer runs in its streaming mode and carries a speaker cache from chunk to chunk, so a speaker keeps the same number for the whole session. The socket exists only when the server runs under uvicorn (`python3 stt_server.py`, the Docker default): the Flask debug server and gunicorn's sync workers do not speak websocket.
 

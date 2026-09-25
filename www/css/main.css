@@ -635,7 +635,8 @@ select option:checked {
    vertically. `!important` because the Bootstrap utility it overrides carries
    one, and one rule rather than an edit in every template because a screen
    added tomorrow gets it for nothing. */
-.stt-page > .m-1 { margin-left: 0 !important; margin-right: 0 !important; }
+.stt-page > .m-1,
+.stt-source > .m-1 { margin-left: 0 !important; margin-right: 0 !important; }
 
 /* Cards */
 .stt-card {
@@ -831,6 +832,56 @@ table thead { text-transform: uppercase; font-weight: 700; }
 
 /* The transcribe screen. */
 
+/* FILE / DEVICE, under the header's tabs. Bootstrap sizes .nav-link off 1rem
+   with .5rem of padding, which makes the strip half again as tall as
+   everything else on the page. Bold only on the open one, as in the header.
+   No underline on hover either: the global link rule would add one, and a tab
+   is not a link in a sentence.
+
+   The colours are Bootstrap's own variables pointed at the palette, the way
+   the dark half points --bs-body-bg at the card: left alone, the closed tab is
+   Bootstrap's link blue beside this app's primary blue, and the open one is
+   pure black beside every other word on the page. The open tab takes the
+   card's surface, so it reads as the front of the form under it. */
+.stt-subtabs {
+  margin-bottom: 4px;
+  --bs-nav-link-color: var(--stt-primary);
+  --bs-nav-link-hover-color: var(--stt-primary-dark);
+  --bs-nav-tabs-border-color: var(--stt-border);
+  --bs-nav-tabs-link-hover-border-color: var(--stt-border) var(--stt-border) var(--stt-border);
+  --bs-nav-tabs-link-active-color: var(--stt-text-strong);
+  --bs-nav-tabs-link-active-bg: var(--stt-card);
+  --bs-nav-tabs-link-active-border-color: var(--stt-border) var(--stt-border) var(--stt-card);
+}
+.stt-subtabs .nav-link { padding: 3px 12px; font-size: 12px; }
+.stt-subtabs .nav-link:hover { text-decoration: none; }
+.stt-subtabs .nav-link.active { font-weight: 700; }
+
+/* The live input's level: a thin bar, not a number. The track is the field
+   border colour so the empty bar is still visible on both halves; the fill is
+   the success green, the colour of "this is working". */
+.stt-meter {
+  display: inline-block;
+  width: 80px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--stt-field-border);
+  overflow: hidden;
+}
+.stt-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--stt-success);
+  transition: width .08s linear;
+}
+/* Tabular figures, so the clock does not jitter as the digits change. */
+.stt-clock { font-variant-numeric: tabular-nums; min-width: 32px; text-align: right; }
+
+/* One line under a source's form, where the file source has its drop zone:
+   why the device form is off. */
+.stt-note { margin: 0 0 8px; color: var(--stt-text); overflow-wrap: anywhere; }
+.stt-note i { color: var(--stt-primary); margin-right: 4px; }
+
 /* The drop zone under the form. The whole window takes a dropped file
    (Transcribe.vue listens on it), so this is the visible half of that: a
    target a file can be aimed at without finding the paperclip, and the place
@@ -910,6 +961,19 @@ table thead { text-transform: uppercase; font-weight: 700; }
    italic. Any colour here would be one of the eight speakers' or close to it,
    and a marker that reads as a ninth speaker is worse than no marker. */
 .stt-block-overlap { color: var(--stt-text); font-style: italic; }
+
+/* A live session between phrases: one quiet line under the blocks, the ear
+   pulsing slowly so it reads as a state rather than a message. Still for
+   anyone who has asked for less motion. */
+.stt-listening { color: var(--stt-text); padding: 4px 2px; }
+.stt-listening i { color: var(--stt-primary); margin-right: 4px; animation: stt-pulse 1.6s ease-in-out infinite; }
+@keyframes stt-pulse {
+  0%, 100% { opacity: .35; }
+  50%      { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stt-listening i { animation: none; }
+}
 
 /* The language list in the models dialog: code and name in columns that fill
    the width, however many there are. */
