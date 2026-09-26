@@ -92,18 +92,14 @@ def read_language_argument() -> str | None:
 def convert_upload(bio):
     """Turn an uploaded buffer into a 16 kHz mono WAV, or None when it is not decodable audio.
 
-    Owns the logging of the failure so both routes can treat it as a plain None check.
+    Owns the logging of the failure so both routes can treat it as a plain None check. A WARNING
+    without a traceback: an upload that is not audio is the client's mistake, answered with 400,
+    and a traceback per bad file would bury the server's own errors.
     """
     try:
         return audio.convert_to_wav(bio)
     except Exception as exc:
-        logger.error(
-            "[%s] Audio conversion failed: %s: %s\n%s",
-            get_request_id(),
-            type(exc).__name__,
-            exc,
-            traceback.format_exc(),
-        )
+        logger.warning("[%s] Audio conversion failed: %s: %s", get_request_id(), type(exc).__name__, str(exc)[:300])
         return None
 
 

@@ -46,8 +46,16 @@ def register_error_handlers(app: Flask) -> None:
 
     @app.errorhandler(405)
     def method_not_allowed(error):
-        """Return the generic body for a method the route does not accept."""
-        return build_error_response("Method Not Allowed", 405)
+        """Return the generic body for a method the route does not accept, with the Allow header.
+
+        RFC 9110 requires Allow on a 405, and it is what tells a client which method to use
+        instead; werkzeug knows the route's methods and passes them on the exception.
+        """
+        response, status = build_error_response("Method Not Allowed", 405)
+        valid_methods = getattr(error, "valid_methods", None)
+        if valid_methods:
+            response.headers["Allow"] = ", ".join(sorted(valid_methods))
+        return response, status
 
     @app.errorhandler(413)
     def payload_too_large(error):

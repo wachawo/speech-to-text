@@ -3,6 +3,13 @@
 ### [Unreleased]
 
 #### Added
+- **`docs/DEPLOY.md`:** first deployment, what to rebuild or restart after an update, rolling
+  back, going offline once the models are cached, the certificate, and what an open server
+  exposes. `make tag-rollback` tags both images before a deploy.
+- **A live session that falls behind catches up.** When its queued phrases hold more than two
+  minutes of audio - a 24/7 source on a slower-than-realtime transcriber - it drops the oldest
+  queued ones and says so in a new `skipped` message, instead of growing its memory and its lag
+  without end.
 - **Only spoken text is returned.** A voice detector (Silero VAD) now vets every transcript:
   a segment that lies mostly outside detected speech is dropped, and so is a whole-segment
   subtitle credit line. Before, Whisper answered a tone with a Russian "subtitles by
@@ -111,6 +118,7 @@
   linked from the language switcher at the top of each README.
 
 #### Fixed
+- **405 names the allowed methods** in an `Allow` header, as RFC 9110 requires.
 - **An SRT listener could still get past the URL check.** ffmpeg reads SRT options from the
   first `?` anywhere in the address, while the check read urlsplit's query, which stops at `#`, so
   `srt://0.0.0.0:9000#?mode=listener` passed and made the server listen. Options are now read the
@@ -173,6 +181,15 @@
   mounted dirs and drops privileges via `setpriv` before starting the server.
 
 #### Changed
+- **Builds are reproducible.** Every install step runs with `-c constraints.txt`, the versions
+  of the last verified image (`make constraints` refreshes it), and the uv image is pinned; a
+  moving `uv:latest` had thrown away the layer cache and cost a 20-minute rebuild. The GPU image
+  now also refuses a torch without kernels for NVIDIA GB10.
+- **The server can run as the host user.** `STT_UID` / `STT_GID` make `models/`, `logs/` and
+  `recs/` belong to the user who owns the checkout, instead of uid 1001.
+- **An upload that is not audio is logged as one WARNING line**, not an ERROR with a traceback:
+  it is the client's mistake and is answered with 400.
+- **The CPU image is on Python 3.12**, like the GPU image and the project's target.
 - **A model backend that fails to load no longer stops the server.** The failure is
   logged and its pool left empty, so `/api/diarize` answers 503 while `/api/stt` keeps
   serving. Previously the exception surfaced inside the Gunicorn `post_fork` hook and

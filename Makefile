@@ -3,7 +3,7 @@ SHELL := /bin/zsh
 PID_FILE := .stt_server.pid
 LOG_FILE := logs/stt_server.log
 
-.PHONY: run start stop gunicorn test lint typecheck
+.PHONY: run start stop gunicorn test lint typecheck constraints tag-rollback
 
 run:
 	python3 stt_server.py
@@ -51,3 +51,18 @@ stop:
 			rm -f "$(PID_FILE)"; \
 		fi; \
 	fi
+
+# Freeze what the verified GPU image resolved into constraints.txt (see the header of that file).
+constraints:
+	@head -n 9 constraints.txt > constraints.txt.new
+	@docker run --rm --entrypoint uv stt_server_gpu:latest pip freeze --python /opt/venv/bin/python \
+		| grep -viE '^(torch|torchaudio|triton|nvidia-|cuda-|transformers)' >> constraints.txt.new
+	@mv constraints.txt.new constraints.txt
+	@echo "[constraints] $$(grep -vc '^#' constraints.txt) packages frozen"
+
+# Tag both running images as rollback-<current commit> before a deploy replaces them.
+tag-rollback:
+	@rev="$$(git rev-parse --short HEAD)"; \
+	docker tag stt_server_gpu:latest "stt_server_gpu:rollback-$$rev" && \
+	docker tag stt_www:latest "stt_www:rollback-$$rev" && \
+	echo "[tag-rollback] stt_server_gpu:rollback-$$rev stt_www:rollback-$$rev"

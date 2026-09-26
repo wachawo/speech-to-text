@@ -59,6 +59,12 @@ CLOSE_CODES = {
     "Service Unavailable": CLOSE_TRY_LATER,
 }
 
+# A session whose queued phrases hold more audio than this has fallen behind for good - a 24/7
+# source on a slower-than-realtime transcriber, or a pool busy with uploads - and drops its oldest
+# queued phrases rather than grow its buffer and its lag without end. The client is told how much
+# was skipped, in a `skipped` message.
+MAX_BACKLOG_SECONDS = 120.0
+
 # With no utterance to transcribe for this long, the worker catches the diarizer up and trims
 # the buffer, so a long silence neither piles up audio nor leaves the diarizer an hour behind.
 IDLE_SECONDS = 1.0
@@ -129,6 +135,8 @@ def new_session(options: dict[str, Any], request_id: str) -> dict[str, Any]:
         "final": False,
         "segments": 0,
         "reported": 0,
+        "skipped": 0.0,
+        "skipped_reported": 0.0,
         "started": time.monotonic(),
     }
 
@@ -150,15 +158,38 @@ def queue_utterances(session: dict[str, Any], final: bool = False) -> None:
     closed = stream.advance_segmenter(session["segmenter"], session["buffer"], final=final)
     if closed:
         session["pending"].extend(closed)
+        shed_backlog(session)
         session["wake"].set()
 
 
+def shed_backlog(session: dict[str, Any]) -> None:
+    """Drop the oldest queued phrases while the queue holds more than MAX_BACKLOG_SECONDS of audio.
+
+    The head of the queue is left alone: the worker may be transcribing it right now.
+    """
+    pending = session["pending"]
+    backlog = sum(item["end"] - item["start"] for item in pending) / stream.SAMPLE_RATE
+    dropped = 0.0
+    while len(pending) > 1 and backlog > MAX_BACKLOG_SECONDS:
+        oldest = pending[1]
+        del pending[1]
+        length = (oldest["end"] - oldest["start"]) / stream.SAMPLE_RATE
+        backlog -= length
+        dropped += length
+    if dropped:
+        session["skipped"] += dropped
+        logger.warning("[%s] Stream fell behind: skipped %.1fs of queued audio", session["request_id"], dropped)
+
+
 async def report_progress(session: dict[str, Any], send_event) -> None:
-    """Send `progress` when another second of audio has arrived since the last report."""
+    """Send `progress` when another second of audio has arrived, and `skipped` when phrases were shed."""
     received = session["buffer"]["total"] / stream.SAMPLE_RATE
     if received - session["reported"] >= PROGRESS_SECONDS:
         session["reported"] = received
         await send_event({"type": "progress", "seconds": round(received, 1)})
+    if session["skipped"] > session["skipped_reported"]:
+        session["skipped_reported"] = session["skipped"]
+        await send_event({"type": "skipped", "seconds": round(session["skipped"], 1)})
 
 
 async def ingest_audio(session: dict[str, Any], data: bytes, send_event) -> None:
