@@ -124,15 +124,34 @@ fake_parakeet.describe_backend = fake_describe_parakeet
 sys.modules["libs.parakeet"] = fake_parakeet
 libs.parakeet = fake_parakeet
 
+
+def fake_find_handover(state, start, end):
+    """Stand in for diarize.find_handover(): no speaker change unless a test says otherwise."""
+    return None
+
+
 fake_diarize = types.ModuleType("libs.diarize")
 fake_diarize.get_diarizer = fake_get_diarizer
 fake_diarize.diarize_wav = fake_diarize_wav
 fake_diarize.describe_backend = fake_describe_diarizer
+fake_diarize.find_handover = fake_find_handover
+fake_diarize.STREAM_FRAME_SECONDS = 0.01
 sys.modules["libs.diarize"] = fake_diarize
 libs.diarize = fake_diarize
 
 import stt_server  # noqa: E402  (must follow the backend stubs)
-from libs import config, model_pool  # noqa: E402  (must follow the backend stubs)
+from libs import config, model_pool, speech_gate  # noqa: E402  (must follow the backend stubs)
+
+
+@pytest.fixture(autouse=True)
+def speech_gate_off(monkeypatch):
+    """Run every test with the speech gate off unless the test switches it on.
+
+    CI installs no silero-vad, and a detector that failed once stays off for the process; the
+    gate's own tests replace the detector and switch the gate on themselves.
+    """
+    monkeypatch.setattr(config, "SPEECH_GATE", False)
+    monkeypatch.setattr(speech_gate, "VAD_BROKEN", False)
 
 
 @pytest.fixture

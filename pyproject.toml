@@ -50,6 +50,8 @@ dependencies = [
 whisper = [
     "openai-whisper>=20231117",
     "soundfile>=0.12.1",
+    # The speech gate (libs/speech_gate.py); needs only torch, which the backend already brings.
+    "silero-vad>=6.2",
 ]
 # Speaker diarization. transformers is pinned to a git commit because the model declares
 # transformers_version 5.18.0.dev0 while the newest PyPI release is 5.17.0, which does not

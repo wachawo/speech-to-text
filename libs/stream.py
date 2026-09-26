@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 # Local imports
-from libs import align, backends, diarize, model_pool
+from libs import align, backends, config, diarize, model_pool, speech_gate
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +195,26 @@ def advance_segmenter(segmenter: dict[str, Any], buffer: dict[str, Any], final: 
     return closed
 
 
+def cut_utterance(segmenter: dict[str, Any], at: int) -> dict[str, int] | None:
+    """Close the utterance in progress at sample `at` and go on with a new one from there.
+
+    For a cut the pause detector cannot see, such as a speaker change without a pause. Nothing
+    happens unless an utterance is open and `at` falls inside it. Returns the closed utterance,
+    or None when there was nothing to cut or it held too little speech.
+    """
+    if not segmenter["in_speech"] or not segmenter["speech_start"] < at < segmenter["position"]:
+        return None
+    carried_levels = [(start, level) for start, level in segmenter["frame_levels"] if start >= at]
+    voiced_after = sum(FRAME_SAMPLES for start, level in carried_levels)
+    utterance = close_utterance(segmenter, at)
+    segmenter["in_speech"] = True
+    segmenter["speech_start"] = at
+    segmenter["last_voiced_end"] = max(segmenter["last_voiced_end"], at)
+    segmenter["voiced_samples"] = voiced_after
+    segmenter["frame_levels"] = carried_levels
+    return utterance
+
+
 def encode_wav(samples: np.ndarray) -> io.BytesIO:
     """Wrap int16 samples in a WAV container, the input every transcriber module reads."""
     bio = io.BytesIO()
@@ -207,20 +227,32 @@ def encode_wav(samples: np.ndarray) -> io.BytesIO:
     return bio
 
 
-def transcribe_utterance(buffer: dict[str, Any], utterance: dict[str, int], language: str | None) -> list[dict[str, Any]]:
+def transcribe_utterance(
+    buffer: dict[str, Any], utterance: dict[str, int], language: str | None, request_id: str = "-"
+) -> list[dict[str, Any]]:
     """Transcribe one utterance with a pooled model and return its segments in stream time.
 
     The model is borrowed for this utterance only and returned at once: the pool is shared with
     every upload, and a session that held a model for its whole length would starve them all.
-    Raises queue.Empty when no model frees up in time.
+    With the speech gate on, an utterance with no detected speech in it is not transcribed at all
+    - the pause detector cuts on loudness, so a tone or a jingle reaches here, and Whisper would
+    answer it with a subtitle credit - and the segments of the rest are vetted against the same
+    speech ranges. Raises queue.Empty when no model frees up in time.
     """
     samples = read_samples(buffer, utterance["start"], utterance["end"])
+    length = samples.size / SAMPLE_RATE
+    ranges = None
+    if config.SPEECH_GATE:
+        ranges = speech_gate.find_speech(samples.astype(np.float32) / 32768.0, request_id)
+        if ranges is not None and speech_gate.spoken_seconds(ranges) < MIN_VOICED_SECONDS:
+            return []
     offset = utterance["start"] / SAMPLE_RATE
     model = model_pool.acquire_model()
     try:
         segments = backends.transcriber().get_stt_segments(encode_wav(samples), model=model, language=language)
     finally:
         model_pool.release_model(model)
+    segments = speech_gate.keep_spoken(segments, ranges, request_id, length)
     timed = []
     for segment in segments:
         text = segment["text"].strip()
@@ -228,7 +260,6 @@ def transcribe_utterance(buffer: dict[str, Any], utterance: dict[str, int], lang
             continue
         # Clamped to the utterance: whisper pads to 30 s and can place segment times past the audio.
         # A segment that starts there was made up in the padding, not heard, and is dropped.
-        length = samples.size / SAMPLE_RATE
         start = float(segment["start"])
         if start >= length:
             continue

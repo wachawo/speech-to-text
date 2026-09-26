@@ -315,3 +315,33 @@ def test_advanced_frames_read_back_as_turns(real_diarize, fake_torch, inference)
         {"speaker": 0, "start": 0.0, "end": 1.0},
         {"speaker": 1, "start": 1.0, "end": 2.0},
     ]
+
+
+def test_a_handover_is_found_where_the_new_speaker_starts(real_diarize):
+    """Speaker 0 stops, speaker 1 talks for a second: the handover is at speaker 1's first frame."""
+    state = build_state(build_activity(300, {0: [(0, 150)], 1: [(160, 260)]}))
+    assert real_diarize.find_handover(state, 0.0, 3.0) == 1.6
+
+
+def test_a_short_interjection_is_not_a_handover(real_diarize):
+    """A turn shorter than HANDOVER_SECONDS is a backchannel, not a new phrase."""
+    state = build_state(build_activity(300, {0: [(0, 150), (200, 280)], 1: [(160, 190)]}))
+    assert real_diarize.find_handover(state, 0.0, 3.0) is None
+
+
+def test_talking_over_each_other_is_not_a_handover(real_diarize):
+    """While the phrase's speaker keeps talking, another voice is overlap, not a handover."""
+    state = build_state(build_activity(300, {0: [(0, 280)], 1: [(160, 260)]}))
+    assert real_diarize.find_handover(state, 0.0, 3.0) is None
+
+
+def test_a_turn_at_the_opening_of_the_phrase_is_not_a_handover(real_diarize):
+    """Another speaker starting within HANDOVER_MIN_OFFSET of the window start belongs to its opening."""
+    state = build_state(build_activity(300, {0: [(0, 20)], 1: [(20, 200)]}))
+    assert real_diarize.find_handover(state, 0.0, 3.0) is None
+
+
+def test_no_turns_no_handover(real_diarize):
+    """An empty window has nobody to hand over."""
+    state = build_state(build_activity(300, {}))
+    assert real_diarize.find_handover(state, 0.0, 3.0) is None

@@ -61,6 +61,10 @@ DIARIZE_DOWNLOAD_ROOT = os.getenv("DIARIZE_DOWNLOAD_ROOT", "models")
 # baked into the processor's extract_speaker_dict.
 DIARIZE_THRESHOLD = float(os.getenv("DIARIZE_THRESHOLD", "0.5"))
 
+# Speech gate: a voice detector drops transcribed segments nobody spoke - Whisper's credit-line
+# hallucinations on tone, music, noise and silence. On by default; off is the old behaviour.
+SPEECH_GATE = os.getenv("SPEECH_GATE", "true").lower() in TRUE_VALUES
+
 # CLI client
 STT_URL = os.getenv("STT_URL", "http://localhost:5099")
 STT_TOKEN = os.getenv("STT_TOKEN", "").strip()

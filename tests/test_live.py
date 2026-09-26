@@ -678,3 +678,25 @@ def test_idle_catch_up_diarizes_and_trims_no_further_than_the_diarizer_needs(mon
     base = sessions[0]["buffer"]["base"]
     assert 0 < base <= silence.size - RATE
     assert select_events(result, "done")[0]["seconds"] == 5.0
+
+
+def test_a_handover_splits_the_phrase_in_progress(monkeypatch):
+    """When the diarizer reports a speaker change inside an open phrase, the phrase is closed there."""
+    monkeypatch.setattr(live.diarize, "find_handover", lambda state, start, end: 1.5)
+    session = live.new_session({"language": None, "diarize": False, "url": None}, "abc")
+    session["diarization"] = {"frames": 250, "finished": False, "next_start": 0}
+    stream.append_samples(session["buffer"], make_tone(2.5))
+    live.queue_utterances(session)
+    assert not session["pending"]
+    live.split_at_handover(session)
+    assert list(session["pending"]) == [{"start": 0, "end": int(1.5 * RATE)}]
+    assert session["segmenter"]["speech_start"] == int(1.5 * RATE)
+
+
+def test_no_diarizer_no_split(monkeypatch):
+    """Without diarization there is nothing to split on, and the phrase stays open."""
+    session = live.new_session({"language": None, "diarize": False, "url": None}, "abc")
+    stream.append_samples(session["buffer"], make_tone(2.5))
+    live.queue_utterances(session)
+    live.split_at_handover(session)
+    assert not session["pending"]

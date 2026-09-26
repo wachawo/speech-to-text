@@ -26,6 +26,14 @@ MAX_SPEAKERS = 8
 # The model emits one decision per spectrogram frame, one frame every 10 ms (the model card).
 STREAM_FRAME_SECONDS = 0.01
 
+# A live phrase is split where the speaker changes when the new speaker has talked this long and
+# the one before has stopped: shorter is a backchannel ("mm", "yes") or diarizer jitter.
+HANDOVER_SECONDS = 0.4
+
+# A turn of another speaker this close to the start of the phrase is the phrase's own opening, not
+# a handover inside it.
+HANDOVER_MIN_OFFSET = 0.5
+
 
 def resolve_device(device: str | None = None) -> str:
     """Resolve "auto" to cuda/cpu and reject a device this machine cannot serve.
@@ -240,6 +248,34 @@ def stream_turns(state: dict, start: float, end: float) -> list[dict]:
             )
     turns.sort(key=lambda turn: (turn["start"], turn["speaker"]))
     return turns
+
+
+def find_handover(state: dict, start: float, end: float) -> float | None:
+    """Where, in [start, end] seconds of the stream, one speaker hands over to another; None if nowhere.
+
+    The phrase's speaker is the one whose turn begins first in the window. A handover is the first
+    turn of anybody else that starts at least HANDOVER_MIN_OFFSET into the window, has lasted
+    HANDOVER_SECONDS, and during which the phrase's speaker is silent - two people talking at once
+    is overlap, which stays one phrase and is marked as such.
+    """
+    turns = stream_turns(state, start, end)
+    if not turns:
+        return None
+    speaker = turns[0]["speaker"]
+    for turn in turns:
+        if turn["speaker"] == speaker or turn["start"] < start + HANDOVER_MIN_OFFSET:
+            continue
+        if turn["end"] - turn["start"] < HANDOVER_SECONDS:
+            continue
+        window_start, window_end = turn["start"], turn["start"] + HANDOVER_SECONDS
+        overlap = sum(
+            max(0.0, min(other["end"], window_end) - max(other["start"], window_start))
+            for other in turns
+            if other["speaker"] == speaker
+        )
+        if overlap < HANDOVER_SECONDS / 4:
+            return turn["start"]
+    return None
 
 
 def main():
