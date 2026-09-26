@@ -977,6 +977,98 @@ table thead { text-transform: uppercase; font-weight: 700; }
   .stt-listening i { animation: none; }
 }
 
+/* The server fell behind in a live session and dropped audio: the one note
+   that is a warning, in the warning family's ink rather than the quiet one. */
+.stt-live-note.stt-skipped,
+.stt-live-note.stt-skipped i { color: var(--stt-alert-warning-ink); }
+
+/* Who spoke when (views/Turns.vue). Every row of the timeline is the same
+   grid - a name column and a track - so the lanes, the overlap strip and the
+   axis share one left edge and one width, and a bar's percentage means the
+   same moment in every lane. The speaker's ink comes from the stt-speaker-N
+   class on the lane, as on a transcript block. */
+.stt-timeline {
+  background: var(--stt-card);
+  border: 1px solid var(--stt-border);
+  border-radius: 4px;
+  padding: 8px 18px 4px 8px;
+  margin-bottom: 6px;
+}
+.stt-lane {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  align-items: center;
+  column-gap: 8px;
+  margin-bottom: 4px;
+}
+.stt-lane-name {
+  font-weight: 700;
+  color: var(--stt-speaker);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stt-lane-track {
+  position: relative;
+  height: 14px;
+  background: var(--stt-bg);
+  border-radius: 2px;
+}
+.stt-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 2px;
+  background: var(--stt-speaker);
+  border-radius: 2px;
+}
+/* Overlap: hatched in the plain ink - a pattern, not a colour, so it cannot
+   be taken for one more speaker, and it survives a monochrome screen. */
+.stt-lane-overlap .stt-lane-name { color: var(--stt-text); font-weight: normal; font-style: italic; }
+.stt-lane-overlap .stt-bar {
+  background: repeating-linear-gradient(45deg, var(--stt-text) 0 2px, transparent 2px 4px);
+}
+.stt-axis-row { margin-bottom: 0; }
+.stt-axis {
+  position: relative;
+  height: 16px;
+  border-top: 1px solid var(--stt-border);
+}
+.stt-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  padding-top: 3px;
+  font-size: 10px;
+  font-family: var(--stt-face-rows);
+  color: var(--stt-text);
+  white-space: nowrap;
+}
+.stt-tick::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 50%;
+  height: 3px;
+  border-left: 1px solid var(--stt-border);
+}
+.stt-tick:first-child { transform: none; }
+.stt-tick:first-child::before { left: 0; }
+
+/* The turns as a list: short rows in as many columns as fit. */
+.stt-turn-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 2px 16px;
+  padding: 0 2px;
+}
+.stt-turn-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: nowrap;
+}
+
 /* The language list in the models dialog: code and name in columns that fill
    the width, however many there are. */
 .stt-lang-grid {

@@ -62,30 +62,44 @@
 /* The FILE source of the transcribe screen: an audio file, chosen or dropped,
    sent whole.
 
-   Two requests behind one button. Speakers is POST /api/transcript -
-   diarization first, then transcription, joined into segments that each name a
-   speaker. Text is POST /api/stt - the words alone. Both take the file as the
-   multipart field `file` and the language as the form field `language` when
-   one is chosen.
+   Three requests behind one button, one per mode. All take the file as the
+   multipart field `file`:
+   - Speakers is POST /api/transcript - diarization first, then
+     transcription, joined into segments that each name a speaker;
+   - Text is POST /api/stt - the words alone;
+   - Turns is POST /api/diarize - who spoke when, as time ranges, and no text
+     at all.
+   The first two take the language as the form field `language` when one is
+   chosen; diarization has no use for one.
 
    The screen owns the mode and the language (they are the same for every
-   source) and hands this the values to send; the answer goes back up as a
-   `result` event, and the screen draws it. `busy` tells the screen when an
-   upload is in flight, so it can keep the source switch from destroying it.
-   Used as:
+   source) and hands this the values to send. The answer is kept in the store
+   as FILE's transcript, where the screen reads it - and where it still lands
+   if the screen was left while the upload ran. The chosen file is kept there
+   too, so a look at another screen does not lose it. `busy` tells the screen
+   when an upload is in flight, so it can keep the source switch from
+   destroying it. Used as:
 
      <stt-file-source :mode="mode" :language="language" :compact="!!result"
-                      :held="catalogue loading" @result="showResult" @busy="...">
+                      :held="catalogue loading" @busy="...">
        <template #options="{ busy }">...the mode and language selects...</template>
      </stt-file-source>
 */
+
+/* Where each mode is sent, and what the wait strip says meanwhile. */
+var REQUESTS = {
+  speakers: { url: '/api/transcript', doing: 'transcribing' },
+  text: { url: '/api/stt', doing: 'transcribing' },
+  turns: { url: '/api/diarize', doing: 'finding who spoke when in' },
+};
 
 module.exports = {
   mixins: [SttWait],
 
   props: {
-    // What the request carries: 'speakers' or 'text', and a language code,
-    // 'auto', or '' for none. Already reconciled with what the server offers.
+    // What the request carries: 'speakers', 'text' or 'turns', and a language
+    // code, 'auto', or '' for none. Already reconciled with what the server
+    // offers.
     mode: { type: String, default: 'text' },
     language: { type: String, default: '' },
     // A transcript is on the screen: the drop zone shrinks to one line.
@@ -101,9 +115,6 @@ module.exports = {
       warning: '',
       info: '',
       success: '',
-      // The File the operator chose or dropped, held here rather than read
-      // back off the input: a dropped file never touches the input at all.
-      file: null,
     };
   },
 
@@ -126,6 +137,18 @@ module.exports = {
   },
 
   computed: {
+    /* The File the operator chose or dropped, held in the store rather than
+       read back off the input: a dropped file never touches the input at
+       all, and the input is rebuilt with the screen. */
+    file: {
+      get: function () {
+        return this.$store.state.chosenFile;
+      },
+      set: function (value) {
+        this.$store.dispatch('choose_file', value);
+      },
+    },
+
     busy: function () {
       return this.wait.length > 0;
     },
@@ -182,27 +205,30 @@ module.exports = {
       var self = this;
       if (!this.canTranscribe || this.held) return;
       var file = this.file;
-      var mode = this.mode === 'speakers' ? 'speakers' : 'text';
-      var language = this.language;
+      var mode = REQUESTS[this.mode] ? this.mode : 'text';
+      var request = REQUESTS[mode];
+      var language = mode === 'turns' ? '' : this.language;
       var body = new FormData();
       body.append('file', file, file.name);
       if (language) body.append('language', language);
       this.error = '';
       this.warning = '';
       var started = Date.now();
-      var label = 'transcribing ' + file.name + ' 0s';
+      var caption = request.doing + ' ' + file.name + ' ';
+      var label = caption + '0s';
       this.waitPush(label);
       this.tickTimer = setInterval(function () {
-        var next = 'transcribing ' + file.name + ' ' + Math.round((Date.now() - started) / 1000) + 's';
+        var next = caption + Math.round((Date.now() - started) / 1000) + 's';
         var i = self.wait.indexOf(label);
         if (i !== -1) self.wait.splice(i, 1, next);
         label = next;
       }, 1000);
       // No Content-Type of our own: axios writes the multipart boundary into
       // it, and a header set here would drop the boundary.
-      this.$http.post(mode === 'speakers' ? '/api/transcript' : '/api/stt', body)
+      this.$http.post(request.url, body)
         .then(function (resp) {
-          self.$emit('result', { mode: mode, name: file.name, language: language, data: resp.data || {} });
+          var result = { mode: mode, name: file.name, language: language, data: resp.data || {} };
+          self.$store.dispatch('keep_transcript', { source: 'file', result: result });
         })
         .catch(function (err) { self.error = self.$apiError(err); })
         .finally(function () {

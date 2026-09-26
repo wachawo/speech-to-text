@@ -3,6 +3,11 @@
 ### [Unreleased]
 
 #### Added
+- **Who spoke when, on its own, in the web UI.** FILE gets a Turns mode that calls
+  `/api/diarize` and draws the result as a timeline: a lane per speaker, a bar per turn, and the
+  stretches where two people talk at once marked. Each source now keeps its last result while
+  another screen is open, and a live session that falls behind shows how much it skipped.
+- **Uploads up to 100 MB in the Docker setup** (`MAX_CONTENT_LENGTH_MB`, now read from `.env`).
 - **`docs/DEPLOY.md`:** first deployment, what to rebuild or restart after an update, rolling
   back, going offline once the models are cached, the certificate, and what an open server
   exposes. `make tag-rollback` tags both images before a deploy.

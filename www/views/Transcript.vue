@@ -3,7 +3,7 @@
     <!-- What the result is of, and the three ways to take it away. The
          buttons stand apart, each its own action. -->
     <div class="d-flex align-items-center flex-wrap gap-1 mb-1">
-      <small class="text-secondary">{{ summary }}</small>
+      <stt-summary :result="result"></stt-summary>
       <span class="ms-auto"></span>
       <button type="button" class="btn btn-sm btn-secondary fw-bold btn-w85"
               :title="exportTitle('Copy the transcript as text')" :disabled="exportLocked" @click="copyText">
@@ -20,15 +20,31 @@
       </button>
     </div>
 
+    <!-- The server fell behind in a live session and dropped audio it had
+         queued: one line, kept with the transcript, its figure growing as the
+         server reports more. -->
+    <div v-if="result.skipped" class="stt-live-note stt-skipped">
+      <i class="fa fa-triangle-exclamation" aria-hidden="true"></i>
+      The server fell behind and skipped {{ $fmtSeconds(result.skipped) }} of audio
+    </div>
+
+    <!-- Who spoke when: the timeline and the list, no text. -->
+    <template v-if="result.mode === 'turns'">
+      <stt-turns v-if="segments.length" :turns="segments"></stt-turns>
+      <div v-else class="stt-block">
+        <div class="stt-block-text text-secondary">No speech found</div>
+      </div>
+    </template>
+
     <!-- One block per segment, in order. The speaker's colour is on the rule
          and the name, and the name is always printed; a contested segment
          says so in its header with a glyph and a word, and in its title. -->
-    <template v-if="result.mode === 'speakers'">
+    <template v-else-if="result.mode === 'speakers'">
       <div v-for="(segment, index) in segments" :key="index"
-           class="stt-block" :class="speakerClass(segment)"
+           class="stt-block" :class="$speakerClass(segment.speaker)"
            :title="segment.overlap ? overlapNote : null">
         <div class="stt-block-head">
-          <span class="stt-block-who" :title="speakerTitle(segment)">{{ speakerLabel(segment) || 'No speaker' }}</span>
+          <span class="stt-block-who" :title="speakerTitle(segment)">{{ $speakerLabel(segment.speaker) || 'No speaker' }}</span>
           <span class="stt-block-time">{{ fmtRange(segment) }}</span>
           <span v-if="segment.overlap" class="stt-block-overlap">
             <i class="fa fa-people-arrows me-1" aria-hidden="true"></i>overlap
@@ -73,7 +89,8 @@
 
      <stt-transcript :result="result"></stt-transcript>
 
-   where `result` is {mode, name, language, data}: `mode` 'speakers' or 'text',
+   where `result` is {mode, name, language, data}: `mode` 'speakers', 'text'
+   or 'turns' (who spoke when, drawn by views/Turns.vue),
    `name` the recording's file name (the downloads are saved under it),
    `language` what the request asked for ('' for the server default), and
    `data` the server's JSON as sent - JSON saves exactly that.
@@ -82,9 +99,14 @@
    `finishing` (between STOP and the server's `done` or `error`), `seconds`
    (audio the server has received), `stem` (the name its downloads are saved
    under - a device label is no file name) and `messages` (every message the
-   server sent but `progress`, which is what JSON saves), and its segments
-   grow while it is on the screen.
-*/
+   server sent but `progress`, which is what JSON saves), `skipped` (seconds
+   of audio the server dropped when it fell behind), and its segments grow
+   while it is on the screen.
+
+   `progress` arrives once a second for as long as a session runs, and the
+   only thing it changes is the audio figure in the line above the blocks.
+   That line is its own small component, so the tick re-renders the line and
+   not every block under it. */
 
 /* Scripts written without spaces between words or sentences: Chinese and
    Japanese (CJK punctuation, kana, ideographs, full-width forms). Two live
@@ -112,11 +134,6 @@ var OVERLAP_NOTE = 'Another speaker was talking at the same time: this block can
   'and the speaker named is the one whose turn covers most of it';
 var NO_SPEAKER_NOTE = 'No speaker turn covered this stretch of speech';
 
-/* How many speaker inks the palette has (--stt-speaker-1..8), which is also
-   the diarizer's ceiling. A ninth would start the colours over; the name
-   still tells them apart. */
-var SPEAKER_INKS = 8;
-
 /* The clipboard the old way, for a page the browser does not trust with
    navigator.clipboard - plain http from another host is the common case for
    a UI like this one. Answers whether the copy went through. */
@@ -139,7 +156,40 @@ var copyByTextarea = function (text) {
   return copied;
 };
 
+/* The line above the blocks. "dialog.wav - ru - 2 speakers - transcribed in
+   0.9 s"; "meeting.wav - 4 speakers - 57 turns - diarized in 3.1 s"; for a
+   live session "<device> - ru - 2 speakers - 21.9 s of audio". */
+var TranscriptSummary = {
+  props: {
+    result: { type: Object, required: true },
+  },
+  computed: {
+    text: function () {
+      var result = this.result;
+      var parts = [result.name];
+      if (result.language) parts.push(result.language === 'auto' ? 'language detected' : result.language);
+      if (result.mode === 'speakers' || result.mode === 'turns') {
+        var count = Number(result.data.speakers) || 0;
+        parts.push(count + (count === 1 ? ' speaker' : ' speakers'));
+      }
+      if (result.mode === 'turns') {
+        var turns = Array.isArray(result.data.segments) ? result.data.segments.length : 0;
+        parts.push(turns + (turns === 1 ? ' turn' : ' turns'));
+      }
+      if (result.live) parts.push(this.$fmtSeconds(result.seconds) + ' of audio');
+      else parts.push((result.mode === 'turns' ? 'diarized in ' : 'transcribed in ') + this.$fmtSeconds(result.data.elapsed));
+      return parts.join(' - ');
+    },
+  },
+  template: '<small class="text-secondary">{{ text }}</small>',
+};
+
 module.exports = {
+  components: {
+    'stt-summary': TranscriptSummary,
+    'stt-turns': httpVueLoader('/views/Turns.vue'),
+  },
+
   props: {
     result: { type: Object, required: true },
   },
@@ -209,29 +259,20 @@ module.exports = {
       return name.replace(/\.[^.]*$/, '') || 'transcript';
     },
 
-    /* "dialog.wav - ru - 2 speakers - transcribed in 0.9 s", or for a live
-       session "<device> - ru - 2 speakers - 21.9 s of audio". */
-    summary: function () {
-      var result = this.result;
-      var parts = [result.name];
-      if (result.language) parts.push(result.language === 'auto' ? 'language detected' : result.language);
-      if (result.mode === 'speakers') {
-        var count = Number(result.data.speakers) || 0;
-        parts.push(count + (count === 1 ? ' speaker' : ' speakers'));
-      }
-      if (result.live) parts.push(this.$fmtSeconds(result.seconds) + ' of audio');
-      else parts.push('transcribed in ' + this.$fmtSeconds(result.data.elapsed));
-      return parts.join(' - ');
-    },
-
     /* The transcript as text - what COPY copies and TXT saves. For Speakers,
        one line per segment, and a contested one says so: the overlap mark
-       has to survive into every copy of a transcript, not only the screen. */
+       has to survive into every copy of a transcript, not only the screen.
+       For Turns, one line per turn: the time and the speaker, nothing else. */
     transcriptText: function () {
       var self = this;
+      if (this.result.mode === 'turns') {
+        return this.segments.map(function (turn) {
+          return '[' + self.fmtRange(turn) + '] ' + (self.$speakerLabel(turn.speaker) || 'No speaker');
+        }).join('\n') + '\n';
+      }
       if (this.result.mode !== 'speakers') return this.plainText + '\n';
       return this.segments.map(function (segment) {
-        var label = self.speakerLabel(segment);
+        var label = self.$speakerLabel(segment.speaker);
         if (segment.overlap) label += (label ? ' ' : '') + '(overlap)';
         return '[' + self.fmtRange(segment) + '] ' + (label ? label + ': ' : '') + (segment.text || '');
       }).join('\n') + '\n';
@@ -253,30 +294,8 @@ module.exports = {
       return this.$fmtStamp(segment.start) + ' - ' + this.$fmtStamp(segment.end);
     },
 
-    /* The server's speaker number, or null for a segment no turn covered. */
-    speakerIndex: function (segment) {
-      var speaker = segment.speaker;
-      if (speaker === null || speaker === undefined || speaker === '') return null;
-      var number = Number(speaker);
-      return isFinite(number) && number >= 0 ? Math.floor(number) : null;
-    },
-
-    /* "Speaker 1" for speaker 0: the server counts from zero, people from one.
-       '' for a segment no turn covered. */
-    speakerLabel: function (segment) {
-      var index = this.speakerIndex(segment);
-      return index === null ? '' : 'Speaker ' + (index + 1);
-    },
-
-    /* The ink follows the number, and the number is arrival order, so the
-       first voice in a recording is always the first colour. */
-    speakerClass: function (segment) {
-      var index = this.speakerIndex(segment);
-      return index === null ? 'stt-speaker-none' : 'stt-speaker-' + ((index % SPEAKER_INKS) + 1);
-    },
-
     speakerTitle: function (segment) {
-      return this.speakerLabel(segment) ? SPEAKER_NOTE : NO_SPEAKER_NOTE;
+      return this.$speakerLabel(segment.speaker) ? SPEAKER_NOTE : NO_SPEAKER_NOTE;
     },
 
     /* navigator.clipboard first, the textarea trick where the browser has

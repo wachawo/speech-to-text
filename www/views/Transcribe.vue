@@ -20,7 +20,7 @@
          every source, so they are written once here and placed by the source
          in its row; the source says when they must be off (`busy`). -->
     <component :is="sourceComponent" ref="source" :mode="requestMode" :language="requestLanguage"
-               :compact="!!result" :held="catalogPending" @result="showResult" @busy="sourceBusy = $event">
+               :compact="!!result" :held="catalogPending" @busy="sourceBusy = $event">
       <template #options="{ busy }">
         <!-- Who said what, or just the words. Speakers is offered only when
              the server has the diarizer loaded; otherwise the select holds
@@ -28,7 +28,7 @@
         <div style="margin-right: 0.25rem">
           <div class="input-group input-group-sm" :title="modeTitle">
             <select class="form-select form-select-sm" style="width: 110px" aria-label="Mode"
-                    v-model="form.mode" :disabled="busy || catalogPending || modes.length < 2" @change="rememberForm">
+                    v-model="form.mode" :disabled="busy || catalogPending || modes.length < 2" @change="rememberMode">
               <option v-for="mode in modes" :key="mode.value" :value="mode.value" :title="mode.title">
                 {{ mode.label }}
               </option>
@@ -42,7 +42,7 @@
         <div style="margin-right: 0.25rem">
           <div class="input-group input-group-sm" :title="languageTitle">
             <select class="form-select form-select-sm" style="width: 180px" aria-label="Language"
-                    v-model="languageChoice" :disabled="busy || catalogPending || !acceptsLanguage">
+                    v-model="languageChoice" :disabled="busy || catalogPending || !languageUsed">
               <option value="" :title="acceptsLanguage ? 'Sends no language; the server uses its own default' : null">
                 {{ defaultLanguageLabel }}
               </option>
@@ -62,8 +62,8 @@
          and a file dropped on a source that takes none. -->
     <stt-alerts :wait="wait" :error.sync="error" :warning.sync="warning"></stt-alerts>
 
-    <!-- The result, whatever source produced it: the component draws the
-         blocks and owns COPY / TXT / JSON. -->
+    <!-- The open source's last result: the component draws it and owns
+         COPY / TXT / JSON. -->
     <stt-transcript v-if="result" :result="result"></stt-transcript>
 
   </div>
@@ -75,14 +75,16 @@
    The screen is the frame the sources share: the FILE / DEVICE switch, the
    mode and the language, and the transcript under them. Each source is its
    own component with its own form, its own request and its own messages, and
-   hands its result up as a `result` event:
+   keeps its result in the store (keep_transcript):
 
    - FILE (views/FileSource.vue): a file, chosen or dropped, sent whole.
    - DEVICE (views/DeviceSource.vue): an input captured live and streamed.
    - STREAM (views/StreamSource.vue): an address the server reads itself.
 
-   The result stays on the screen until the next one replaces it, from any
-   source: the line above it names what it came from.
+   Each source has its own last result, and the screen shows the open one's:
+   switching to DEVICE and back to FILE finds FILE's transcript where it was,
+   and so does a visit to MODELS, since the store outlives the screen. A live
+   session still ends when the screen is left.
 
    The screen also owns the window's drag and drop, for every source: a file
    dropped on a page that does not catch it is opened by the browser in the
@@ -110,9 +112,13 @@ var carriesFiles = function (event) {
   return !!types && Array.prototype.indexOf.call(types, 'Files') !== -1;
 };
 
+/* The modes. Speakers and Turns need the diarizer loaded; Turns is FILE's
+   alone - /api/diarize takes a whole file, and a live session has no
+   diarize-only form. */
 var MODES = [
-  { value: 'speakers', label: 'Speakers', title: 'Who said what: the recording split by speaker, then transcribed' },
+  { value: 'speakers', label: 'Speakers', title: 'Who said what: the recording split by speaker, then transcribed', diarizer: true },
   { value: 'text', label: 'Text', title: 'The words alone, with no speakers' },
+  { value: 'turns', label: 'Turns', title: 'Who spoke when: speaker turns on a timeline, with no text', diarizer: true, fileOnly: true },
 ];
 
 var sourceEntry = function (value) {
@@ -142,10 +148,6 @@ module.exports = {
       dragging: false,
       source: sourceEntry(prefs.source) ? prefs.source : 'file',
       form: { mode: prefs.mode, language: prefs.language },
-      // The last answer and what it was an answer to: {mode, name, language,
-      // data}, plus {live, listening, seconds, messages, stem} from a live
-      // session. `data` is the server's JSON as sent.
-      result: null,
     };
   },
 
@@ -177,6 +179,13 @@ module.exports = {
   },
 
   computed: {
+    /* The open source's last result, from the store: {mode, name, language,
+       data}, plus {live, listening, finishing, seconds, skipped, messages,
+       stem} from a live session. `data` is the server's JSON as sent. */
+    result: function () {
+      return this.$store.state.transcripts[this.source] || null;
+    },
+
     /* The catalogue is being read. Until it answers, the selects cannot show
        what the server offers - a remembered Speakers would read as Text - so
        they, and every source's start button, wait for it. */
@@ -216,13 +225,17 @@ module.exports = {
 
     modes: function () {
       var available = this.speakersAvailable;
-      return MODES.filter(function (mode) { return available || mode.value !== 'speakers'; });
+      var source = this.source;
+      return MODES.filter(function (mode) {
+        if (mode.diarizer && !available) return false;
+        return !mode.fileOnly || source === 'file';
+      });
     },
 
     modeTitle: function () {
       if (this.speakersAvailable) return 'Mode';
-      if (!this.catalog.loaded) return 'Speakers needs the server catalogue, which has not answered';
-      return 'Speakers needs the diarizer, and this server has not loaded it';
+      if (!this.catalog.loaded) return 'Speakers and Turns need the server catalogue, which has not answered';
+      return 'Speakers and Turns need the diarizer, and this server has not loaded it';
     },
 
     /* Unknown counts as yes: before the catalogue answers, the select offers
@@ -237,7 +250,14 @@ module.exports = {
       return codes.sort();
     },
 
+    /* Whether the request will carry the language: not for a backend that
+       detects it itself, and not for Turns, which transcribes nothing. */
+    languageUsed: function () {
+      return this.acceptsLanguage && this.requestMode !== 'turns';
+    },
+
     languageTitle: function () {
+      if (this.requestMode === 'turns') return 'Who spoke when takes no language';
       if (this.acceptsLanguage) return 'Language of the recording';
       return 'The ' + this.backendRow.backend + ' backend detects the language itself';
     },
@@ -256,16 +276,19 @@ module.exports = {
       },
       set: function (value) {
         this.form.language = value;
-        this.rememberForm();
+        this.$savePrefs('transcribe', { language: value });
       },
     },
 
-    /* What a source sends, reconciled with what the server offers. */
+    /* What a source sends, reconciled with what the server offers and what
+       the open source can do. */
     requestMode: function () {
-      return this.form.mode === 'speakers' && this.speakersAvailable ? 'speakers' : 'text';
+      var wanted = this.form.mode;
+      var offered = this.modes.some(function (mode) { return mode.value === wanted; });
+      return offered ? wanted : 'text';
     },
     requestLanguage: function () {
-      return this.acceptsLanguage ? this.form.language : '';
+      return this.languageUsed ? this.form.language : '';
     },
   },
 
@@ -274,6 +297,13 @@ module.exports = {
        request failed, or RELOAD on the models screen - may add or take away
        Speakers and change the language list. */
     catalog: function () {
+      this.settleForm();
+    },
+
+    /* Another source offers other modes: Turns is FILE's alone. The
+       remembered mode is put back on the select as far as the new source
+       allows, and comes back when FILE does. */
+    source: function () {
       this.settleForm();
     },
 
@@ -325,10 +355,6 @@ module.exports = {
 
     tabTitle: function (entry) {
       return this.tabLocked(entry) ? BUSY_TITLES[this.source] : entry.title;
-    },
-
-    showResult: function (result) {
-      this.result = result;
     },
 
     /* Drag and drop. A depth count, because the window sees a dragenter and a
@@ -390,9 +416,12 @@ module.exports = {
     },
 
     /* The operator's choice, remembered for the next visit. Written on a
-       change the operator made, never on one settleForm made. */
-    rememberForm: function () {
-      this.$savePrefs('transcribe', { mode: this.form.mode, language: this.form.language });
+       change the operator made, never on one settleForm made - and only the
+       field that changed: a DEVICE that could not offer Turns and showed
+       Speakers instead must not overwrite a remembered Turns when only the
+       language was touched. */
+    rememberMode: function () {
+      this.$savePrefs('transcribe', { mode: this.form.mode });
     },
 
     fetchCatalog: function () {

@@ -11,10 +11,12 @@
    2. liveConnect(): the socket, and a `start` message carrying the source's
       own fields plus the stored token, if any (a browser cannot set headers
       on a websocket).
-   3. On `ready` the session record is created and handed up as `result`, and
-      the source's onLiveReady hook starts whatever it feeds the socket with.
+   3. On `ready` the session record is created and kept in the store as this
+      source's transcript (keep_transcript), and the source's onLiveReady hook
+      starts whatever it feeds the socket with.
    4. `segment` messages are added to the record as they come; `progress`
-      moves the clock.
+      moves the clock; `skipped` - the server fell behind and dropped queued
+      phrases - updates the running total the transcript warns about.
    5. liveStop(): the source's onLiveStopping hook runs (a device flushes its
       last frame), `stop` goes out, and the socket stays open until `done` or
       `error` - the "finishing" state. The server may also end a session on
@@ -62,13 +64,6 @@
   };
 
   var OPEN = 1;
-
-  /* m:ss for the clock. */
-  var formatClock = function (seconds) {
-    var whole = Math.floor(Number(seconds) || 0);
-    var rest = whole % 60;
-    return Math.floor(whole / 60) + ':' + (rest < 10 ? '0' : '') + rest;
-  };
 
   /* "20260925-103012", for the name a live transcript is saved under. */
   var fileStamp = function () {
@@ -137,7 +132,7 @@
       },
 
       liveClock: function () {
-        return formatClock(this.seconds);
+        return this.$fmtClock(this.seconds);
       },
     },
 
@@ -207,14 +202,15 @@
         if (message.type === 'ready') this.liveReady(message);
         else if (message.type === 'segment') this.liveSegment(message);
         else if (message.type === 'progress') this.liveProgress(message);
+        else if (message.type === 'skipped') this.liveSkipped(message);
         else if (message.type === 'done') this.liveDone(message);
         else if (message.type === 'error') this.liveServerError(message);
       },
 
-      /* The server is listening: the transcript is created and handed up, and
-         the source may start. Every field is there from the start, so the
-         screen, which makes the object reactive when it takes it, sees every
-         later addition. */
+      /* The server is listening: the transcript is created and kept as this
+         source's, and the source may start. Every field is there from the
+         start, so the store, which makes the object reactive when it takes
+         it, sees every later addition. */
       liveReady: function (message) {
         if (this.state !== 'opening') return;
         this.waitDrop('connecting');
@@ -229,10 +225,11 @@
           listening: true,
           finishing: false,
           seconds: 0,
+          skipped: 0,
           messages: [message],
           data: { segments: [], speakers: 0, elapsed: null },
         };
-        this.$emit('result', this.session);
+        this.$store.dispatch('keep_transcript', { source: this.liveKind, result: this.session });
         if (this.onLiveReady) this.onLiveReady(message);
       },
 
@@ -264,6 +261,16 @@
         if (!isFinite(seconds)) return;
         this.seconds = seconds;
         if (this.session) this.session.seconds = seconds;
+      },
+
+      /* The server fell more than two minutes behind and dropped phrases it
+         had queued. `seconds` is the running total for the session, so the
+         latest one is the figure to show; each is kept for JSON. */
+      liveSkipped: function (message) {
+        var seconds = Number(message.seconds);
+        if (!isFinite(seconds) || !this.session) return;
+        this.session.messages.push(message);
+        this.session.skipped = seconds;
       },
 
       /* The end. After STOP it is the answer to `stop`; while still live it
