@@ -226,9 +226,14 @@ def transcribe_utterance(buffer: dict[str, Any], utterance: dict[str, int], lang
         text = segment["text"].strip()
         if not text:
             continue
-        # Clamped to the utterance: whisper pads to 30 s and can place a segment end past the audio.
-        end = min(float(segment["end"]), samples.size / SAMPLE_RATE)
-        timed.append({"start": round(offset + float(segment["start"]), 2), "end": round(offset + end, 2), "text": text})
+        # Clamped to the utterance: whisper pads to 30 s and can place segment times past the audio.
+        # A segment that starts there was made up in the padding, not heard, and is dropped.
+        length = samples.size / SAMPLE_RATE
+        start = float(segment["start"])
+        if start >= length:
+            continue
+        end = min(float(segment["end"]), length)
+        timed.append({"start": round(offset + start, 2), "end": round(offset + end, 2), "text": text})
     return timed
 
 
