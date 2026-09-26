@@ -55,7 +55,7 @@ GPU 빌드는 호스트에 `nvidia-container-toolkit`가 필요합니다. 첫 �
 | http   | `8080`    | `STT_WWW_PORT`     |
 | https  | `8443`    | `STT_WWW_TLS_PORT` |
 
-`http://<host>:8080`을 엽니다. **TRANSCRIBE**에는 두 가지 소스가 있습니다. **FILE**은 오디오 파일을 업로드합니다. **DEVICE**는 오디오 입력에서 실시간으로 전사합니다. 입력으로는 마이크나 헤드셋, 스피커나 헤드폰으로 재생되는 모든 소리를 담는 Linux의 `Monitor of ...` 소스, 또는 브라우저 탭에서 재생되는 소리(운영 체제가 허용하면 시스템 전체)를 위한 `Tab or screen audio`를 쓸 수 있습니다. 어느 쪽이든 결과는 폼 아래에 일반 텍스트로 나타나며, 화자 분리가 켜져 있으면 구절마다 화자와 시간이 붙은 블록으로 나타납니다. 화자마다 고유한 색이 붙고, 두 사람이 동시에 말한 구절은 따로 표시됩니다. 실시간 구절은 화자가 말을 멈춘 뒤 약 1초 후에 나타납니다. 결과는 복사하거나 TXT 또는 JSON으로 내려받을 수 있습니다. **MODELS**는 `GET /api/models`가 알려 주는 내용을 보여 줍니다. `STT_TOKENS`가 설정되어 있으면 UI는 토큰을 한 번만 묻고 브라우저에 보관합니다.
+`http://<host>:8080`을 엽니다. **TRANSCRIBE**에는 세 가지 소스가 있습니다. **FILE**은 오디오 파일을 업로드합니다. **DEVICE**는 오디오 입력에서 실시간으로 전사합니다. 입력으로는 마이크나 헤드셋, 스피커나 헤드폰으로 재생되는 모든 소리를 담는 Linux의 `Monitor of ...` 소스, 또는 Chromium 계열 브라우저에서는 브라우저 탭에서 재생되는 소리(운영 체제가 허용하면 시스템 전체)를 위한 `Tab or screen audio`를 쓸 수 있습니다. **STREAM**은 스트림이나 원격 파일의 주소(인터넷 라디오, HLS, RTMP, RTSP, SRT)를 받아 서버가 직접 읽습니다. 어느 경우든 결과는 폼 아래에 일반 텍스트로 나타나며, 화자 분리가 켜져 있으면 구절마다 화자와 시간이 붙은 블록으로 나타납니다. 화자마다 고유한 색이 붙고, 두 사람이 동시에 말한 구절은 따로 표시됩니다. 실시간 구절은 화자가 말을 멈춘 뒤 약 1초 후에 나타납니다. 결과는 복사하거나 TXT 또는 JSON으로 내려받을 수 있습니다. **MODELS**는 `GET /api/models`가 알려 주는 내용을 보여 줍니다. `STT_TOKENS`가 설정되어 있으면 UI는 토큰을 한 번만 묻고 브라우저에 보관합니다.
 
 브라우저는 안전한 페이지에만 오디오 장치를 넘겨주므로, 네트워크를 통해서는 DEVICE가 https 리스너를 거쳐 동작합니다(`http://localhost`에서도 동작합니다). https 리스너는 컨테이너가 처음 시작할 때 `./data/certs`에 만드는 자체 서명 인증서를 사용합니다. 이를 교체하려면 실제 `stt.crt`와 `stt.key`를 그곳에 두십시오. UI에는 빌드 단계도 CDN도 없습니다. Vue 2와 그 라이브러리는 `www/vendor`에 함께 들어 있으므로, 인터넷에 연결되지 않은 기기에서도 동작합니다.
 
@@ -166,9 +166,11 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 { "type": "done", "segments": 10, "seconds": 21.87, "elapsed": 22.08 }
 ```
 
-오디오는 다른 곳에서 올 수도 있습니다. 시작 메시지에 `"source": "url", "url": "https://..."`를 넣으면 클라이언트는 오디오를 전혀 보내지 않습니다. 서버가 ffmpeg로 그 주소의 스트림을 소스 자체의 속도대로 읽으며, 스트림이 끝나거나 클라이언트가 `stop`을 보낼 때까지 계속합니다. 인터넷 라디오, HLS, RTMP, RTSP, SRT가 동작합니다. 스킴은 `http`, `https`, `rtmp`, `rtmps`, `rtsp`, `srt` 중 하나여야 하며, ffmpeg는 네트워크 프로토콜만 쓰도록 제한되어 있어 URL이나 재생 목록으로 로컬 파일을 읽게 만들 수는 없습니다. 그래도 클라이언트가 고른 주소를 서버가 가져오게 된다는 점은 변하지 않으며, 여기에는 서버 자신의 네트워크에 있는 주소도 포함됩니다. 다른 사람이 접근할 수 있는 서버에는 반드시 `STT_TOKENS`를 설정하십시오.
+오디오는 다른 곳에서 올 수도 있습니다. 시작 메시지에 `"source": "url", "url": "https://..."`를 넣으면 클라이언트는 오디오를 전혀 보내지 않습니다. 서버가 ffmpeg로 그 주소의 스트림을 읽으며, 스트림이 끝나거나 클라이언트가 `stop`을 보낼 때까지 계속합니다. 인터넷 라디오, HLS, RTMP, RTSP, SRT가 동작합니다. 스킴은 `http`, `https`, `rtmp`, `rtmps`, `rtsp`, `srt` 중 하나여야 합니다. 라이브 소스에 이미 쌓여 있는 분량은 한 번에 가져오고 나머지는 소스 자체의 속도대로 읽으므로, 원격 파일도 방송과 같은 방식으로 도착합니다.
 
-실패는 `{"type": "error", "error": "<category>", "request_id": "..."}` 하나로 전달되고 그 뒤에 연결이 닫힙니다. 범주는 HTTP 오류 범주에 `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed`가 더해진 것입니다.
+이 기능은 클라이언트가 고른 주소를 서버가 가져오게 만들기 때문에 제한이 걸려 있습니다. ffmpeg는 네트워크 프로토콜만 쓸 수 있으므로 URL이든 재생 목록이든 로컬 파일을 읽게 만들 수 없고, 어떤 방법으로도 연결을 기다리는 상태로 만들 수 없습니다. SRT의 `listener`와 `rendezvous` 모드, 그리고 모든 `listen` 매개변수는 거부됩니다. 다른 사이트의 페이지는 이를 시작할 수 없습니다(`Forbidden`). 브라우저는 WebSocket에 CORS를 적용하지 않으므로, 소켓이 페이지의 오리진이 이 호스트인지, 또는 `CORS_ORIGINS`에 나열되어 있는지 확인합니다. URL 소스는 동시에 최대 네 개까지 실행되며(그 이상은 `Service Unavailable`), 로그에는 각 주소가 자격 증명과 쿼리를 뺀 채로 기록됩니다. 그래도 서버 자신의 네트워크에 있는 호스트에는 여전히 닿을 수 있는데, 카메라라면 바로 그것이 목적이고, 다른 사람이 접근할 수 있는 서버에 `STT_TOKENS`를 설정해야 하는 이유이기도 합니다.
+
+실패는 `{"type": "error", "error": "<category>", "request_id": "..."}` 하나로 전달되고 그 뒤에 연결이 닫힙니다. 범주는 HTTP 오류 범주에 `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed`, `Forbidden`이 더해진 것입니다.
 
 구절은 0.6초의 멈춤에서 끝나거나, 15초를 넘기면 가장 조용한 지점에서 끝나며, 업로드와 같은 풀에서 빌린 모델로 따로 전사됩니다. 그래서 풀이 바쁘면 실시간 구절은 실패하지 않고 늦어질 뿐입니다. `diarize`를 쓰면 화자 분리기가 스트리밍 모드로 동작하며 청크에서 청크로 화자 캐시를 이어 가므로, 한 화자는 세션 내내 같은 번호를 유지합니다. 이 소켓은 서버가 uvicorn에서 실행될 때(`python3 stt_server.py`, Docker 기본값)만 존재합니다. Flask 디버그 서버와 gunicorn의 sync 워커는 WebSocket을 지원하지 않습니다.
 
@@ -248,6 +250,7 @@ speech-to-text/
 │   ├── align.py         # joins transcription segments to speaker turns
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
+│   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND

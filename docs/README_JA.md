@@ -55,7 +55,7 @@ GPU ビルドにはホスト上に `nvidia-container-toolkit` が必要です。
 | http     | `8080`           | `STT_WWW_PORT`     |
 | https    | `8443`           | `STT_WWW_TLS_PORT` |
 
-`http://<host>:8080` を開きます。**TRANSCRIBE** には 2 つのソースがあります。**FILE** は音声ファイルをアップロードします。**DEVICE** は音声入力からリアルタイムで文字起こしします。入力には、マイクやヘッドセット、スピーカーやヘッドホンで再生されるものをすべて運ぶ Linux の `Monitor of ...` ソース、あるいはブラウザのタブで再生されるもの（OS が許す場合はシステム全体）を対象とする `Tab or screen audio` を使えます。どちらの場合も、結果はフォームの下にプレーンテキストとして表示されます。ダイアライゼーションが有効なら、フレーズごとに話者と時刻を付けたブロックとして表示され、話者ごとに色が分かれ、2 人が同時に話したフレーズには印が付きます。リアルタイムのフレーズは、話者が言葉を切ってから約 1 秒後に表示されます。結果はコピーすることも、TXT または JSON としてダウンロードすることもできます。**MODELS** は `GET /api/models` が報告する内容を表示します。`STT_TOKENS` が設定されている場合、UI は一度だけトークンを尋ね、ブラウザに保存します。
+`http://<host>:8080` を開きます。**TRANSCRIBE** には 3 つのソースがあります。**FILE** は音声ファイルをアップロードします。**DEVICE** は音声入力からリアルタイムで文字起こしします。入力には、マイクやヘッドセット、スピーカーやヘッドホンで再生されるものをすべて運ぶ Linux の `Monitor of ...` ソース、あるいは Chromium 系ブラウザでは、ブラウザのタブで再生されるもの（OS が許す場合はシステム全体）を対象とする `Tab or screen audio` を使えます。**STREAM** はストリームまたはリモートファイルのアドレス（インターネットラジオ、HLS、RTMP、RTSP、SRT）を受け取り、サーバー自身がそれを読み込みます。いずれの場合も、結果はフォームの下にプレーンテキストとして表示されます。ダイアライゼーションが有効なら、フレーズごとに話者と時刻を付けたブロックとして表示され、話者ごとに色が分かれ、2 人が同時に話したフレーズには印が付きます。リアルタイムのフレーズは、話者が言葉を切ってから約 1 秒後に表示されます。結果はコピーすることも、TXT または JSON としてダウンロードすることもできます。**MODELS** は `GET /api/models` が報告する内容を表示します。`STT_TOKENS` が設定されている場合、UI は一度だけトークンを尋ね、ブラウザに保存します。
 
 ブラウザは安全なページにしか音声デバイスを渡さないため、ネットワーク越しでは DEVICE は https リスナー経由で動作します（`http://localhost` でも動作します）。https リスナーは、コンテナが初回起動時に `./data/certs` に作成する自己署名証明書を使います。置き換えるには、本物の `stt.crt` と `stt.key` をそこに置いてください。UI にはビルド工程も CDN もありません。Vue 2 とそのライブラリは `www/vendor` に同梱されているため、インターネットに接続できないマシンでも動作します。
 
@@ -166,9 +166,11 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 { "type": "done", "segments": 10, "seconds": 21.87, "elapsed": 22.08 }
 ```
 
-音声は別の場所から取ることもできます。開始メッセージに `"source": "url", "url": "https://..."` を含めると、クライアントは音声をまったく送りません。サーバーがそのアドレスのストリームを ffmpeg でソース自身のペースで読み込み、ストリームが終わるかクライアントが `stop` を送るまで続けます。インターネットラジオ、HLS、RTMP、RTSP、SRT が使えます。スキームは `http`、`https`、`rtmp`、`rtmps`、`rtsp`、`srt` のいずれかである必要があり、ffmpeg はネットワークプロトコルだけに制限されているため、URL やプレイリストを使ってローカルファイルを読ませることはできません。それでも、クライアントが選んだアドレス（サーバー自身のネットワーク上のアドレスも含む）をサーバーに取得させることに変わりはありません。他者が到達できるサーバーでは必ず `STT_TOKENS` を設定してください。
+音声は別の場所から取ることもできます。開始メッセージに `"source": "url", "url": "https://..."` を含めると、クライアントは音声をまったく送りません。サーバーがそのアドレスのストリームを ffmpeg で読み込み、ストリームが終わるかクライアントが `stop` を送るまで続けます。インターネットラジオ、HLS、RTMP、RTSP、SRT が使えます。スキームは `http`、`https`、`rtmp`、`rtmps`、`rtsp`、`srt` のいずれかである必要があります。ライブソースにすでに溜まっている分は一度に取り込み、残りはソース自身のペースで読み込むため、リモートファイルも放送と同じように届きます。
 
-失敗は 1 つの `{"type": "error", "error": "<category>", "request_id": "..."}` として届き、その後に接続が閉じられます。カテゴリは HTTP のエラーカテゴリに加えて、`Invalid start message`、`Invalid audio frame`、`Invalid stream URL`、`Stream source failed` があります。
+これはクライアントが選んだアドレスをサーバーに取得させる仕組みなので、制限が設けられています。ffmpeg はネットワークプロトコルしか使えないため、URL でもプレイリストでもローカルファイルを読ませることはできず、接続を待ち受けさせることも一切できません。SRT の `listener` モードと `rendezvous` モード、および `listen` パラメーターはすべて拒否されます。別のサイトのページからは開始できません（`Forbidden`）。ブラウザは WebSocket に CORS を適用しないため、ソケット側でページのオリジンがこのホストであるか、`CORS_ORIGINS` に列挙されているかを確認します。同時に動かせる URL ソースは最大 4 つで（それを超えると `Service Unavailable`）、ログには各アドレスが認証情報とクエリを除いた形で記録されます。サーバー自身のネットワーク上のホストには引き続き到達できます。カメラを使う場合はまさにそれが目的であり、他者が到達できるサーバーで `STT_TOKENS` を設定すべき理由でもあります。
+
+失敗は 1 つの `{"type": "error", "error": "<category>", "request_id": "..."}` として届き、その後に接続が閉じられます。カテゴリは HTTP のエラーカテゴリに加えて、`Invalid start message`、`Invalid audio frame`、`Invalid stream URL`、`Stream source failed`、`Forbidden` があります。
 
 フレーズは 0.6 秒のポーズで区切られるか、15 秒を超えた場合は最も静かな箇所で区切られます。各フレーズはアップロードと同じプールから借りたモデルで個別に文字起こしされるため、プールが混んでいてもリアルタイムのフレーズは失敗せず、遅れるだけです。`diarize` を指定すると、ダイアライザーはストリーミングモードで動作し、チャンクからチャンクへ話者キャッシュを引き継ぐため、セッション全体を通じて同じ話者は同じ番号を保ちます。このソケットは、サーバーが uvicorn で動いている場合（`python3 stt_server.py`、Docker のデフォルト）にのみ存在します。Flask のデバッグサーバーと gunicorn の sync ワーカーは WebSocket を扱えません。
 
@@ -248,6 +250,7 @@ speech-to-text/
 │   ├── align.py         # joins transcription segments to speaker turns
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
+│   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND

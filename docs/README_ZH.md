@@ -55,7 +55,7 @@ GPU 构建需要主机上安装 `nvidia-container-toolkit`。首次运行会将 
 | http  | `8080`   | `STT_WWW_PORT`     |
 | https | `8443`   | `STT_WWW_TLS_PORT` |
 
-打开 `http://<host>:8080`。**TRANSCRIBE** 有两种来源。**FILE** 上传一个音频文件。**DEVICE** 从音频输入实时转录：可以是麦克风或耳麦；Linux 上的 `Monitor of ...` 音源，它承载通过扬声器或耳机播放的一切声音；或者 `Tab or screen audio`，用于浏览器标签页中播放的声音，在操作系统允许的情况下也可以是整个系统的声音。无论哪种方式，结果都会显示在表单下方：要么是纯文本，要么在启用说话人分离时按语句分块显示，每块带有说话人和时间，每个说话人使用各自的颜色，两人同时说话的语句会被标记出来；实时语句会在说话人停顿约一秒后出现。结果可以复制，也可以下载为 TXT 或 JSON。**MODELS** 显示 `GET /api/models` 报告的内容。设置了 `STT_TOKENS` 时，界面只会询问一次令牌，并将其保存在浏览器中。
+打开 `http://<host>:8080`。**TRANSCRIBE** 有三种来源。**FILE** 上传一个音频文件。**DEVICE** 从音频输入实时转录：可以是麦克风或耳麦；Linux 上的 `Monitor of ...` 音源，它承载通过扬声器或耳机播放的一切声音；或者在 Chromium 系浏览器中使用 `Tab or screen audio`，用于浏览器标签页中播放的声音，在操作系统允许的情况下也可以是整个系统的声音。**STREAM** 接受一个流或远程文件的地址（网络电台、HLS、RTMP、RTSP、SRT），由服务器自行读取。无论哪种方式，结果都会显示在表单下方：要么是纯文本，要么在启用说话人分离时按语句分块显示，每块带有说话人和时间，每个说话人使用各自的颜色，两人同时说话的语句会被标记出来；实时语句会在说话人停顿约一秒后出现。结果可以复制，也可以下载为 TXT 或 JSON。**MODELS** 显示 `GET /api/models` 报告的内容。设置了 `STT_TOKENS` 时，界面只会询问一次令牌，并将其保存在浏览器中。
 
 浏览器只会把音频设备交给安全页面，因此通过网络访问时，DEVICE 需要经由 https 监听端口使用（在 `http://localhost` 上也可以）。https 监听端口使用自签名证书，由容器在首次启动时创建于 `./data/certs`；把真正的 `stt.crt` 和 `stt.key` 放到那里即可替换它。界面没有构建步骤，也不依赖 CDN：Vue 2 及其依赖库已随项目放在 `www/vendor` 下，因此在无法访问互联网的机器上也能工作。
 
@@ -166,9 +166,11 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 { "type": "done", "segments": 10, "seconds": 21.87, "elapsed": 22.08 }
 ```
 
-音频也可以来自别处。在开始消息中加入 `"source": "url", "url": "https://..."` 后，客户端完全不发送音频：服务器通过 ffmpeg 按音源自身的节奏读取该地址上的流，直到流结束或客户端发送 `stop`。网络电台、HLS、RTMP、RTSP 和 SRT 都可以使用；协议方案必须是 `http`、`https`、`rtmp`、`rtmps`、`rtsp` 或 `srt`，并且 ffmpeg 被限制为只能使用网络协议，因此 URL 或播放列表无法让它读取本地文件。但这仍然会让服务器去访问由客户端选定的地址，包括服务器自身所在网络中的地址：在任何他人可以访问到的服务器上，都请设置 `STT_TOKENS`。
+音频也可以来自别处。在开始消息中加入 `"source": "url", "url": "https://..."` 后，客户端完全不发送音频：服务器通过 ffmpeg 读取该地址上的流，直到流结束或客户端发送 `stop`。网络电台、HLS、RTMP、RTSP 和 SRT 都可以使用；协议方案必须是 `http`、`https`、`rtmp`、`rtmps`、`rtsp` 或 `srt`。实时音源已经积压的部分会被一次性读取，其余部分则按音源自身的节奏读取，因此远程文件会像广播一样到达。
 
-失败时会发送一条 `{"type": "error", "error": "<category>", "request_id": "..."}`，随后关闭连接；错误类别与 HTTP 接口相同，另外还有 `Invalid start message`、`Invalid audio frame`、`Invalid stream URL` 和 `Stream source failed`。
+由于这会让服务器去访问由客户端选定的地址，因此它受到了限制。ffmpeg 只能使用网络协议，因此 URL 和播放列表都无法让它读取本地文件，也没有任何办法让它进入监听状态：SRT 的 `listener` 和 `rendezvous` 模式以及任何 `listen` 参数都会被拒绝。其他站点上的页面无法启动 URL 音源（`Forbidden`）：浏览器不会对 WebSocket 应用 CORS，因此该套接字会检查页面的来源（origin）是否为本主机，或是否列在 `CORS_ORIGINS` 中。最多同时运行四个 URL 音源（超出时返回 `Service Unavailable`），日志记录每个地址时会去掉其中的凭据和查询字符串。它仍然可以访问服务器自身所在网络中的主机，这对摄像头来说正是用途所在，也是在他人可以访问到的服务器上设置 `STT_TOKENS` 的原因。
+
+失败时会发送一条 `{"type": "error", "error": "<category>", "request_id": "..."}`，随后关闭连接；错误类别与 HTTP 接口相同，另外还有 `Invalid start message`、`Invalid audio frame`、`Invalid stream URL`、`Stream source failed` 和 `Forbidden`。
 
 一个语句在出现 0.6 秒的停顿时结束，或者在持续超过 15 秒后于其最安静的时刻切分；每个语句单独转录，所用模型从与上传请求相同的池中借用，因此池繁忙时实时语句只会被延迟，而不会失败。启用 `diarize` 时，说话人分离器以流式模式运行，并在各个音频块之间延续说话人缓存，因此同一说话人在整个会话中保持同一个编号。只有当服务器在 uvicorn 下运行时（`python3 stt_server.py`，即 Docker 的默认方式）才存在该套接字：Flask 调试服务器和 gunicorn 的 sync 工作进程都不支持 WebSocket。
 
@@ -248,6 +250,7 @@ speech-to-text/
 │   ├── align.py         # joins transcription segments to speaker turns
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
+│   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND
