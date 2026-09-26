@@ -172,7 +172,9 @@ Weil der Server damit eine Adresse abruft, die ein Client gewählt hat, ist das 
 
 Ein Fehler ist ein einzelnes `{"type": "error", "error": "<category>", "request_id": "..."}`, gefolgt vom Schließen der Verbindung, mit den Fehlerkategorien der HTTP-API sowie `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed` und `Forbidden`.
 
-Eine Phrase endet bei einer Pause von 0,6 s oder, sobald sie länger als 15 s dauert, an ihrer leisesten Stelle und wird für sich allein mit einem Modell transkribiert, das aus demselben Pool geliehen wird wie für Uploads, sodass ein ausgelasteter Pool Live-Phrasen verzögert, statt sie scheitern zu lassen. Mit `diarize` läuft der Diarisierer in seinem Streaming-Modus und führt einen Sprecher-Cache von Abschnitt zu Abschnitt mit, sodass ein Sprecher für die ganze Sitzung dieselbe Nummer behält. Der Socket existiert nur, wenn der Server unter uvicorn läuft (`python3 stt_server.py`, der Docker-Standard): Der Flask-Debug-Server und die Sync-Worker von gunicorn sprechen kein WebSocket.
+Eine Phrase endet bei einer Pause von 0,6 s, an der Stelle, an der der Diarisierer einen Sprecher an einen anderen übergeben hört (mit `diarize`, da Menschen, die einander antworten, oft weniger als 0,6 s Pause lassen), oder, sobald sie länger als 15 s dauert, an ihrer leisesten Stelle und wird für sich allein mit einem Modell transkribiert, das aus demselben Pool geliehen wird wie für Uploads, sodass ein ausgelasteter Pool Live-Phrasen verzögert, statt sie scheitern zu lassen. Mit `diarize` läuft der Diarisierer in seinem Streaming-Modus und führt einen Sprecher-Cache von Abschnitt zu Abschnitt mit, sodass ein Sprecher für die ganze Sitzung dieselbe Nummer behält. Der Socket existiert nur, wenn der Server unter uvicorn läuft (`python3 stt_server.py`, der Docker-Standard): Der Flask-Debug-Server und die Sync-Worker von gunicorn sprechen kein WebSocket.
+
+**Zurückgegeben wird nur gesprochener Text.** Wo keine Sprache vorkommt - ein Ton, Musik, Rauschen, ein Freizeichen, sogar digitale Stille -, antwortet Whisper mit dem Abspann der untertitelten Videos, aus denen es gelernt hat (eine russische Zeile "Untertitel von DimaTorzok", "Fortsetzung folgt...", "Danke fürs Zuschauen."), und zwar mit voller Zuversicht: Im Testkorpus lag sein eigenes `no_speech_prob` selbst bei Stille bei 0,00. Deshalb lässt jeder Endpunkt eine Sprachaktivitätserkennung, Silero VAD, über das Audio laufen und verwirft ein transkribiertes Segment, das größtenteils außerhalb erkannter Sprache liegt, sowie jedes Segment, das eine vollständige Abspannzeile aus Untertiteln ist. Auf einem Korpus aus neun Aufnahmen ohne Sprache entfernte das jede solche Zeile, während jede Phrase der Sprachaufnahmen erhalten blieb. Eine Aufnahme, in der nichts gesprochen wird, ergibt jetzt leeren Text. Im Live-Stream wird eine Phrase ohne erkannte Sprache gar nicht erst an das Modell geschickt. Die Erkennung läuft auf der CPU und kostet etwa eine Sekunde pro drei Minuten Audio. `SPEECH_GATE=false` stellt das alte Verhalten wieder her.
 
 Uploads sind auf `MAX_CONTENT_LENGTH_MB` begrenzt (standardmäßig 10 MB); ein größerer Body gibt `413` zurück.
 
@@ -227,6 +229,7 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_POOL_SIZE`     | `1`                     | Anzahl vorab geladener Diarisierungs-Instanzen      |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | Verzeichnis des Diarisierungsmodell-Caches          |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | Sprecheraktivitäts-Wahrscheinlichkeit, die als Sprache zählt |
+| `SPEECH_GATE`           | `true`                  | verwirft Text, den niemand gesprochen hat (Sprachaktivitätserkennung) |
 | `STT_WWW_PORT`          | `8080`                  | http-Port der Web-Oberfläche (compose)              |
 | `STT_WWW_TLS_PORT`      | `8443`                  | https-Port der Web-Oberfläche (compose)             |
 | `STT_URL`               | `http://localhost:5099` | Client: Basis-URL des Servers                       |
@@ -251,6 +254,7 @@ speech-to-text/
 │   ├── live.py          # der WebSocket /api/stream: Protokoll und Sitzungen
 │   ├── stream.py        # Kern der Live-Transkription: Pausen, Phrasen, Transkription je Phrase
 │   ├── url_source.py    # URL-Quellen für /api/stream: Prüfung der Adresse, Start von ffmpeg
+│   ├── speech_gate.py   # Sprachaktivitätserkennung, die Text verwirft, den niemand gesprochen hat
 │   ├── stt.py           # Whisper-Wrapper
 │   ├── parakeet.py      # NVIDIA-Parakeet-Wrapper, der zweite Transkribierer
 │   ├── backends.py      # welches Modul transkribiert, je nach STT_BACKEND

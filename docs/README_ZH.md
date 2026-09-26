@@ -172,7 +172,9 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 失败时会发送一条 `{"type": "error", "error": "<category>", "request_id": "..."}`，随后关闭连接；错误类别与 HTTP 接口相同，另外还有 `Invalid start message`、`Invalid audio frame`、`Invalid stream URL`、`Stream source failed` 和 `Forbidden`。
 
-一个语句在出现 0.6 秒的停顿时结束，或者在持续超过 15 秒后于其最安静的时刻切分；每个语句单独转录，所用模型从与上传请求相同的池中借用，因此池繁忙时实时语句只会被延迟，而不会失败。启用 `diarize` 时，说话人分离器以流式模式运行，并在各个音频块之间延续说话人缓存，因此同一说话人在整个会话中保持同一个编号。只有当服务器在 uvicorn 下运行时（`python3 stt_server.py`，即 Docker 的默认方式）才存在该套接字：Flask 调试服务器和 gunicorn 的 sync 工作进程都不支持 WebSocket。
+一个语句在出现 0.6 秒的停顿时结束，或在说话人分离器听到一个说话人把话交给另一个说话人时结束（需启用 `diarize`，因为互相应答的人之间的停顿往往不到 0.6 秒），或者在持续超过 15 秒后于其最安静的时刻切分；每个语句单独转录，所用模型从与上传请求相同的池中借用，因此池繁忙时实时语句只会被延迟，而不会失败。启用 `diarize` 时，说话人分离器以流式模式运行，并在各个音频块之间延续说话人缓存，因此同一说话人在整个会话中保持同一个编号。只有当服务器在 uvicorn 下运行时（`python3 stt_server.py`，即 Docker 的默认方式）才存在该套接字：Flask 调试服务器和 gunicorn 的 sync 工作进程都不支持 WebSocket。
+
+**只返回真正说出的文本。** 在没有语音的地方，比如提示音、音乐、噪声、回铃音，甚至数字静音，Whisper 会用它学习过的带字幕视频的片尾署名来作答（一条俄语署名"字幕制作：DimaTorzok"、"未完待续..."、"感谢观看。"），而且十分笃定：在测试语料上，即便是静音，它自己的 `no_speech_prob` 也是 0.00。因此，每个接口都会用语音检测器 Silero VAD 扫描音频，丢弃大部分落在检测到的语音之外的转录片段，以及任何整段都是字幕署名行的片段。在一个由九段无语音录音组成的语料上，这一做法去除了所有此类行，同时保留了语音录音中的每一个语句。没有任何人说话的录音现在会得到空文本。在实时流中，未检测到语音的语句甚至不会被送入模型。检测器在 CPU 上运行，每三分钟音频大约增加一秒。`SPEECH_GATE=false` 可恢复旧的行为。
 
 上传大小上限为 `MAX_CONTENT_LENGTH_MB`（默认 10 MB）；更大的请求体返回 `413`。
 
@@ -227,6 +229,7 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_POOL_SIZE`     | `1`                     | 预加载的说话人分离实例数量                         |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | 说话人分离模型缓存目录                             |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | 判定为语音的说话人活动概率                         |
+| `SPEECH_GATE`           | `true`                  | 丢弃无人说出的转录文本（语音检测器）                |
 | `STT_WWW_PORT`          | `8080`                  | Web 界面的 http 端口（compose）                     |
 | `STT_WWW_TLS_PORT`      | `8443`                  | Web 界面的 https 端口（compose）                    |
 | `STT_URL`               | `http://localhost:5099` | 客户端：服务器基础 URL                             |
@@ -251,6 +254,7 @@ speech-to-text/
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
 │   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
+│   ├── speech_gate.py   # voice detector that drops text nobody spoke
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND

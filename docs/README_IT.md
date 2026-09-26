@@ -172,7 +172,9 @@ Poiché così il server va a leggere un indirizzo scelto da un client, la funzio
 
 Un errore è un singolo `{"type": "error", "error": "<category>", "request_id": "..."}` seguito da una chiusura, con le categorie di errore HTTP più `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed` e `Forbidden`.
 
-Una frase termina a una pausa di 0,6 s, oppure nel suo punto più silenzioso una volta superati i 15 s, e viene trascritta da sola con un modello preso in prestito dallo stesso pool degli upload, così un pool occupato ritarda le frasi in tempo reale invece di farle fallire. Con `diarize`, il diarizzatore funziona in modalità streaming e porta con sé una cache dei parlanti da un blocco all'altro, così un parlante mantiene lo stesso numero per tutta la sessione. Il socket esiste solo quando il server gira sotto uvicorn (`python3 stt_server.py`, il predefinito in Docker): il server di debug di Flask e i worker sync di gunicorn non parlano WebSocket.
+Una frase termina a una pausa di 0,6 s, dove il diarizzatore sente un parlante passare la parola a un altro (con `diarize`, perché le persone che si rispondono lasciano spesso meno di 0,6 s), oppure nel suo punto più silenzioso una volta superati i 15 s, e viene trascritta da sola con un modello preso in prestito dallo stesso pool degli upload, così un pool occupato ritarda le frasi in tempo reale invece di farle fallire. Con `diarize`, il diarizzatore funziona in modalità streaming e porta con sé una cache dei parlanti da un blocco all'altro, così un parlante mantiene lo stesso numero per tutta la sessione. Il socket esiste solo quando il server gira sotto uvicorn (`python3 stt_server.py`, il predefinito in Docker): il server di debug di Flask e i worker sync di gunicorn non parlano WebSocket.
+
+**Viene restituito solo il testo parlato.** Dove non c'è parlato - un bip, musica, rumore, il tono di libero, persino silenzio digitale - Whisper risponde con i titoli di coda dei video sottotitolati da cui ha imparato (un credito russo "sottotitoli a cura di DimaTorzok", "continua...", "Grazie per la visione."), e lo fa con piena sicurezza: sul corpus di test il suo stesso `no_speech_prob` era 0,00 anche sul silenzio. Per questo ogni endpoint fa passare sull'audio un rilevatore di voce, Silero VAD, e scarta un segmento trascritto che cade per lo più fuori dal parlato rilevato, oltre a qualsiasi segmento che sia un'intera riga di titoli dei sottotitoli. Su un corpus di nove registrazioni senza parlato questo ha eliminato ogni riga del genere mantenendo ogni frase delle registrazioni con parlato. Una registrazione in cui non si dice nulla ora risulta come testo vuoto. Nello stream in tempo reale una frase senza parlato rilevato non viene nemmeno inviata al modello. Il rilevatore gira sulla CPU e aggiunge circa un secondo ogni tre minuti di audio. `SPEECH_GATE=false` ripristina il comportamento precedente.
 
 Gli upload sono limitati a `MAX_CONTENT_LENGTH_MB` (10 MB per impostazione predefinita); un corpo più grande restituisce `413`.
 
@@ -227,6 +229,7 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_POOL_SIZE`     | `1`                     | istanze di diarizzazione precaricate               |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | directory della cache del modello di diarizzazione |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | probabilità di attività del parlante contata come voce |
+| `SPEECH_GATE`           | `true`                  | scarta il testo trascritto che nessuno ha pronunciato (rilevatore di voce) |
 | `STT_WWW_PORT`          | `8080`                  | porta http dell'interfaccia web (compose)           |
 | `STT_WWW_TLS_PORT`      | `8443`                  | porta https dell'interfaccia web (compose)          |
 | `STT_URL`               | `http://localhost:5099` | client: URL base del server                        |
@@ -251,6 +254,7 @@ speech-to-text/
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
 │   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
+│   ├── speech_gate.py   # voice detector that drops text nobody spoke
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND
