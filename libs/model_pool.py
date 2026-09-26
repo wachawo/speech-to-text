@@ -4,6 +4,7 @@
 
 import logging
 import queue
+import threading
 import time
 import traceback
 from typing import Any
@@ -24,6 +25,16 @@ DIARIZER_ACQUIRE_TIMEOUT = 30
 
 MODEL_POOL: queue.Queue = queue.Queue()
 DIARIZER_POOL: queue.Queue = queue.Queue()
+
+# Callers blocked in acquire_*, by kind. A queue.Queue is not fair: a thread that puts an instance back
+# and asks again at once gets it before a waiting thread even wakes up. Background work (a long job)
+# checks this and steps aside, so a phone call's phrase does not wait behind a whole recording.
+WAITING = {"model": 0, "diarizer": 0}
+WAITING_LOCK = threading.Lock()
+
+# How long background work keeps stepping aside before it takes its turn anyway, so a steady stream
+# of requests slows a job down without stopping it.
+YIELD_LIMIT_SECONDS = 60
 
 # How many diarizers actually loaded. Zero with diarization switched on means loading failed,
 # which is not the same as "all of them are busy" and must not cost a request the full timeout.
@@ -83,9 +94,29 @@ def init_diarizer_pool(size: int | None = None) -> None:
     logger.info("Diarizer pool ready: %d instances", DIARIZER_POOL.qsize())
 
 
+def count_waiting(kind: str, change: int) -> None:
+    """Record a caller starting or ending its wait for an instance of this kind."""
+    with WAITING_LOCK:
+        WAITING[kind] += change
+
+
 def acquire_model(timeout: int = MODEL_ACQUIRE_TIMEOUT) -> Any:
     """Take a Whisper model out of the pool; raises queue.Empty when none frees up in time."""
-    return MODEL_POOL.get(timeout=timeout)
+    count_waiting("model", 1)
+    try:
+        return MODEL_POOL.get(timeout=timeout)
+    finally:
+        count_waiting("model", -1)
+
+
+def yield_to_waiters(kind: str) -> None:
+    """Let callers already waiting for this kind of instance take it before background work asks again.
+
+    Call it right after releasing an instance. Returns once nobody waits, or after YIELD_LIMIT_SECONDS.
+    """
+    deadline = time.monotonic() + YIELD_LIMIT_SECONDS
+    while WAITING[kind] > 0 and time.monotonic() < deadline:
+        time.sleep(0.02)
 
 
 def release_model(model: Any) -> None:
@@ -104,7 +135,11 @@ def diarizer_ready() -> bool:
 
 def acquire_diarizer(timeout: int = DIARIZER_ACQUIRE_TIMEOUT) -> Any:
     """Take a diarizer out of its pool; raises queue.Empty when none frees up in time."""
-    return DIARIZER_POOL.get(timeout=timeout)
+    count_waiting("diarizer", 1)
+    try:
+        return DIARIZER_POOL.get(timeout=timeout)
+    finally:
+        count_waiting("diarizer", -1)
 
 
 def release_diarizer(diarizer: Any) -> None:

@@ -106,6 +106,12 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:$STT_WWW_PORT/
 
 `docker compose logs stt_server` should have no `[ERROR]` line after start. The diarizer's loader prints one `image_like_kwargs` line in the same format, which comes from transformers and is harmless.
 
+### Jobs
+
+`POST /api/jobs` stores each job under `JOBS_DIR`, which compose puts in `./recs/jobs` on the host. The directory holds the upload until the job has run, then only the record and the result. Finished jobs are removed after `JOB_RETENTION_HOURS` (24). Jobs survive a restart: one that was running when the server stopped runs again from the start.
+
+Leave `OMP_NUM_THREADS=1` as the compose file sets it. The voice detector runs on the CPU, and with torch's default thread count it ran eight times slower on the GB10 host.
+
 ### Monitoring
 
 - `GET /api/health` is what the container healthcheck calls: the process is up and how many model instances are free.
@@ -114,6 +120,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:$STT_WWW_PORT/
   - `stt_pool_available` at 0 for long;
   - `stt_errors_total` growing in any category;
   - `stt_stream_skipped_seconds_total` growing, which means live sessions fall behind.
+  - `stt_jobs_total{status="failed"}` growing.
 
 ### Several workers
 

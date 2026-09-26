@@ -6,7 +6,7 @@ import logging
 import traceback
 
 import werkzeug.exceptions
-from flask import Flask, g, jsonify
+from flask import Flask, g, has_request_context, jsonify, request
 
 # Local imports
 from libs import config, metrics
@@ -15,7 +15,12 @@ logger = logging.getLogger(__name__)
 
 
 def get_request_id() -> str:
-    """Return the id assigned to the current request, or "-" when called outside one."""
+    """Return the id assigned to the current request, or "-" when called outside one.
+
+    Background threads (the job worker) call code that logs with a request id and have no request.
+    """
+    if not has_request_context():
+        return "-"
     return getattr(g, "request_id", "-")
 
 
@@ -61,8 +66,11 @@ def register_error_handlers(app: Flask) -> None:
     @app.errorhandler(413)
     def payload_too_large(error):
         """Return the generic body plus the configured upload limit."""
-        logger.warning("[%s] Payload too large (limit=%dMB)", get_request_id(), config.MAX_CONTENT_LENGTH_MB)
-        return build_error_response("Payload Too Large", 413, limit_mb=config.MAX_CONTENT_LENGTH_MB)
+        # The route's own limit: /api/jobs takes far larger files than the synchronous endpoints.
+        limit = request.max_content_length or config.MAX_CONTENT_LENGTH_MB * 1024 * 1024
+        limit_mb = limit // (1024 * 1024)
+        logger.warning("[%s] Payload too large (limit=%dMB)", get_request_id(), limit_mb)
+        return build_error_response("Payload Too Large", 413, limit_mb=limit_mb)
 
     @app.errorhandler(500)
     def internal_error(error):

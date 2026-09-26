@@ -23,6 +23,8 @@ services:
       CORS_ORIGINS: "*"
       GUNICORN_WORKERS: "4"
       WHISPER_DOWNLOAD_ROOT: "/opt/models"
+      # Background jobs live under the bind-mounted recs/, so they survive a container rebuild.
+      JOBS_DIR: "/opt/recs/jobs"
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
       # Force CPU backend.

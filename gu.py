@@ -82,6 +82,11 @@ def post_fork(server, worker):
 
             load_vad()
 
+    # Every worker runs a job thread; the per-job flock makes sure only one of them runs any job.
+    from libs.jobs import start_worker
+
+    start_worker()
+
     elapsed = time.monotonic() - start_time
     logger.info("Worker %s (pid %s): model pool ready (%.2fs)", worker.age, worker.pid, elapsed)
 

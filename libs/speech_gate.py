@@ -16,6 +16,7 @@ import io
 import logging
 import re
 import threading
+import time
 import traceback
 from typing import Any
 
@@ -33,6 +34,12 @@ SAMPLE_RATE = 16000
 # share below, and every hallucination on tone, noise, silence, ringback and music did.
 VAD_THRESHOLD = 0.35
 VAD_MIN_SPEECH_MS = 100
+
+# The detector runs over this much audio per turn of its lock; see detect_speech.
+VAD_WINDOW_SECONDS = 30
+
+# Two ranges this close across a window edge are one stretch of speech.
+WINDOW_JOIN_SECONDS = 0.1
 
 # A segment needs at least this share of its time inside detected speech to be kept.
 MIN_SPEECH_SHARE = 0.3
@@ -73,22 +80,41 @@ def detect_speech(samples: np.ndarray) -> list[tuple[float, float]]:
     """Speech ranges in seconds in 16 kHz mono float32 samples.
 
     Serialised by a lock: the detector keeps recurrent state between chunks and resets it per call,
-    so two requests sharing it at once would read each other's state.
+    so two requests sharing it at once would read each other's state. The audio is taken in windows
+    of VAD_WINDOW_SECONDS with the lock held for one window at a time: a background job running the
+    detector over an hour of audio would otherwise hold it for minutes, and every short request
+    behind it would wait that long - measured at 198 s on the deployment host.
     """
     import torch
     from silero_vad import get_speech_timestamps
 
     model = load_vad()
-    with VAD_LOCK:
-        found = get_speech_timestamps(
-            torch.from_numpy(np.ascontiguousarray(samples, dtype=np.float32)),
-            model,
-            sampling_rate=SAMPLE_RATE,
-            threshold=VAD_THRESHOLD,
-            min_speech_duration_ms=VAD_MIN_SPEECH_MS,
-            return_seconds=True,
-        )
-    return [(float(item["start"]), float(item["end"])) for item in found]
+    window = VAD_WINDOW_SECONDS * SAMPLE_RATE
+    ranges: list[tuple[float, float]] = []
+    for offset in range(0, max(1, samples.shape[0]), window):
+        piece = np.ascontiguousarray(samples[offset : offset + window], dtype=np.float32)
+        waiting_since = time.monotonic()
+        with VAD_LOCK:
+            waited = time.monotonic() - waiting_since
+            if waited > 1.0:
+                logger.info("Waited %.1fs for the voice detector", waited)
+            found = get_speech_timestamps(
+                torch.from_numpy(piece),
+                model,
+                sampling_rate=SAMPLE_RATE,
+                threshold=VAD_THRESHOLD,
+                min_speech_duration_ms=VAD_MIN_SPEECH_MS,
+                return_seconds=True,
+            )
+        base = offset / SAMPLE_RATE
+        for item in found:
+            begin, finish = base + float(item["start"]), base + float(item["end"])
+            # Speech that runs across a window edge comes back as two touching ranges: one again.
+            if ranges and begin - ranges[-1][1] < WINDOW_JOIN_SECONDS:
+                ranges[-1] = (ranges[-1][0], finish)
+            else:
+                ranges.append((begin, finish))
+    return ranges
 
 
 def find_speech(samples: np.ndarray, request_id: str = "-") -> list[tuple[float, float]] | None:
