@@ -16,15 +16,29 @@ from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Local imports
-from libs import align, audio, backends, catalog, config, diarize, live, logs, model_pool, speech_gate
-from libs.auth import token_required
+from libs import (
+    align,
+    audio,
+    backends,
+    catalog,
+    config,
+    diarize,
+    live,
+    logs,
+    metrics,
+    model_pool,
+    speech_gate,
+    stream,
+    url_source,
+)
+from libs.auth import is_valid_token, read_bearer_token, token_required
 from libs.errors import build_error_response, get_request_id, register_error_handlers
 
 logs.setup_logging()
 logger = logging.getLogger(__name__)
 
-# Path whose access log is demoted to DEBUG so healthchecks do not flood the log.
-QUIET_PATH = "/api/health"
+# Paths whose access log is demoted to DEBUG so healthchecks and scrapes do not flood the log.
+QUIET_PATHS = ("/api/health", "/metrics")
 
 
 def create_app() -> Flask:
@@ -40,6 +54,13 @@ def create_app() -> Flask:
 
 app = create_app()
 
+metrics.LIVE_STATE.update(
+    pools=model_pool.get_pool_status,
+    sessions=lambda: live.ACTIVE_SESSIONS,
+    url_sessions=lambda: url_source.URL_SESSIONS,
+)
+metrics.register_live_gauges()
+
 
 @app.before_request
 def before_request():
@@ -52,7 +73,8 @@ def before_request():
 def after_request(resp):
     """Log one access line per request with its id, status and duration."""
     elapsed = time.monotonic() - getattr(g, "request_start", time.monotonic())
-    log_request = logger.debug if request.path == QUIET_PATH else logger.info
+    metrics.observe_request(request.url_rule.rule if request.url_rule else None, request.method, resp.status_code, elapsed)
+    log_request = logger.debug if request.path in QUIET_PATHS else logger.info
     log_request(
         "[%s] %s %s: %s (%.2fs)",
         get_request_id(),
@@ -103,10 +125,73 @@ def convert_upload(bio):
         return None
 
 
+# How long the deep health check waits for a free model before reporting it busy rather than broken.
+DEEP_CHECK_TIMEOUT = 5
+
+
+def check_model(acquire, release, run) -> str:
+    """Borrow one pooled instance, run it once: "ok", "busy" when none frees up, or "failed"."""
+    try:
+        instance = acquire(timeout=DEEP_CHECK_TIMEOUT)
+    except queue.Empty:
+        return "busy"
+    try:
+        run(instance)
+        return "ok"
+    except Exception as exc:
+        logger.error(
+            "[%s] Deep health check failed: %s: %s\n%s", get_request_id(), type(exc).__name__, exc, traceback.format_exc()
+        )
+        return "failed"
+    finally:
+        release(instance)
+
+
+def run_deep_check() -> dict[str, str]:
+    """Push one second of silence through every loaded model, the way a request would."""
+    silence = np.zeros(speech_gate.SAMPLE_RATE, dtype=np.int16)
+    results = {
+        "transcriber": check_model(
+            model_pool.acquire_model,
+            model_pool.release_model,
+            lambda model: backends.transcriber().get_stt_segments(stream.encode_wav(silence), model=model, language=None),
+        )
+    }
+    if config.DIARIZE_ENABLED:
+        results["diarizer"] = check_model(
+            model_pool.acquire_diarizer,
+            model_pool.release_diarizer,
+            lambda diarizer: diarize.diarize_wav(stream.encode_wav(silence), diarizer=diarizer),
+        )
+    return results
+
+
 @app.route("/api/health", methods=["GET"])
 def health():
-    """Report service liveness and model pool occupancy; available=0 means all models are busy."""
-    return jsonify({"status": "ok", **model_pool.get_pool_status()}), 200
+    """Report service liveness and model pool occupancy; available=0 means all models are busy.
+
+    `?deep=1` also runs one second of silence through every loaded model and reports each as ok,
+    busy or failed, answering 503 if any failed. That costs GPU work, so while STT_TOKENS is set it
+    needs a token like every other route; the plain check stays open for container healthchecks.
+    """
+    body = {"status": "ok", **model_pool.get_pool_status()}
+    if request.args.get("deep", "").lower() not in config.TRUE_VALUES:
+        return jsonify(body), 200
+    if config.STT_TOKENS and not is_valid_token(read_bearer_token()):
+        logger.warning("[%s] Unauthorized deep health check", get_request_id())
+        return build_error_response("Unauthorized", 401)
+    body["deep"] = run_deep_check()
+    if "failed" in body["deep"].values():
+        body["status"] = "failed"
+        return jsonify(body), 503
+    return jsonify(body), 200
+
+
+@app.route("/metrics", methods=["GET"])
+def prometheus_metrics():
+    """Prometheus metrics. Open like /api/health, and like it not proxied by stt_www: scrape :STT_PORT."""
+    body, content_type = metrics.render()
+    return body, 200, {"Content-Type": content_type}
 
 
 @app.route("/api/models", methods=["GET"])
@@ -419,6 +504,11 @@ def build_asgi_app(wsgi_app):
     return asgi_app
 
 
+# The ASGI entry point for servers that take an application object rather than run main():
+# `gunicorn --config gu.py stt_server:asgi_app` with GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker.
+asgi_app = build_asgi_app(cast(Any, app.wsgi_app))
+
+
 def run_server() -> None:
     """Serve the app: the Flask dev server in debug mode, uvicorn otherwise.
 
@@ -431,9 +521,8 @@ def run_server() -> None:
 
     import uvicorn
 
-    wsgi_app = cast(Any, app.wsgi_app)
     uvicorn.run(
-        build_asgi_app(wsgi_app),
+        asgi_app,
         host=config.STT_HOST,
         port=config.STT_PORT,
         log_level=config.LOG_LEVEL.lower(),

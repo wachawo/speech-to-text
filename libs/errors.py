@@ -9,7 +9,7 @@ import werkzeug.exceptions
 from flask import Flask, g, jsonify
 
 # Local imports
-from libs import config
+from libs import config, metrics
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,7 @@ def build_error_response(error: str, status: int, **extra):
     Details never reach the client - the full exception goes to the log under the
     same request id, so a report can be correlated without leaking internals.
     """
+    metrics.count_error(error)
     body = {"error": error, "request_id": get_request_id()}
     body.update(extra)
     return jsonify(body), status

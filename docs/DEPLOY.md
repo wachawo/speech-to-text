@@ -106,6 +106,27 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:$STT_WWW_PORT/
 
 `docker compose logs stt_server` should have no `[ERROR]` line after start. The diarizer's loader prints one `image_like_kwargs` line in the same format, which comes from transformers and is harmless.
 
+### Monitoring
+
+- `GET /api/health` is what the container healthcheck calls: the process is up and how many model instances are free.
+- `GET /api/health?deep=1` runs one second of silence through every loaded model and answers `503` when one fails. It needs a token when `STT_TOKENS` is set.
+- `GET /metrics` on `STT_PORT` is the Prometheus endpoint (`stt_www` does not proxy it). The metrics to alert on:
+  - `stt_pool_available` at 0 for long;
+  - `stt_errors_total` growing in any category;
+  - `stt_stream_skipped_seconds_total` growing, which means live sessions fall behind.
+
+### Several workers
+
+`python3 stt_server.py` is one process with `STT_POOL_SIZE` models. For several processes, run gunicorn instead (`command:` in the compose file):
+
+```bash
+GUNICORN_WORKERS=2 GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker gunicorn --config gu.py stt_server:asgi_app
+```
+
+- **The live stream needs `UvicornWorker`.** The default `sync` workers serve the HTTP API only.
+- **Each worker loads its own models.** Two workers need twice the GPU memory.
+- **Every worker keeps its own metrics,** so a scrape sees one worker at a time.
+
 ### Dependencies
 
 `constraints.txt` holds every package version the GPU image resolved. All `pip install` steps in the Dockerfiles run with `-c constraints.txt`, so a rebuild installs the versions that were tested instead of whatever PyPI has that day. After a dependency change has been built and verified, freeze it with `make constraints` and commit the result.

@@ -25,9 +25,11 @@ bind = f"0.0.0.0:{stt_config.STT_PORT}"
 
 # Worker processes - sync is safest for CPU-bound torch/whisper inference.
 # gthread causes hangs because PyTorch's MKL/OpenBLAS thread pools
-# conflict with Gunicorn's threading model.
+# conflict with Gunicorn's threading model. GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker
+# (with `stt_server:asgi_app`) adds the live-stream websocket; it runs Flask in a thread pool
+# the way `python3 stt_server.py` always has, with OMP/MKL held to one thread in post_fork.
 workers = stt_config.GUNICORN_WORKERS
-worker_class = "sync"
+worker_class = stt_config.GUNICORN_WORKER_CLASS
 
 # Gunicorn 26 opens a control socket under $HOME by default. The server runs as `stt` with
 # HOME still /root, so it fails and logs an ERROR on every start, and nothing here uses it.

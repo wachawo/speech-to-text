@@ -38,3 +38,19 @@ jobs:
         run: uv pip install --system -e ".[dev]"
       - name: Run pytest
         run: pytest
+
+  # The Docker images CI can afford to build. The GPU image is left out: its CUDA base and the
+  # CUDA wheels need more disk than a hosted runner has, so it is built on the deployment host
+  # (docs/DEPLOY.md). These two catch a broken Dockerfile, requirements or nginx template.
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the CPU server image
+        run: docker build -f Dockerfile-cpu -t stt_server_cpu:ci .
+      - name: Import the server inside it
+        run: docker run --rm --entrypoint python stt_server_cpu:ci -c "import stt_server"
+      - name: Build the web UI image
+        run: docker build -f Dockerfile-www -t stt_www:ci .
+      - name: Check the rendered nginx config
+        run: docker run --rm -e STT_UPSTREAM=127.0.0.1:5099 -e STT_WWW_TLS_PORT=8443 stt_www:ci nginx -t

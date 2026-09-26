@@ -34,6 +34,9 @@ CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if 
 
 # Gunicorn worker processes (used only when the service is started through gu.py).
 GUNICORN_WORKERS = int(os.getenv("GUNICORN_WORKERS", "4"))
+# "sync" serves the HTTP API only. "uvicorn_worker.UvicornWorker" with `stt_server:asgi_app` also
+# serves the /api/stream websocket, which a WSGI worker cannot hold open.
+GUNICORN_WORKER_CLASS = os.getenv("GUNICORN_WORKER_CLASS", "sync")
 
 # Whisper backend
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small.en").lower()
