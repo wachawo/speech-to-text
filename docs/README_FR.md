@@ -44,7 +44,7 @@ docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
 ```
 
-La construction GPU nécessite `nvidia-container-toolkit` sur l'hôte. Le premier lancement télécharge le modèle Whisper dans `./models`.
+La construction GPU nécessite `nvidia-container-toolkit` sur l'hôte. Le premier lancement télécharge le modèle Whisper dans `./models`. L'exploitation sur un serveur - mises à jour, retours arrière, certificats, dépendances - est traitée dans [docs/DEPLOY.md](DEPLOY.md).
 
 ### Interface web
 
@@ -158,7 +158,7 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 1. Le client envoie `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}`. Tous les champs sauf `type` sont optionnels. `token` est le moyen pour un navigateur de s'authentifier, puisqu'il ne peut pas définir d'en-têtes sur un WebSocket ; les autres clients peuvent envoyer à la place `Authorization: Bearer <token>` lors de la poignée de main.
 2. Le serveur répond `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}`.
 3. Le client envoie du PCM brut - 16 bits signés little-endian, mono, 16 kHz - sous forme de messages binaires de taille quelconque, puis `{"type": "stop"}` lorsqu'il a terminé.
-4. Le serveur envoie un `segment` pour chaque phrase, `progress` environ une fois par seconde, et `done` avant de fermer :
+4. Le serveur envoie un `segment` pour chaque phrase, `progress` environ une fois par seconde, `skipped` avec les secondes d'audio abandonnées si la session prend un jour plus de deux minutes de retard, et `done` avant de fermer :
 
 ```json
 { "type": "segment", "id": 3, "start": 6.88, "end": 8.2, "text": "This is the second speaker.", "speaker": 1, "overlap": false }
@@ -230,6 +230,8 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | répertoire de cache des modèles de diarisation       |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | probabilité d'activité d'un locuteur comptée comme parole |
 | `SPEECH_GATE`           | `true`                  | écarte le texte transcrit que personne n'a prononcé (détecteur de voix) |
+| `STT_UID`, `STT_GID`    | (`stt` de l'image, 1001) | utilisateur hôte propriétaire de `models/`, `logs/`, `recs/` (Docker) |
+| `HF_HUB_OFFLINE`        | `0`                     | `1` une fois les modèles en cache : aucune requête au hub au démarrage |
 | `STT_WWW_PORT`          | `8080`                  | port http de l'interface web (compose)              |
 | `STT_WWW_TLS_PORT`      | `8443`                  | port https de l'interface web (compose)             |
 | `STT_URL`               | `http://localhost:5099` | client : URL de base du serveur                      |
@@ -264,7 +266,8 @@ speech-to-text/
 ├── Dockerfile-www       # Image de l'interface web (nginx)
 ├── nginx/               # Configuration de stt_www : interface statique, proxy /api/, TLS auto-signé
 ├── www/                 # Interface web : Vue 2 sans étape de build, bibliothèques embarquées
-├── docs/                # Traductions du README
+├── constraints.txt      # Chaque version de dépendance résolue par l'image testée
+├── docs/                # DEPLOY.md et les traductions du README
 └── tests/               # Tests pytest, sans téléchargement de modèle ni GPU
 ```
 
