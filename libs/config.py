@@ -68,6 +68,12 @@ DIARIZE_THRESHOLD = float(os.getenv("DIARIZE_THRESHOLD", "0.5"))
 # hallucinations on tone, music, noise and silence. On by default; off is the old behaviour.
 SPEECH_GATE = os.getenv("SPEECH_GATE", "true").lower() in TRUE_VALUES
 
+# Background jobs for long recordings (POST /api/jobs). The directory holds each job's upload, its
+# record and its result; in Docker it is under the bind-mounted recs/.
+JOBS_DIR = os.getenv("JOBS_DIR", "recs/jobs")
+JOB_MAX_CONTENT_LENGTH_MB = int(os.getenv("JOB_MAX_CONTENT_LENGTH_MB", "1024"))
+JOB_RETENTION_HOURS = float(os.getenv("JOB_RETENTION_HOURS", "24"))
+
 # CLI client
 STT_URL = os.getenv("STT_URL", "http://localhost:5099")
 STT_TOKEN = os.getenv("STT_TOKEN", "").strip()

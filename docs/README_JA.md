@@ -157,11 +157,25 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `overlap` は、そのフレーズの最中に別の人も話していたことを示します。NVIDIA は、従来の単一話者モデルをダイアライゼーションと組み合わせても、重なり合う発話のために作られたモデルと同等にはならないと明言しています。切り出した時間範囲には、そこに重なるすべての声が依然として含まれているため、そうしたフレーズは混ざり合ったり、別の話者の言葉を拾ってしまったりすることがあります。`overlap` が付いたセグメントは、文字起こしが最も信用できない箇所として扱ってください。
 
+**長い録音はジョブで処理します。** `POST /api/jobs` は `/api/stt` と同じ形式のボディを `JOB_MAX_CONTENT_LENGTH_MB`（1 GB）まで受け付け、さらに `mode` を取ります。`text`（デフォルト）、`speakers`（`/api/transcript` の結果）、`turns`（`/api/diarize` の結果）のいずれかです。応答はすぐに `202` で返り、ジョブの id とポーリング先の `Location` が付きます。
+
+```bash
+curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
+curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+```
+
+```json
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+```
+
+`status` は `queued`（`position` 付き）、`running` と進み、最後は `result` 付きの `done` か、`error` カテゴリ付きの `failed` になります。`GET /api/jobs` はジョブの一覧を返し、`DELETE /api/jobs/<id>` は実行中でないジョブを削除します。ジョブはファイルをポーズで区切った約 1 分ずつの断片に分けて処理し、断片の合間にモデルを返すため、実行中も短いリクエストには応答し続けます。デプロイ先の GPU では 30 分の録音に 107 秒かかり、その間に送られた通話のリクエストは最悪でも 10 秒でした。ダイアライゼーションはモデルのストリーミングモードでファイル全体を通して実行されるため、話者は最初の 1 分から最後の 1 分まで同じ番号を保ちます。ジョブは `JOBS_DIR` 配下のファイルなので再起動後も残り、完了したものは `JOB_RETENTION_HOURS` を過ぎると削除されます。
+
 `/api/stream` は**リアルタイム文字起こし**のための WebSocket です。音声は録音されるそばから送られ、各フレーズは話者が言葉を切ってから約 1 秒後に返ってきます。JSON のテキストメッセージが制御を、バイナリメッセージが音声を運びます。
 
 1. クライアントは `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}` を送ります。`type` 以外のフィールドはすべて省略可能です。`token` はブラウザが認証するための手段です。ブラウザは WebSocket にヘッダーを設定できないためです。それ以外のクライアントは、代わりにハンドシェイク時に `Authorization: Bearer <token>` を送っても構いません。
 2. サーバーは `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}` と応答します。
-3. クライアントは生の PCM（符号付き 16 ビット、リトルエンディアン、モノラル、16 kHz）を任意のサイズのバイナリメッセージとして送り、終わったら `{"type": "stop"}` を送ります。
+3. クライアントは生の PCM（符号付き 16 ビット、リトルエンディアン、モノラル、16 kHz）を任意のサイズのバイナリメッセージとして録音と同じペースで送り、終わったら `{"type": "stop"}` を送ります。実時間より速く送られたファイルは設計上遅れていき、フレーズを失います（後述の `skipped` を参照）。ファイルはジョブで処理してください。
 4. サーバーはフレーズごとに `segment` を、約 1 秒ごとに `progress` を送ります。セッションが 2 分以上遅れた場合は、破棄した音声の秒数を付けた `skipped` を送ります。閉じる前には `done` を送ります。
 
 ```json
@@ -234,6 +248,9 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_POOL_SIZE`     | `1`                     | 事前に読み込むダイアライザーインスタンスの数          |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | ダイアライゼーションモデルのキャッシュディレクトリ    |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | 発話とみなす話者アクティビティの確率                  |
+| `JOBS_DIR`              | `recs/jobs`             | ジョブがアップロード、記録、結果を置く場所          |
+| `JOB_MAX_CONTENT_LENGTH_MB` | `1024`              | ジョブのアップロードの最大サイズ（MB）              |
+| `JOB_RETENTION_HOURS`   | `24`                    | 完了したジョブを削除するまでの時間数                |
 | `SPEECH_GATE`           | `true`                  | 誰も話していない文字起こしテキストを除去（音声検出器） |
 | `STT_UID`, `STT_GID`    | （イメージの `stt`、1001） | `models/`、`logs/`、`recs/` を所有するホストユーザー（Docker） |
 | `HF_HUB_OFFLINE`        | `0`                     | モデルのキャッシュ後は `1`: 起動時に hub へリクエストしない |
@@ -263,6 +280,8 @@ speech-to-text/
 │   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
 │   ├── speech_gate.py   # voice detector that drops text nobody spoke
 │   ├── metrics.py       # Prometheus metrics for GET /metrics
+│   ├── jobs.py          # background jobs: stored on disk, claimed with a lock, run by a worker thread
+│   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND

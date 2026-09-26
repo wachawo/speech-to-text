@@ -157,11 +157,25 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `overlap`은 다른 사람도 함께 말하고 있던 구절을 표시합니다. NVIDIA는 일반적인 단일 화자 모델을 화자 분리와 짝짓는 것이 겹쳐 말하는 음성을 위해 만들어진 모델과 동등하지 않다고 분명히 밝히고 있습니다. 잘라낸 시간 구간에는 그 구간과 겹치는 모든 목소리가 여전히 들어 있으므로, 그런 구절들은 서로 섞이거나 엉뚱한 화자의 말을 고를 수 있습니다. `overlap`이 표시된 구간은 전사문에서 가장 신뢰하기 어려운 지점으로 다루십시오.
 
+**긴 녹음은 작업으로 처리합니다.** `POST /api/jobs`는 `/api/stt`와 같은 형태의 본문을 `JOB_MAX_CONTENT_LENGTH_MB`(1 GB)까지 받으며, 여기에 `mode`를 더합니다. `text`(기본값), `speakers`(`/api/transcript` 결과), `turns`(`/api/diarize` 결과) 중 하나입니다. 응답은 곧바로 `202`로 오며, 작업 id와 폴링할 `Location`이 함께 옵니다.
+
+```bash
+curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
+curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+```
+
+```json
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+```
+
+`status`는 `queued`(`position` 포함), `running`을 거쳐 `result`가 담긴 `done`이 되거나, `error` 범주가 담긴 `failed`가 됩니다. `GET /api/jobs`는 작업 목록을 보여 주고, `DELETE /api/jobs/<id>`는 실행 중이 아닌 작업을 삭제합니다. 작업은 파일을 멈춤에서 자른 약 1분 길이의 조각으로 나누어 처리하고 조각 사이마다 모델을 돌려주므로, 작업이 도는 동안에도 짧은 요청은 계속 응답을 받습니다. 배포 환경의 GPU에서 30분짜리 녹음은 107초가 걸렸고, 그동안 보낸 전화 통화 요청은 길어야 10초가 걸렸습니다. 화자 분리는 모델의 스트리밍 모드로 파일 전체에 걸쳐 실행되므로, 한 화자는 첫 1분부터 마지막 1분까지 같은 번호를 유지합니다. 작업은 `JOBS_DIR` 아래의 파일이므로 재시작 후에도 남으며, 끝난 작업은 `JOB_RETENTION_HOURS`가 지나면 삭제됩니다.
+
 `/api/stream`은 **실시간 전사**를 위한 WebSocket입니다. 오디오는 녹음되는 대로 들어가고, 각 구절은 화자가 말을 멈춘 뒤 약 1초 후에 돌아옵니다. JSON 텍스트 메시지는 제어를, 바이너리 메시지는 오디오를 전달합니다.
 
 1. 클라이언트가 `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}`을 보냅니다. `type`을 제외한 모든 필드는 선택 사항입니다. `token`은 브라우저가 인증하는 방법인데, 브라우저는 WebSocket에 헤더를 설정할 수 없기 때문입니다. 다른 클라이언트는 대신 핸드셰이크 때 `Authorization: Bearer <token>`을 보내도 됩니다.
 2. 서버가 `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}`로 응답합니다.
-3. 클라이언트는 원시 PCM(부호 있는 16비트, 리틀 엔디언, 모노, 16 kHz)을 임의 크기의 바이너리 메시지로 보내고, 끝나면 `{"type": "stop"}`을 보냅니다.
+3. 클라이언트는 원시 PCM(부호 있는 16비트, 리틀 엔디언, 모노, 16 kHz)을 임의 크기의 바이너리 메시지로 녹음되는 속도에 맞춰 보내고, 끝나면 `{"type": "stop"}`을 보냅니다. 실시간보다 빠르게 보낸 파일은 설계상 뒤처지며 구절을 잃습니다(아래의 `skipped` 참고). 파일은 작업으로 보내십시오.
 4. 서버는 구절마다 `segment`를, 약 1초마다 `progress`를 보내고, 세션이 2분 넘게 뒤처지는 일이 생기면 버린 오디오의 초 수와 함께 `skipped`를 보내며, 닫기 전에 `done`을 보냅니다.
 
 ```json
@@ -234,6 +248,9 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_POOL_SIZE`     | `1`                     | 미리 로드되는 화자 분리기 인스턴스 수              |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | 화자 분리 모델 캐시 디렉터리                       |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | 음성으로 간주하는 화자 활동 확률                   |
+| `JOBS_DIR`              | `recs/jobs`             | 작업이 업로드, 기록, 결과를 보관하는 곳             |
+| `JOB_MAX_CONTENT_LENGTH_MB` | `1024`              | 작업 하나의 최대 업로드 크기(MB)                    |
+| `JOB_RETENTION_HOURS`   | `24`                    | 끝난 작업을 삭제하기까지의 시간 수                  |
 | `SPEECH_GATE`           | `true`                  | 아무도 말하지 않은 전사 텍스트 제거(음성 검출기)    |
 | `STT_UID`, `STT_GID`    | (이미지의 `stt`, 1001)  | `models/`, `logs/`, `recs/`를 소유하는 호스트 사용자(Docker) |
 | `HF_HUB_OFFLINE`        | `0`                     | 모델이 캐시된 뒤 `1`: 시작 시 허브 요청 없음        |
@@ -263,6 +280,8 @@ speech-to-text/
 │   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
 │   ├── speech_gate.py   # voice detector that drops text nobody spoke
 │   ├── metrics.py       # Prometheus metrics for GET /metrics
+│   ├── jobs.py          # background jobs: stored on disk, claimed with a lock, run by a worker thread
+│   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND

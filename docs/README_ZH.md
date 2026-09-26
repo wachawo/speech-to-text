@@ -157,11 +157,25 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `overlap` 标记的是在该语句期间还有其他人同时在说话。NVIDIA 明确指出，将传统的单说话人模型与说话人分离配合使用，并不等同于一个为重叠语音而构建的模型：被截取出来的时间区间里仍然包含所有与之重叠的声音，因此这些语句可能会混在一起，或者选中错误说话人的话语。把标记了 `overlap` 的片段视为转录结果最不可信的地方。
 
+**长录音通过任务处理。** `POST /api/jobs` 接受与 `/api/stt` 相同的请求体形式，上限为 `JOB_MAX_CONTENT_LENGTH_MB`（1 GB），另加一个 `mode`：`text`（默认）、`speakers`（即 `/api/transcript` 的结果）或 `turns`（即 `/api/diarize` 的结果）。它会立即返回 `202`，附带任务的 id 和一个用于轮询的 `Location`：
+
+```bash
+curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
+curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+```
+
+```json
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+```
+
+`status` 依次经历 `queued`（附带其 `position`）、`running`，然后是带有 `result` 的 `done`，或带有 `error` 类别的 `failed`。`GET /api/jobs` 列出所有任务，`DELETE /api/jobs/<id>` 删除一个未在运行的任务。任务把文件在停顿处切成约一分钟一段逐段处理，并在段与段之间归还模型，因此任务运行期间短请求依然能得到响应：在部署所用的 GPU 上，一段 30 分钟的录音耗时 107 秒，其间发送的电话通话请求最多耗时 10 秒。说话人分离以模型的流式模式贯穿整个文件运行，因此同一说话人从第一分钟到最后一分钟都保持同一个编号。任务以文件形式保存在 `JOBS_DIR` 下，因此重启后依然存在，已完成的任务会在 `JOB_RETENTION_HOURS` 之后被删除。
+
 `/api/stream` 是一个用于**实时转录**的 WebSocket：音频边录制边送入，每个语句会在说话人停顿约一秒后返回。JSON 文本消息承载控制信息，二进制消息承载音频：
 
 1. 客户端发送 `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}`。除 `type` 外的所有字段都是可选的。`token` 是浏览器进行身份验证的方式，因为浏览器无法在 WebSocket 上设置请求头；其他客户端也可以改为在握手时发送 `Authorization: Bearer <token>`。
 2. 服务器回应 `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}`。
-3. 客户端以任意大小的二进制消息发送原始 PCM（有符号 16 位、小端序、单声道、16 kHz），完成后发送 `{"type": "stop"}`。
+3. 客户端按录制的速度，以任意大小的二进制消息发送原始 PCM（有符号 16 位、小端序、单声道、16 kHz），完成后发送 `{"type": "stop"}`。以快于实时的速度发送的文件按设计会逐渐落后并丢失语句（见下文的 `skipped`）；文件应当交给任务处理。
 4. 服务器为每个语句发送一条 `segment`，大约每秒发送一次 `progress`；如果会话一度落后超过两分钟，还会发送 `skipped`，其中给出被丢弃音频的秒数；并在关闭前发送 `done`：
 
 ```json
@@ -234,6 +248,9 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_POOL_SIZE`     | `1`                     | 预加载的说话人分离实例数量                         |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | 说话人分离模型缓存目录                             |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | 判定为语音的说话人活动概率                         |
+| `JOBS_DIR`              | `recs/jobs`             | 任务存放上传文件、记录和结果的位置                  |
+| `JOB_MAX_CONTENT_LENGTH_MB` | `1024`              | 单个任务的最大上传大小（MB）                        |
+| `JOB_RETENTION_HOURS`   | `24`                    | 已完成的任务在多少小时后被删除                      |
 | `SPEECH_GATE`           | `true`                  | 丢弃无人说出的转录文本（语音检测器）                |
 | `STT_UID`, `STT_GID`    | （镜像中的 `stt`，1001） | 拥有 `models/`、`logs/`、`recs/` 的主机用户（Docker） |
 | `HF_HUB_OFFLINE`        | `0`                     | 模型缓存完成后设为 `1`：启动时不再请求 hub          |
@@ -263,6 +280,8 @@ speech-to-text/
 │   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
 │   ├── speech_gate.py   # voice detector that drops text nobody spoke
 │   ├── metrics.py       # Prometheus metrics for GET /metrics
+│   ├── jobs.py          # background jobs: stored on disk, claimed with a lock, run by a worker thread
+│   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND

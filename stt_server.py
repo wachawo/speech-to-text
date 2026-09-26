@@ -5,6 +5,7 @@
 import io
 import logging
 import queue
+import shutil
 import time
 import traceback
 import uuid
@@ -23,6 +24,7 @@ from libs import (
     catalog,
     config,
     diarize,
+    jobs,
     live,
     logs,
     metrics,
@@ -36,6 +38,8 @@ from libs.errors import build_error_response, get_request_id, register_error_han
 
 logs.setup_logging()
 logger = logging.getLogger(__name__)
+
+JOBS_PATH = "/api/jobs"
 
 # Paths whose access log is demoted to DEBUG so healthchecks and scrapes do not flood the log.
 QUIET_PATHS = ("/api/health", "/metrics")
@@ -67,6 +71,9 @@ def before_request():
     """Tag the request so every log line and every error body can be correlated."""
     g.request_id = uuid.uuid4().hex[:12]
     g.request_start = time.monotonic()
+    # A job exists for recordings too long for a synchronous request, so it takes far larger files.
+    if request.path == JOBS_PATH and request.method == "POST":
+        request.max_content_length = config.JOB_MAX_CONTENT_LENGTH_MB * 1024 * 1024
 
 
 @app.after_request
@@ -471,6 +478,113 @@ def transcribe_by_speaker():
     )
 
 
+def job_view(job: dict[str, Any]) -> dict[str, Any]:
+    """What a client sees of a job record, with its place in the queue while it waits."""
+    view = {
+        key: job.get(key)
+        for key in (
+            "id",
+            "status",
+            "mode",
+            "language",
+            "filename",
+            "size",
+            "created",
+            "started",
+            "finished",
+            "seconds",
+            "error",
+        )
+    }
+    view["position"] = jobs.queue_position(job)
+    return view
+
+
+def diarization_refusal():
+    """The 503 for a mode that needs the diarizer when there is none, or None when there is one."""
+    if not config.DIARIZE_ENABLED:
+        return build_error_response("Diarization disabled", 503)
+    if not model_pool.diarizer_ready():
+        return build_error_response("Diarization unavailable", 503)
+    return None
+
+
+@app.route(JOBS_PATH, methods=["POST"])
+@token_required
+def submit_job():
+    """Accept a recording for background processing and answer at once with the job's id.
+
+    The same body shapes as /api/stt, up to JOB_MAX_CONTENT_LENGTH_MB. `mode` is `text` (the
+    default), `speakers` (the /api/transcript result) or `turns` (the /api/diarize result);
+    `language` as everywhere else. The upload is written to disk as it arrives, never held whole
+    in memory. Returns 202 with the job record and a Location to poll.
+    """
+    mode = (request.args.get("mode") or request.form.get("mode") or "text").strip().lower()
+    if mode not in jobs.MODES:
+        return build_error_response("Invalid mode", 400)
+    if mode != "text":
+        refusal = diarization_refusal()
+        if refusal is not None:
+            return refusal
+    language = read_language_argument()
+    if language is not None:
+        language = backends.resolve_language(language)
+        if language is None:
+            return build_error_response("Invalid language", 400)
+    if "file" in request.files:
+        upload = request.files["file"]
+        filename = upload.filename or "upload"
+
+        def save_input(path):
+            """Stream the multipart file to disk."""
+            upload.save(path)
+
+    elif request.content_length:
+        filename = "raw_body"
+
+        def save_input(path):
+            """Stream the raw body to disk."""
+            with open(path, "wb") as handle:
+                shutil.copyfileobj(request.stream, handle)
+
+    else:
+        return build_error_response("No audio data", 400)
+    job = jobs.create_job(save_input, filename, mode, language)
+    return jsonify(job_view(job)), 202, {"Location": f"{JOBS_PATH}/{job['id']}"}
+
+
+@app.route(JOBS_PATH, methods=["GET"])
+@token_required
+def list_jobs():
+    """The jobs on this server, newest first, without their results."""
+    return jsonify({"jobs": [job_view(job) for job in reversed(jobs.all_jobs())]}), 200
+
+
+@app.route(f"{JOBS_PATH}/<job_id>", methods=["GET"])
+@token_required
+def get_job(job_id):
+    """A job's state, and its result once it is done - the same shape as the matching endpoint."""
+    job = jobs.read_job(job_id)
+    if job is None:
+        return build_error_response("Job not found", 404)
+    view = job_view(job)
+    if job["status"] == "done":
+        view["result"] = jobs.read_result(job_id)
+    return jsonify(view), 200
+
+
+@app.route(f"{JOBS_PATH}/<job_id>", methods=["DELETE"])
+@token_required
+def remove_job(job_id):
+    """Delete a job and its files. A job being processed right now cannot be deleted: 409."""
+    outcome = jobs.delete_job(job_id)
+    if outcome == "missing":
+        return build_error_response("Job not found", 404)
+    if outcome == "running":
+        return build_error_response("Job is running", 409)
+    return jsonify({"deleted": job_id}), 200
+
+
 def log_auth_mode() -> None:
     """State at startup whether the endpoint is protected, so it is never a surprise."""
     if config.STT_TOKENS:
@@ -537,6 +651,7 @@ def main():
     model_pool.init_diarizer_pool()
     if config.SPEECH_GATE:
         speech_gate.find_speech(np.zeros(speech_gate.SAMPLE_RATE, dtype=np.float32))
+    jobs.start_worker()
     log_auth_mode()
     run_server()
 

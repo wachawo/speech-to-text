@@ -3,6 +3,12 @@
 ### [Unreleased]
 
 #### Added
+- **Background jobs for long recordings, `/api/jobs`.** Upload up to 1 GB, get an id at once,
+  fetch the result later: plain text, who said what, or who spoke when. The file is worked through
+  in pieces of about a minute cut at pauses, and the model goes back to the pool between them, so
+  short requests keep being answered: a 30-minute recording took 107 s on the deployment GPU
+  while phone-call-sized requests alongside it took 10 s at worst. Speakers keep one number across
+  the whole file. Jobs survive a restart and are removed after `JOB_RETENTION_HOURS`.
 - **`GET /metrics` for Prometheus:** requests by route and status with durations, error
   responses by category, pool sizes and free instances, live sessions, segments dropped by the
   speech gate, live audio shed by a session that fell behind.
@@ -197,6 +203,8 @@
   mounted dirs and drops privileges via `setpriv` before starting the server.
 
 #### Changed
+- **The voice detector takes its lock per 30 s window**, so a long file's detection no longer
+  holds every short request's speech gate for its whole length.
 - **Builds are reproducible.** Every install step runs with `-c constraints.txt`, the versions
   of the last verified image (`make constraints` refreshes it), and the uv image is pinned; a
   moving `uv:latest` had thrown away the layer cache and cost a 20-minute rebuild. The GPU image

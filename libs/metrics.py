@@ -27,6 +27,7 @@ ERRORS = Counter("stt_errors_total", "Error responses by category", ["category"]
 STREAM_SESSIONS = Counter("stt_stream_sessions_total", "Live sessions started", ["source"])
 DROPPED_SEGMENTS = Counter("stt_speech_gate_dropped_total", "Transcribed segments dropped as not spoken")
 SKIPPED_SECONDS = Counter("stt_stream_skipped_seconds_total", "Queued live audio shed by a session that fell behind")
+JOBS = Counter("stt_jobs_total", "Background jobs by the status they reached", ["status"])
 
 # Filled in by the modules that own the numbers, so this one imports none of them.
 LIVE_STATE: dict[str, Any] = {"pools": lambda: {}, "sessions": lambda: 0, "url_sessions": lambda: 0}

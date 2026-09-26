@@ -157,11 +157,25 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `overlap` उस वाक्यांश को चिह्नित करता है जिसके दौरान कोई और भी बोल रहा था। NVIDIA स्पष्ट रूप से कहता है कि किसी पारंपरिक एकल-स्पीकर मॉडल को डायराइज़ेशन के साथ जोड़ना, ओवरलैपिंग वाक् के लिए बनाए गए मॉडल के समतुल्य नहीं है: निकाले गए समय-अंतराल में वे सभी आवाज़ें मौजूद रहती हैं जो उस पर ओवरलैप करती हैं, इसलिए ऐसे वाक्यांश आपस में मिल सकते हैं या ग़लत स्पीकर के शब्द चुन सकते हैं। `overlap` से चिह्नित सेगमेंट को उस जगह के रूप में लें जहाँ ट्रांसक्रिप्ट सबसे कम भरोसेमंद है।
 
+**लंबी रिकॉर्डिंग एक जॉब से होकर जाती हैं।** `POST /api/jobs` वही बॉडी रूप स्वीकार करता है जो `/api/stt`, `JOB_MAX_CONTENT_LENGTH_MB` (1 GB) तक, साथ में एक `mode`: `text` (डिफ़ॉल्ट), `speakers` (`/api/transcript` का परिणाम) या `turns` (`/api/diarize` का परिणाम)। यह तुरंत `202` के साथ जॉब की id और पोल करने के लिए एक `Location` लौटाता है:
+
+```bash
+curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
+curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+```
+
+```json
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+```
+
+`status` पहले `queued` (अपनी `position` के साथ), फिर `running`, और फिर `result` के साथ `done` या `error` श्रेणी के साथ `failed` होता है। `GET /api/jobs` जॉब की सूची देता है और `DELETE /api/jobs/<id>` ऐसा जॉब हटाता है जो चल नहीं रहा हो। एक जॉब फ़ाइल को लगभग एक मिनट के टुकड़ों में, विरामों पर काटकर, संसाधित करता है और टुकड़ों के बीच मॉडल लौटा देता है, इसलिए उसके चलते समय भी छोटे अनुरोधों का उत्तर मिलता रहता है: डिप्लॉयमेंट के GPU पर 30 मिनट की रिकॉर्डिंग में 107 सेकंड लगे, और उस दौरान भेजे गए फ़ोन कॉल वाले अनुरोधों में अधिक से अधिक 10 सेकंड लगे। डायराइज़ेशन मॉडल के स्ट्रीमिंग मोड में पूरी फ़ाइल पर चलता है, इसलिए एक स्पीकर की संख्या पहले मिनट से आख़िरी मिनट तक वही रहती है। जॉब `JOBS_DIR` के अंतर्गत फ़ाइलें हैं, इसलिए वे रीस्टार्ट के बाद भी बचे रहते हैं, और पूरे हो चुके जॉब `JOB_RETENTION_HOURS` के बाद हटा दिए जाते हैं।
+
 `/api/stream` **लाइव ट्रांसक्रिप्शन** के लिए एक वेबसॉकेट है: ऑडियो रिकॉर्ड होते-होते भीतर जाता है, और हर वाक्यांश स्पीकर के रुकने के लगभग एक सेकंड बाद वापस आता है। JSON टेक्स्ट संदेश नियंत्रण ले जाते हैं, बाइनरी संदेश ऑडियो:
 
 1. क्लाइंट `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}` भेजता है। `type` को छोड़कर हर फ़ील्ड वैकल्पिक है। `token` वह तरीका है जिससे ब्राउज़र प्रमाणीकरण करता है, क्योंकि वह वेबसॉकेट पर हेडर सेट नहीं कर सकता; अन्य क्लाइंट इसके बजाय हैंडशेक पर `Authorization: Bearer <token>` भेज सकते हैं।
 2. सर्वर `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}` के साथ उत्तर देता है।
-3. क्लाइंट कच्चा PCM - signed 16-bit, little-endian, मोनो, 16 kHz - किसी भी आकार के बाइनरी संदेशों के रूप में भेजता है, और काम पूरा होने पर `{"type": "stop"}` भेजता है।
+3. क्लाइंट कच्चा PCM - signed 16-bit, little-endian, मोनो, 16 kHz - किसी भी आकार के बाइनरी संदेशों के रूप में, उसी गति से जिससे वह रिकॉर्ड होता है, भेजता है, और काम पूरा होने पर `{"type": "stop"}` भेजता है। रियल टाइम से तेज़ भेजी गई फ़ाइल डिज़ाइन के अनुसार पीछे छूट जाती है और वाक्यांश खो देती है (नीचे `skipped` देखें); फ़ाइल को जॉब में भेजना चाहिए।
 4. सर्वर हर वाक्यांश के लिए एक `segment`, लगभग हर सेकंड एक `progress`, सत्र के कभी दो मिनट से अधिक पीछे रह जाने पर छोड़े गए ऑडियो के सेकंड के साथ `skipped`, और बंद करने से पहले `done` भेजता है:
 
 ```json
@@ -234,6 +248,9 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_POOL_SIZE`     | `1`                     | पहले से लोड किए गए डायराइज़र इंस्टेंस                 |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | डायराइज़ेशन मॉडल कैश डायरेक्टरी                       |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | स्पीकर सक्रियता संभावना जिसे वाक् माना जाए             |
+| `JOBS_DIR`              | `recs/jobs`             | जहाँ जॉब अपना अपलोड, रिकॉर्ड और परिणाम रखते हैं          |
+| `JOB_MAX_CONTENT_LENGTH_MB` | `1024`              | एक जॉब का अधिकतम अपलोड आकार MB में                    |
+| `JOB_RETENTION_HOURS`   | `24`                    | इतने घंटे बाद पूरे हो चुके जॉब हटा दिए जाते हैं               |
 | `SPEECH_GATE`           | `true`                  | वह ट्रांसक्राइब किया टेक्स्ट हटाएँ जिसे किसी ने नहीं बोला (वॉइस डिटेक्टर) |
 | `STT_UID`, `STT_GID`    | (इमेज का `stt`, 1001)    | `models/`, `logs/`, `recs/` का स्वामी होस्ट उपयोगकर्ता (Docker) |
 | `HF_HUB_OFFLINE`        | `0`                     | मॉडल कैश हो जाने पर `1`: स्टार्ट पर hub अनुरोध नहीं       |
@@ -263,6 +280,8 @@ speech-to-text/
 │   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
 │   ├── speech_gate.py   # voice detector that drops text nobody spoke
 │   ├── metrics.py       # Prometheus metrics for GET /metrics
+│   ├── jobs.py          # background jobs: stored on disk, claimed with a lock, run by a worker thread
+│   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND

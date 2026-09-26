@@ -157,11 +157,25 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `overlap` contrassegna una frase durante la quale stava parlando anche qualcun altro. NVIDIA afferma esplicitamente che abbinare un modello convenzionale a parlante singolo alla diarizzazione non equivale a un modello costruito per il parlato sovrapposto: un intervallo temporale estratto contiene comunque ogni voce che vi si sovrappone, quindi quelle frasi possono fondersi tra loro oppure selezionare le parole del parlante sbagliato. Considera un segmento contrassegnato con `overlap` come il punto in cui la trascrizione è meno affidabile.
 
+**Le registrazioni lunghe passano da un job.** `POST /api/jobs` accetta le stesse forme di corpo di `/api/stt`, fino a `JOB_MAX_CONTENT_LENGTH_MB` (1 GB), più un `mode`: `text` (il predefinito), `speakers` (il risultato di `/api/transcript`) o `turns` (il risultato di `/api/diarize`). Risponde subito `202` con l'id del job e una `Location` da interrogare:
+
+```bash
+curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
+curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+```
+
+```json
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+```
+
+`status` passa per `queued` (con la sua `position`), `running`, poi `done` con il `result`, oppure `failed` con una categoria `error`. `GET /api/jobs` li elenca e `DELETE /api/jobs/<id>` ne rimuove uno che non è in esecuzione. Un job elabora il file a pezzi di circa un minuto, tagliati sulle pause, e restituisce il modello tra un pezzo e l'altro, così le richieste brevi continuano a ricevere risposta mentre è in corso: una registrazione di 30 minuti ha richiesto 107 s sulla GPU del deploy, e le richieste di telefonate inviate nel frattempo hanno richiesto al massimo 10 s. La diarizzazione percorre l'intero file nella modalità streaming del modello, così un parlante mantiene lo stesso numero dal primo all'ultimo minuto. I job sono file sotto `JOBS_DIR`, quindi sopravvivono a un riavvio, e quelli terminati vengono rimossi dopo `JOB_RETENTION_HOURS`.
+
 `/api/stream` è un WebSocket per la **trascrizione in tempo reale**: l'audio entra man mano che viene registrato, e ogni frase torna circa un secondo dopo che il parlante fa una pausa. I messaggi di testo JSON trasportano il controllo, i messaggi binari trasportano l'audio:
 
 1. Il client invia `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}`. Tutti i campi tranne `type` sono opzionali. `token` è il modo in cui un browser si autentica, dato che non può impostare header su un WebSocket; gli altri client possono invece inviare `Authorization: Bearer <token>` durante l'handshake.
 2. Il server risponde `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}`.
-3. Il client invia PCM grezzo - 16 bit con segno, little-endian, mono, 16 kHz - come messaggi binari di qualsiasi dimensione, e `{"type": "stop"}` quando ha finito.
+3. Il client invia PCM grezzo - 16 bit con segno, little-endian, mono, 16 kHz - come messaggi binari di qualsiasi dimensione, al ritmo con cui viene registrato, e `{"type": "stop"}` quando ha finito. Un file inviato più velocemente del tempo reale resta indietro per scelta progettuale e perde frasi (vedi `skipped` più sotto); un file va in un job.
 4. Il server invia un `segment` per ogni frase, `progress` circa una volta al secondo, `skipped` con i secondi di audio scartati se la sessione accumula più di due minuti di ritardo, e `done` prima di chiudere:
 
 ```json
@@ -234,6 +248,9 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_POOL_SIZE`     | `1`                     | istanze di diarizzazione precaricate               |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | directory della cache del modello di diarizzazione |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | probabilità di attività del parlante contata come voce |
+| `JOBS_DIR`              | `recs/jobs`             | dove i job tengono upload, record e risultato       |
+| `JOB_MAX_CONTENT_LENGTH_MB` | `1024`              | dimensione massima dell'upload di un job in MB      |
+| `JOB_RETENTION_HOURS`   | `24`                    | ore dopo le quali i job terminati vengono rimossi   |
 | `SPEECH_GATE`           | `true`                  | scarta il testo trascritto che nessuno ha pronunciato (rilevatore di voce) |
 | `STT_UID`, `STT_GID`    | (`stt` dell'immagine, 1001) | utente dell'host proprietario di `models/`, `logs/`, `recs/` (Docker) |
 | `HF_HUB_OFFLINE`        | `0`                     | `1` una volta messi in cache i modelli: nessuna richiesta all'hub all'avvio |
@@ -263,6 +280,8 @@ speech-to-text/
 │   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
 │   ├── speech_gate.py   # voice detector that drops text nobody spoke
 │   ├── metrics.py       # Prometheus metrics for GET /metrics
+│   ├── jobs.py          # background jobs: stored on disk, claimed with a lock, run by a worker thread
+│   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND
