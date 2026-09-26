@@ -340,3 +340,27 @@ def test_advance_diarization_borrows_and_returns_a_diarizer(monkeypatch):
     with pytest.raises(RuntimeError):
         stream.advance_diarization(state, buffer, until=8, final=False)
     assert pool.qsize() == 1
+
+
+def test_cut_utterance_closes_the_open_phrase_and_goes_on():
+    """A cut inside an open utterance closes it there, and the next one starts at the same sample."""
+    buffer = build_buffer(make_tone(3.0))
+    segmenter = stream.new_segmenter()
+    assert stream.advance_segmenter(segmenter, buffer) == []
+    closed = stream.cut_utterance(segmenter, int(1.5 * RATE))
+    assert closed == {"start": 0, "end": int(1.5 * RATE)}
+    assert segmenter["in_speech"] and segmenter["speech_start"] == int(1.5 * RATE)
+    stream.append_samples(buffer, make_silence(1.0))
+    tail = stream.advance_segmenter(segmenter, buffer, final=True)
+    assert tail[0]["start"] == int(1.5 * RATE)
+
+
+def test_cut_utterance_does_nothing_outside_an_open_phrase():
+    """No open utterance, or a cut point outside it, changes nothing."""
+    segmenter = stream.new_segmenter()
+    assert stream.cut_utterance(segmenter, RATE) is None
+    buffer = build_buffer(make_tone(2.0))
+    stream.advance_segmenter(segmenter, buffer)
+    assert stream.cut_utterance(segmenter, 0) is None
+    assert stream.cut_utterance(segmenter, 5 * RATE) is None
+    assert segmenter["speech_start"] == 0

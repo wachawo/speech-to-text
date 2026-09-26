@@ -75,6 +75,10 @@ def post_fork(server, worker):
         # Inside the same lock on purpose: both models download to disk on first run, and two
         # workers racing to fetch them is the problem this lock exists to prevent.
         init_diarizer_pool()
+        if stt_config.SPEECH_GATE:
+            from libs.speech_gate import load_vad
+
+            load_vad()
 
     elapsed = time.monotonic() - start_time
     logger.info("Worker %s (pid %s): model pool ready (%.2fs)", worker.age, worker.pid, elapsed)

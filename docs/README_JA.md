@@ -172,7 +172,9 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 失敗は 1 つの `{"type": "error", "error": "<category>", "request_id": "..."}` として届き、その後に接続が閉じられます。カテゴリは HTTP のエラーカテゴリに加えて、`Invalid start message`、`Invalid audio frame`、`Invalid stream URL`、`Stream source failed`、`Forbidden` があります。
 
-フレーズは 0.6 秒のポーズで区切られるか、15 秒を超えた場合は最も静かな箇所で区切られます。各フレーズはアップロードと同じプールから借りたモデルで個別に文字起こしされるため、プールが混んでいてもリアルタイムのフレーズは失敗せず、遅れるだけです。`diarize` を指定すると、ダイアライザーはストリーミングモードで動作し、チャンクからチャンクへ話者キャッシュを引き継ぐため、セッション全体を通じて同じ話者は同じ番号を保ちます。このソケットは、サーバーが uvicorn で動いている場合（`python3 stt_server.py`、Docker のデフォルト）にのみ存在します。Flask のデバッグサーバーと gunicorn の sync ワーカーは WebSocket を扱えません。
+フレーズは 0.6 秒のポーズで区切られるか、ダイアライザーがある話者から別の話者への交代を聞き取った箇所で区切られるか（`diarize` 指定時。互いに応答し合う人どうしの間は 0.6 秒に満たないことが多いため）、15 秒を超えた場合は最も静かな箇所で区切られます。各フレーズはアップロードと同じプールから借りたモデルで個別に文字起こしされるため、プールが混んでいてもリアルタイムのフレーズは失敗せず、遅れるだけです。`diarize` を指定すると、ダイアライザーはストリーミングモードで動作し、チャンクからチャンクへ話者キャッシュを引き継ぐため、セッション全体を通じて同じ話者は同じ番号を保ちます。このソケットは、サーバーが uvicorn で動いている場合（`python3 stt_server.py`、Docker のデフォルト）にのみ存在します。Flask のデバッグサーバーと gunicorn の sync ワーカーは WebSocket を扱えません。
+
+**返されるのは実際に話されたテキストだけです。** 発話がない箇所（トーン、音楽、ノイズ、呼び出し音、さらにはデジタル無音）では、Whisper は学習元となった字幕付き動画のクレジットで答えてしまいます（ロシア語の "字幕制作: DimaTorzok" というクレジット、"つづく..."、"ご視聴ありがとうございました。"）。しかも完全な自信を持ってそうします。テストコーパスでは、無音に対してさえ Whisper 自身の `no_speech_prob` は 0.00 でした。そのため、すべてのエンドポイントは音声に対して音声検出器 Silero VAD を実行し、検出された発話の外側に大部分がある文字起こしセグメントと、字幕クレジットの 1 行そのものであるセグメントを取り除きます。発話を含まない 9 件の録音からなるコーパスでは、これによりそうした行がすべて取り除かれ、発話を含む録音のフレーズは 1 つも失われませんでした。何も話されていない録音は、今では空のテキストになります。ライブストリームでは、発話が検出されなかったフレーズはモデルに送られることすらありません。検出器は CPU 上で動作し、音声 3 分あたり約 1 秒の処理時間が加わります。`SPEECH_GATE=false` で以前の動作に戻せます。
 
 アップロードは `MAX_CONTENT_LENGTH_MB`（デフォルトで 10 MB）に制限されており、それより大きいボディは `413` を返します。
 
@@ -227,6 +229,7 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_POOL_SIZE`     | `1`                     | 事前に読み込むダイアライザーインスタンスの数          |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | ダイアライゼーションモデルのキャッシュディレクトリ    |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | 発話とみなす話者アクティビティの確率                  |
+| `SPEECH_GATE`           | `true`                  | 誰も話していない文字起こしテキストを除去（音声検出器） |
 | `STT_WWW_PORT`          | `8080`                  | Web UI の http ポート（compose）                    |
 | `STT_WWW_TLS_PORT`      | `8443`                  | Web UI の https ポート（compose）                   |
 | `STT_URL`               | `http://localhost:5099` | クライアント: サーバーのベース URL                    |
@@ -251,6 +254,7 @@ speech-to-text/
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
 │   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
+│   ├── speech_gate.py   # voice detector that drops text nobody spoke
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND

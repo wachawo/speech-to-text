@@ -3,6 +3,18 @@
 ### [Unreleased]
 
 #### Added
+- **Only spoken text is returned.** A voice detector (Silero VAD) now vets every transcript:
+  a segment that lies mostly outside detected speech is dropped, and so is a whole-segment
+  subtitle credit line. Before, Whisper answered a tone with a Russian "subtitles by
+  DimaTorzok" credit, noise and even digital silence with "to be continued...", and music with
+  both; on a
+  corpus of nine such recordings every one of them came back as text on every endpoint, and
+  now none does, while every phrase of the speech recordings is kept. Whisper's own
+  `no_speech_prob` was 0.00 even on silence, which is why its confidence is not used. A live
+  phrase with no speech in it is not sent to the model at all. `SPEECH_GATE=false` turns it off.
+- **A live phrase is cut where the speaker changes.** With `diarize`, `/api/stream` no longer
+  waits for a 0.6 s pause that a quick reply does not leave: it closes the phrase where the
+  diarizer hears one speaker hand over to another.
 - **A STREAM source in the web UI.** Beside FILE and DEVICE, STREAM takes the address of a
   stream or a remote file and has the server read it, so the UI shows every way the service
   takes audio.

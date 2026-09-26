@@ -199,7 +199,9 @@ Because this makes the server fetch an address a client chose, it is fenced in. 
 
 A failure is one `{"type": "error", "error": "<category>", "request_id": "..."}` followed by a close, with the HTTP error categories plus `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed` and `Forbidden`.
 
-A phrase ends at a pause of 0.6 s, or at its quietest moment once it runs past 15 s, and is transcribed on its own with a model borrowed from the same pool as the uploads, so a busy pool delays live phrases rather than failing them. With `diarize`, the diarizer runs in its streaming mode and carries a speaker cache from chunk to chunk, so a speaker keeps the same number for the whole session. The socket exists only when the server runs under uvicorn (`python3 stt_server.py`, the Docker default): the Flask debug server and gunicorn's sync workers do not speak websocket.
+A phrase ends at a pause of 0.6 s, where the diarizer hears one speaker hand over to another (with `diarize`, since people answering each other often leave less than 0.6 s), or at its quietest moment once it runs past 15 s, and is transcribed on its own with a model borrowed from the same pool as the uploads, so a busy pool delays live phrases rather than failing them. With `diarize`, the diarizer runs in its streaming mode and carries a speaker cache from chunk to chunk, so a speaker keeps the same number for the whole session. The socket exists only when the server runs under uvicorn (`python3 stt_server.py`, the Docker default): the Flask debug server and gunicorn's sync workers do not speak websocket.
+
+**Only spoken text is returned.** Where there is no speech - a tone, music, noise, a ringback, even digital silence - Whisper answers with the credits of the subtitled video it learned from - a Russian "subtitles by DimaTorzok" credit, "to be continued...", "Thank you for watching." - and it does so with full confidence: on the test corpus its own `no_speech_prob` was 0.00 even on silence. So every endpoint runs a voice detector, Silero VAD, over the audio and drops a transcribed segment that lies mostly outside detected speech, plus any segment that is a whole subtitle credit line. On a corpus of nine non-speech recordings this removed every such line while keeping every phrase of the speech recordings. A recording with nothing spoken in it now reads as empty text. In the live stream a phrase with no detected speech is not even sent to the model. The detector runs on the CPU and adds about a second per three minutes of audio. `SPEECH_GATE=false` restores the old behaviour.
 
 Uploads are capped at `MAX_CONTENT_LENGTH_MB` (10 MB by default); a larger body returns `413`.
 
@@ -254,6 +256,7 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_POOL_SIZE`     | `1`                     | pre-loaded diarizer instances                       |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | diarization model cache directory                   |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | speaker activity probability counted as speech      |
+| `SPEECH_GATE`           | `true`                  | drop transcribed text nobody spoke (voice detector) |
 | `STT_WWW_PORT`          | `8080`                  | web UI http port (compose)                          |
 | `STT_WWW_TLS_PORT`      | `8443`                  | web UI https port (compose)                         |
 | `STT_URL`               | `http://localhost:5099` | client: server base URL                             |
@@ -278,6 +281,7 @@ speech-to-text/
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
 │   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
+│   ├── speech_gate.py   # voice detector that drops text nobody spoke
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND

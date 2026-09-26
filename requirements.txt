@@ -26,6 +26,9 @@ pydub>=0.25.1
 # Whisper STT backend (matches libs/stt.py)
 openai-whisper>=20231117
 
+# Voice detector that drops Whisper's hallucinations on non-speech (libs/speech_gate.py)
+silero-vad>=6.2
+
 # ML/audio runtime required by libs/stt.py
 # torch/torchaudio are installed in Dockerfile.cpu and Dockerfile.gpu
 # to keep CPU/GPU stacks consistent.

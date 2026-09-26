@@ -172,7 +172,9 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 실패는 `{"type": "error", "error": "<category>", "request_id": "..."}` 하나로 전달되고 그 뒤에 연결이 닫힙니다. 범주는 HTTP 오류 범주에 `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed`, `Forbidden`이 더해진 것입니다.
 
-구절은 0.6초의 멈춤에서 끝나거나, 15초를 넘기면 가장 조용한 지점에서 끝나며, 업로드와 같은 풀에서 빌린 모델로 따로 전사됩니다. 그래서 풀이 바쁘면 실시간 구절은 실패하지 않고 늦어질 뿐입니다. `diarize`를 쓰면 화자 분리기가 스트리밍 모드로 동작하며 청크에서 청크로 화자 캐시를 이어 가므로, 한 화자는 세션 내내 같은 번호를 유지합니다. 이 소켓은 서버가 uvicorn에서 실행될 때(`python3 stt_server.py`, Docker 기본값)만 존재합니다. Flask 디버그 서버와 gunicorn의 sync 워커는 WebSocket을 지원하지 않습니다.
+구절은 0.6초의 멈춤에서 끝나거나, 화자 분리기가 한 화자에서 다른 화자로 말이 넘어가는 것을 들은 지점에서 끝나거나(`diarize` 사용 시, 서로 대답을 주고받는 사람들은 흔히 0.6초보다 짧게 쉬기 때문), 15초를 넘기면 가장 조용한 지점에서 끝나며, 업로드와 같은 풀에서 빌린 모델로 따로 전사됩니다. 그래서 풀이 바쁘면 실시간 구절은 실패하지 않고 늦어질 뿐입니다. `diarize`를 쓰면 화자 분리기가 스트리밍 모드로 동작하며 청크에서 청크로 화자 캐시를 이어 가므로, 한 화자는 세션 내내 같은 번호를 유지합니다. 이 소켓은 서버가 uvicorn에서 실행될 때(`python3 stt_server.py`, Docker 기본값)만 존재합니다. Flask 디버그 서버와 gunicorn의 sync 워커는 WebSocket을 지원하지 않습니다.
+
+**실제로 말한 텍스트만 반환됩니다.** 음성이 없는 곳(신호음, 음악, 잡음, 연결음, 심지어 디지털 무음)에서 Whisper는 자신이 학습한 자막 영상의 크레딧으로 답하며(러시아어 "자막 제작: DimaTorzok" 크레딧, "다음 편에 계속...", "시청해 주셔서 감사합니다."), 그것도 완전한 확신을 가지고 그렇게 합니다. 테스트 코퍼스에서 Whisper 자신의 `no_speech_prob`는 무음에서조차 0.00이었습니다. 그래서 모든 엔드포인트는 오디오에 음성 검출기인 Silero VAD를 돌려, 검출된 음성 밖에 대부분 놓인 전사 구간과, 자막 크레딧 한 줄 전체로 이루어진 구간을 버립니다. 음성이 없는 녹음 아홉 개로 이루어진 코퍼스에서 이 방식은 그런 줄을 모두 없애면서도 음성 녹음의 구절은 하나도 잃지 않았습니다. 아무 말도 없는 녹음은 이제 빈 텍스트가 됩니다. 실시간 스트림에서는 음성이 검출되지 않은 구절은 아예 모델로 보내지지 않습니다. 검출기는 CPU에서 동작하며, 오디오 3분당 약 1초가 더 걸립니다. `SPEECH_GATE=false`로 이전 동작을 되돌릴 수 있습니다.
 
 업로드는 `MAX_CONTENT_LENGTH_MB`(기본 10 MB)로 제한되며, 더 큰 본문은 `413`을 반환합니다.
 
@@ -227,6 +229,7 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_POOL_SIZE`     | `1`                     | 미리 로드되는 화자 분리기 인스턴스 수              |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | 화자 분리 모델 캐시 디렉터리                       |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | 음성으로 간주하는 화자 활동 확률                   |
+| `SPEECH_GATE`           | `true`                  | 아무도 말하지 않은 전사 텍스트 제거(음성 검출기)    |
 | `STT_WWW_PORT`          | `8080`                  | 웹 UI http 포트(compose)                            |
 | `STT_WWW_TLS_PORT`      | `8443`                  | 웹 UI https 포트(compose)                           |
 | `STT_URL`               | `http://localhost:5099` | 클라이언트: 서버 기본 URL                          |
@@ -251,6 +254,7 @@ speech-to-text/
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
 │   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
+│   ├── speech_gate.py   # voice detector that drops text nobody spoke
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND

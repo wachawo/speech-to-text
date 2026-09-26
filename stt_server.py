@@ -10,12 +10,13 @@ import traceback
 import uuid
 from typing import Any, cast
 
+import numpy as np
 from flask import Flask, g, jsonify, request
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Local imports
-from libs import align, audio, backends, catalog, config, diarize, live, logs, model_pool
+from libs import align, audio, backends, catalog, config, diarize, live, logs, model_pool, speech_gate
 from libs.auth import token_required
 from libs.errors import build_error_response, get_request_id, register_error_handlers
 
@@ -130,6 +131,22 @@ def list_models():
     return jsonify(catalog.list_models()), 200
 
 
+def transcribe_text(wav_bio, model, language) -> str:
+    """The plain transcript; with the speech gate on, built only from segments that were spoken.
+
+    Without the gate this is exactly what it always was. With it, the text is the joined segment
+    texts - what the transcriber's own text is made of - minus the ones the gate drops, so a
+    recording with speech in it reads the same and one without reads empty instead of a
+    subtitle credit such as "to be continued...".
+    """
+    transcriber = backends.transcriber()
+    if not config.SPEECH_GATE:
+        return transcriber.get_stt_bio(wav_bio, model=model, language=language)
+    segments = transcriber.get_stt_segments(wav_bio, model=model, language=language)
+    kept = speech_gate.gate_wav(wav_bio, segments, get_request_id())
+    return "".join(segment["text"] for segment in kept).strip()
+
+
 @app.route("/api/stt", methods=["POST"])
 @token_required
 def transcribe():
@@ -168,7 +185,7 @@ def transcribe():
         return build_error_response("Service Unavailable", 503)
 
     try:
-        text = backends.transcriber().get_stt_bio(wav_bio, model=model, language=language)
+        text = transcribe_text(wav_bio, model, language)
         elapsed = time.monotonic() - start_time
         logger.info(
             "[%s] STT %s (%dkb) - %d chars (%.2fs)",
@@ -343,6 +360,8 @@ def transcribe_by_speaker():
         logger.error("[%s] STT failed: %s: %s\n%s", get_request_id(), type(exc).__name__, exc, traceback.format_exc())
         return build_error_response("Transcription failed", 500)
 
+    if config.SPEECH_GATE:
+        segments = speech_gate.gate_wav(wav_bio, segments, get_request_id())
     attributed = align.attribute_segments(segments, turns)
     elapsed = time.monotonic() - start_time
     speakers = align.count_speakers(attributed)
@@ -431,6 +450,8 @@ def main():
     """Entry point: fill the model pool, then serve."""
     model_pool.init_model_pool()
     model_pool.init_diarizer_pool()
+    if config.SPEECH_GATE:
+        speech_gate.find_speech(np.zeros(speech_gate.SAMPLE_RATE, dtype=np.float32))
     log_auth_mode()
     run_server()
 

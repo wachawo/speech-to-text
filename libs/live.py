@@ -280,12 +280,36 @@ async def process_utterance(session: dict[str, Any], utterance: dict[str, int]) 
     diarization = session["diarization"]
     if diarization is not None:
         await asyncio.to_thread(stream.advance_diarization, diarization, session["buffer"], utterance["end"], session["final"])
-    segments = await asyncio.to_thread(stream.transcribe_utterance, session["buffer"], utterance, session["language"])
+    segments = await asyncio.to_thread(
+        stream.transcribe_utterance, session["buffer"], utterance, session["language"], session["request_id"]
+    )
     if diarization is None:
         return [{**segment, "speaker": None, "overlap": False} for segment in segments]
     start = utterance["start"] / stream.SAMPLE_RATE
     end = utterance["end"] / stream.SAMPLE_RATE
     return stream.attribute_live_segments(segments, diarize.stream_turns(diarization, start, end))
+
+
+def split_at_handover(session: dict[str, Any]) -> None:
+    """Close the phrase in progress where the diarizer says the speaker changed.
+
+    The pause detector alone waits for 0.6 s of silence, and people answering each other often
+    leave less, so in a lively dialog a phrase could run for several turns and arrive seconds late.
+    Runs after catch_up, when the diarizer is as current as the audio allows.
+    """
+    segmenter = session["segmenter"]
+    diarization = session["diarization"]
+    if diarization is None or not segmenter["in_speech"]:
+        return
+    start = segmenter["speech_start"] / stream.SAMPLE_RATE
+    end = diarization["frames"] * diarize.STREAM_FRAME_SECONDS
+    handover = diarize.find_handover(diarization, start, end)
+    if handover is None:
+        return
+    utterance = stream.cut_utterance(segmenter, int(handover * stream.SAMPLE_RATE))
+    if utterance:
+        session["pending"].append(utterance)
+        session["wake"].set()
 
 
 async def catch_up(session: dict[str, Any]) -> None:
@@ -294,6 +318,7 @@ async def catch_up(session: dict[str, Any]) -> None:
     if diarization is not None and not diarization["finished"]:
         buffer = session["buffer"]
         await asyncio.to_thread(stream.advance_diarization, diarization, buffer, buffer["total"], False)
+        split_at_handover(session)
     stream.trim_samples(session["buffer"], find_keep_from(session))
 
 
