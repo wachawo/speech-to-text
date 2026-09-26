@@ -44,7 +44,7 @@ docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
 ```
 
-GPU 构建需要主机上安装 `nvidia-container-toolkit`。首次运行会将 Whisper 模型下载到 `./models`。
+GPU 构建需要主机上安装 `nvidia-container-toolkit`。首次运行会将 Whisper 模型下载到 `./models`。在服务器上运行（更新、回滚、证书、依赖）的说明见 [docs/DEPLOY.md](DEPLOY.md)。
 
 ### Web 界面
 
@@ -158,7 +158,7 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 1. 客户端发送 `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}`。除 `type` 外的所有字段都是可选的。`token` 是浏览器进行身份验证的方式，因为浏览器无法在 WebSocket 上设置请求头；其他客户端也可以改为在握手时发送 `Authorization: Bearer <token>`。
 2. 服务器回应 `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}`。
 3. 客户端以任意大小的二进制消息发送原始 PCM（有符号 16 位、小端序、单声道、16 kHz），完成后发送 `{"type": "stop"}`。
-4. 服务器为每个语句发送一条 `segment`，大约每秒发送一次 `progress`，并在关闭前发送 `done`：
+4. 服务器为每个语句发送一条 `segment`，大约每秒发送一次 `progress`；如果会话一度落后超过两分钟，还会发送 `skipped`，其中给出被丢弃音频的秒数；并在关闭前发送 `done`：
 
 ```json
 { "type": "segment", "id": 3, "start": 6.88, "end": 8.2, "text": "This is the second speaker.", "speaker": 1, "overlap": false }
@@ -230,6 +230,8 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | 说话人分离模型缓存目录                             |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | 判定为语音的说话人活动概率                         |
 | `SPEECH_GATE`           | `true`                  | 丢弃无人说出的转录文本（语音检测器）                |
+| `STT_UID`, `STT_GID`    | （镜像中的 `stt`，1001） | 拥有 `models/`、`logs/`、`recs/` 的主机用户（Docker） |
+| `HF_HUB_OFFLINE`        | `0`                     | 模型缓存完成后设为 `1`：启动时不再请求 hub          |
 | `STT_WWW_PORT`          | `8080`                  | Web 界面的 http 端口（compose）                     |
 | `STT_WWW_TLS_PORT`      | `8443`                  | Web 界面的 https 端口（compose）                    |
 | `STT_URL`               | `http://localhost:5099` | 客户端：服务器基础 URL                             |
@@ -264,7 +266,8 @@ speech-to-text/
 ├── Dockerfile-www       # web UI image (nginx)
 ├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS
 ├── www/                 # web UI: Vue 2 without a build step, libraries vendored
-├── docs/                # README translations
+├── constraints.txt      # every dependency version the tested image resolved
+├── docs/                # DEPLOY.md and the README translations
 └── tests/               # pytest tests, no model downloads and no GPU
 ```
 

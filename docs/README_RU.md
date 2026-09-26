@@ -44,7 +44,7 @@ docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
 ```
 
-Для сборки под GPU на хосте нужен `nvidia-container-toolkit`. При первом запуске модель Whisper скачивается в `./models`.
+Для сборки под GPU на хосте нужен `nvidia-container-toolkit`. При первом запуске модель Whisper скачивается в `./models`. Работа на сервере - обновления, откаты, сертификаты, зависимости - описана в [docs/DEPLOY.md](DEPLOY.md).
 
 ### Веб-интерфейс
 
@@ -158,7 +158,7 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 1. Клиент отправляет `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}`. Все поля, кроме `type`, необязательны. Через `token` аутентифицируется браузер, поскольку он не может задавать заголовки у WebSocket; другие клиенты могут вместо этого отправить `Authorization: Bearer <token>` при рукопожатии.
 2. Сервер отвечает `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}`.
 3. Клиент отправляет сырой PCM - знаковый 16-битный little-endian, моно, 16 кГц - бинарными сообщениями любого размера, а по завершении `{"type": "stop"}`.
-4. Сервер отправляет `segment` на каждую фразу, `progress` примерно раз в секунду и `done` перед закрытием:
+4. Сервер отправляет `segment` на каждую фразу, `progress` примерно раз в секунду, `skipped` с числом секунд отброшенного аудио, если сессия когда-либо отстанет больше чем на две минуты, и `done` перед закрытием:
 
 ```json
 { "type": "segment", "id": 3, "start": 6.88, "end": 8.2, "text": "This is the second speaker.", "speaker": 1, "overlap": false }
@@ -230,6 +230,8 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | каталог кеша моделей диаризации                     |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | вероятность активности говорящего, считающаяся речью |
 | `SPEECH_GATE`           | `true`                  | отбрасывать текст, который никто не произносил (детектор голоса) |
+| `STT_UID`, `STT_GID`    | (`stt` из образа, 1001) | пользователь хоста, владеющий `models/`, `logs/`, `recs/` (Docker) |
+| `HF_HUB_OFFLINE`        | `0`                     | `1`, когда модели уже в кеше: никаких запросов к хабу при старте |
 | `STT_WWW_PORT`          | `8080`                  | http-порт веб-интерфейса (compose)                  |
 | `STT_WWW_TLS_PORT`      | `8443`                  | https-порт веб-интерфейса (compose)                 |
 | `STT_URL`               | `http://localhost:5099` | клиент: базовый URL сервера                         |
@@ -264,7 +266,8 @@ speech-to-text/
 ├── Dockerfile-www       # образ веб-интерфейса (nginx)
 ├── nginx/               # конфигурация stt_www: статический интерфейс, прокси /api/, самоподписанный TLS
 ├── www/                 # веб-интерфейс: Vue 2 без этапа сборки, библиотеки в репозитории
-├── docs/                # переводы README
+├── constraints.txt      # версии всех зависимостей, выбранные при сборке протестированного образа
+├── docs/                # DEPLOY.md и переводы README
 └── tests/               # тесты pytest, без скачивания моделей и без GPU
 ```
 

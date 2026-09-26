@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 """Generic error-handler responses: shape and request_id correlation."""
 
+import io
+import logging
 import re
 
 REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
@@ -25,6 +27,23 @@ def test_405_shape(client):
     assert body["error"] == "Method Not Allowed"
     assert REQ_ID_RE.match(body["request_id"])
     assert set(body.keys()) == {"error", "request_id"}
+
+
+def test_405_names_the_allowed_methods(client):
+    """A 405 carries the Allow header RFC 9110 requires, naming what the route does accept."""
+    resp = client.patch("/api/stt")
+    assert resp.status_code == 405
+    assert set(resp.headers["Allow"].split(", ")) >= {"POST", "OPTIONS"}
+
+
+def test_undecodable_audio_is_a_warning_without_a_traceback(client, caplog):
+    """A client upload that is not audio is the client's mistake: one WARNING line, no traceback."""
+    caplog.set_level(logging.WARNING, logger="stt_server")
+    resp = client.post("/api/stt", data={"file": (io.BytesIO(b"not audio at all"), "notes.txt")})
+    assert resp.status_code == 400
+    records = [record for record in caplog.records if "Audio conversion failed" in record.getMessage()]
+    assert [record.levelname for record in records] == ["WARNING"]
+    assert "Traceback" not in caplog.text
 
 
 def test_request_id_changes_per_request(client):

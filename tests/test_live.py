@@ -700,3 +700,30 @@ def test_no_diarizer_no_split(monkeypatch):
     live.queue_utterances(session)
     live.split_at_handover(session)
     assert not session["pending"]
+
+
+def test_a_session_that_falls_behind_sheds_its_oldest_queued_phrases(monkeypatch):
+    """Past MAX_BACKLOG_SECONDS of queued audio the oldest waiting phrases go; the head stays."""
+    monkeypatch.setattr(live, "MAX_BACKLOG_SECONDS", 10.0)
+    session = live.new_session({"language": None, "diarize": False, "url": None}, "abc")
+    phrases = [{"start": index * 4 * RATE, "end": (index * 4 + 4) * RATE} for index in range(5)]
+    session["pending"].extend(phrases)
+    live.shed_backlog(session)
+    # 20 s queued, 10 s allowed: the head stays, and the oldest waiting phrases go until 8 s remain.
+    assert list(session["pending"]) == [phrases[0], phrases[4]]
+    assert session["skipped"] == 12.0
+
+
+def test_skipped_audio_is_reported_once(monkeypatch):
+    """The client hears about shed audio in one `skipped` message per increase, with the running total."""
+    session = live.new_session({"language": None, "diarize": False, "url": None}, "abc")
+    sent = []
+
+    async def record(event):
+        """Keep what would go to the client."""
+        sent.append(event)
+
+    session["skipped"] = 8.0
+    asyncio.run(live.report_progress(session, record))
+    asyncio.run(live.report_progress(session, record))
+    assert [event for event in sent if event["type"] == "skipped"] == [{"type": "skipped", "seconds": 8.0}]

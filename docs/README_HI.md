@@ -44,7 +44,7 @@ docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
 ```
 
-GPU बिल्ड को होस्ट पर `nvidia-container-toolkit` की आवश्यकता होती है। पहली बार चलाने पर Whisper मॉडल `./models` में डाउनलोड हो जाता है।
+GPU बिल्ड को होस्ट पर `nvidia-container-toolkit` की आवश्यकता होती है। पहली बार चलाने पर Whisper मॉडल `./models` में डाउनलोड हो जाता है। सर्वर पर इसे चलाना - अपडेट, रोलबैक, प्रमाणपत्र, निर्भरताएँ - [docs/DEPLOY.md](DEPLOY.md) में बताया गया है।
 
 ### वेब UI
 
@@ -158,7 +158,7 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 1. क्लाइंट `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}` भेजता है। `type` को छोड़कर हर फ़ील्ड वैकल्पिक है। `token` वह तरीका है जिससे ब्राउज़र प्रमाणीकरण करता है, क्योंकि वह वेबसॉकेट पर हेडर सेट नहीं कर सकता; अन्य क्लाइंट इसके बजाय हैंडशेक पर `Authorization: Bearer <token>` भेज सकते हैं।
 2. सर्वर `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}` के साथ उत्तर देता है।
 3. क्लाइंट कच्चा PCM - signed 16-bit, little-endian, मोनो, 16 kHz - किसी भी आकार के बाइनरी संदेशों के रूप में भेजता है, और काम पूरा होने पर `{"type": "stop"}` भेजता है।
-4. सर्वर हर वाक्यांश के लिए एक `segment`, लगभग हर सेकंड एक `progress`, और बंद करने से पहले `done` भेजता है:
+4. सर्वर हर वाक्यांश के लिए एक `segment`, लगभग हर सेकंड एक `progress`, सत्र के कभी दो मिनट से अधिक पीछे रह जाने पर छोड़े गए ऑडियो के सेकंड के साथ `skipped`, और बंद करने से पहले `done` भेजता है:
 
 ```json
 { "type": "segment", "id": 3, "start": 6.88, "end": 8.2, "text": "This is the second speaker.", "speaker": 1, "overlap": false }
@@ -230,6 +230,8 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | डायराइज़ेशन मॉडल कैश डायरेक्टरी                       |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | स्पीकर सक्रियता संभावना जिसे वाक् माना जाए             |
 | `SPEECH_GATE`           | `true`                  | वह ट्रांसक्राइब किया टेक्स्ट हटाएँ जिसे किसी ने नहीं बोला (वॉइस डिटेक्टर) |
+| `STT_UID`, `STT_GID`    | (इमेज का `stt`, 1001)    | `models/`, `logs/`, `recs/` का स्वामी होस्ट उपयोगकर्ता (Docker) |
+| `HF_HUB_OFFLINE`        | `0`                     | मॉडल कैश हो जाने पर `1`: स्टार्ट पर hub अनुरोध नहीं       |
 | `STT_WWW_PORT`          | `8080`                  | वेब UI का http पोर्ट (compose)                        |
 | `STT_WWW_TLS_PORT`      | `8443`                  | वेब UI का https पोर्ट (compose)                       |
 | `STT_URL`               | `http://localhost:5099` | क्लाइंट: सर्वर बेस URL                               |
@@ -264,7 +266,8 @@ speech-to-text/
 ├── Dockerfile-www       # web UI image (nginx)
 ├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS
 ├── www/                 # web UI: Vue 2 without a build step, libraries vendored
-├── docs/                # README translations
+├── constraints.txt      # every dependency version the tested image resolved
+├── docs/                # DEPLOY.md and the README translations
 └── tests/               # pytest tests, no model downloads and no GPU
 ```
 

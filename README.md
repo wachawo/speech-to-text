@@ -71,7 +71,7 @@ PARAKEET=true           # build: install the Parakeet backend
 STT_BACKEND=parakeet    # run: transcribe with Parakeet instead of Whisper
 ```
 
-then rebuild with `docker compose up -d --build`. The two failures differ on purpose. Enabling diarization on an image built without it answers `503` for the diarization routes and keeps transcribing. Selecting `STT_BACKEND=parakeet` on an image built without it stops the server at startup with the missing dependency in the log: a transcription service that cannot transcribe should not report itself healthy, and quietly falling back to Whisper would serve a different model than the one configured. The first run downloads each model into `./models`: Whisper, and when enabled about 2.4 GB for Parakeet and 400 MB for the diarizer.
+then rebuild with `docker compose up -d --build`. Running it on a server - updates, rollbacks, certificates, dependencies - is covered in [docs/DEPLOY.md](docs/DEPLOY.md). The two failures differ on purpose. Enabling diarization on an image built without it answers `503` for the diarization routes and keeps transcribing. Selecting `STT_BACKEND=parakeet` on an image built without it stops the server at startup with the missing dependency in the log: a transcription service that cannot transcribe should not report itself healthy, and quietly falling back to Whisper would serve a different model than the one configured. The first run downloads each model into `./models`: Whisper, and when enabled about 2.4 GB for Parakeet and 400 MB for the diarizer.
 
 ### Web UI
 
@@ -185,7 +185,7 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 1. The client sends `{"type": "start", "language": "ru", "diarize": true, "token": "<token>"}`. Every field but `type` is optional. `token` is how a browser authenticates, since it cannot set headers on a websocket; other clients may send `Authorization: Bearer <token>` on the handshake instead.
 2. The server answers `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "language": "ru", "diarize": true, "source": "client"}`.
 3. The client sends raw PCM - signed 16-bit little-endian, mono, 16 kHz - as binary messages of any size, and `{"type": "stop"}` when it is done.
-4. The server sends a `segment` for every phrase, `progress` about once a second, and `done` before it closes:
+4. The server sends a `segment` for every phrase, `progress` about once a second, `skipped` with the seconds of audio it dropped if the session ever falls more than two minutes behind, and `done` before it closes:
 
 ```json
 { "type": "segment", "id": 3, "start": 6.88, "end": 8.2, "text": "This is the second speaker.", "speaker": 1, "overlap": false }
@@ -257,6 +257,8 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | diarization model cache directory                   |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | speaker activity probability counted as speech      |
 | `SPEECH_GATE`           | `true`                  | drop transcribed text nobody spoke (voice detector) |
+| `STT_UID`, `STT_GID`    | (image's `stt`, 1001)   | host user that owns `models/`, `logs/`, `recs/` (Docker) |
+| `HF_HUB_OFFLINE`        | `0`                     | `1` once the models are cached: no hub requests on start |
 | `STT_WWW_PORT`          | `8080`                  | web UI http port (compose)                          |
 | `STT_WWW_TLS_PORT`      | `8443`                  | web UI https port (compose)                         |
 | `STT_URL`               | `http://localhost:5099` | client: server base URL                             |
@@ -291,7 +293,8 @@ speech-to-text/
 ├── Dockerfile-www       # web UI image (nginx)
 ├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS
 ├── www/                 # web UI: Vue 2 without a build step, libraries vendored
-├── docs/                # README translations
+├── constraints.txt      # every dependency version the tested image resolved
+├── docs/                # DEPLOY.md and the README translations
 └── tests/               # pytest tests, no model downloads and no GPU
 ```
 
