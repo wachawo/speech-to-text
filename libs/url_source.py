@@ -69,18 +69,22 @@ def normalize_url(url: Any) -> str | None:
     except ValueError:
         return None
     scheme = parts.scheme.lower()
-    if scheme not in URL_SCHEMES or not hostname or opens_listener(scheme, parts.query):
+    if scheme not in URL_SCHEMES or not hostname or opens_listener(scheme, url):
         return None
     return scheme + url[len(parts.scheme) :]
 
 
-def opens_listener(scheme: str, query: str) -> bool:
+def opens_listener(scheme: str, url: str) -> bool:
     """Whether the URL asks ffmpeg to wait for a connection instead of making one.
 
     SRT takes its mode from the query: `listener` or `rendezvous` would bind a port on the server
     and transcribe whatever anybody sends to it. A `listen` parameter is refused on every scheme.
+    The options are read the way ffmpeg reads them - everything after the first `?` in the whole
+    string - not from urlsplit's query, which stops at `#`: `srt://0.0.0.0:9000#?mode=listener`
+    has no query for urlsplit and a listener mode for ffmpeg.
     """
-    params = {key.lower(): values for key, values in parse_qs(query, keep_blank_values=True).items()}
+    options = url.split("?", 1)[1] if "?" in url else ""
+    params = {key.lower(): values for key, values in parse_qs(options, keep_blank_values=True).items()}
     if "listen" in params:
         return True
     if scheme == "srt":

@@ -99,6 +99,12 @@
   linked from the language switcher at the top of each README.
 
 #### Fixed
+- **An SRT listener could still get past the URL check.** ffmpeg reads SRT options from the
+  first `?` anywhere in the address, while the check read urlsplit's query, which stops at `#`, so
+  `srt://0.0.0.0:9000#?mode=listener` passed and made the server listen. Options are now read the
+  way ffmpeg reads them. A live segment that Whisper placed wholly past the end of the audio is
+  dropped instead of coming out with its end before its start. Both found by the new tests for
+  the live stream.
 - **URL sources, after a review.** RTSP works: ffmpeg was given `-rw_timeout`, which the RTSP
   demuxer does not take, and aborted every RTSP source. A source that keeps ffmpeg complaining
   no longer freezes the session: its stderr is read as it comes instead of after exit. A live
