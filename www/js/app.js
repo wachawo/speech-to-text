@@ -300,13 +300,14 @@ applyTheme(startingTheme);
    when the server can diarize and Text when it cannot; for the language, it is
    the server's own default, so a browser that never chose follows the
    deployment rather than a value baked into this file; for the source, FILE;
-   for the device, the browser's default input.
+   for the device, the browser's default input; for the stream address,
+   nothing.
 
    A group is written whole, so a screen saving one field starts from the
    stored group and changes only its own - see $savePrefs. */
 const PREFS_PREFIX = 'stt.';
 const PREFS = {
-  transcribe: { mode: '', language: '', source: '', device: '' },
+  transcribe: { mode: '', language: '', source: '', device: '', url: '' },
 };
 
 const validatePrefs = function (name, value) {

@@ -3,9 +3,12 @@
 ### [Unreleased]
 
 #### Added
+- **A STREAM source in the web UI.** Beside FILE and DEVICE, STREAM takes the address of a
+  stream or a remote file and has the server read it, so the UI shows every way the service
+  takes audio.
 - **Live transcription in the web UI, and from a URL.** TRANSCRIBE gets a FILE / DEVICE
   switch: DEVICE captures a microphone, a headset, a loopback source or a browser tab's sound
-  and shows each phrase as a block as soon as it is transcribed. Browsers allow audio devices
+  and shows each phrase as soon as it is transcribed, as a block per phrase in Speakers mode. Browsers allow audio devices
   only on a secure page, so over the network this works through the https listener.
   `/api/stream` also takes `"source": "url"`: the server reads internet radio, HLS, RTMP, RTSP
   or SRT itself through ffmpeg, which is held to network protocols so a URL or a playlist
@@ -96,6 +99,20 @@
   linked from the language switcher at the top of each README.
 
 #### Fixed
+- **URL sources, after a review.** RTSP works: ffmpeg was given `-rw_timeout`, which the RTSP
+  demuxer does not take, and aborted every RTSP source. A source that keeps ffmpeg complaining
+  no longer freezes the session: its stderr is read as it comes instead of after exit. A live
+  source no longer runs 7-35 s behind: `-re` paced its backlog too, and an initial burst now takes
+  it at once. A malformed address or an ffmpeg that cannot start ends in an `error` and a close
+  instead of a dropped or silent socket, and the string that is checked is the one ffmpeg runs.
+- **URL sources are fenced in.** A page on another site cannot start one (`Forbidden`), SRT
+  listener and rendezvous modes and `listen` parameters are refused, at most four run at once,
+  and the log no longer records credentials or query strings.
+- **Live capture in the web UI, after the same review.** Switching source no longer loses a
+  running upload, a file dropped on the live tabs no longer replaces the page, a quick
+  START-STOP-START no longer leaves the microphone on, the remembered device is the one
+  recorded, a device below 16 kHz is resampled instead of sent too fast, and a stopped session
+  says it is finishing rather than "No speech recognised".
 - **Gunicorn starts again.** Since the module split, `gu.py` bound the settings module to the
   name `config`, which is also a gunicorn setting; gunicorn read it as one and refused to start
   with `Invalid value for config`. The default `python3 stt_server.py` run was not affected.
