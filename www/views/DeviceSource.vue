@@ -90,11 +90,6 @@ var DISPLAY_NOTE = 'Captures what plays in a browser tab, or the whole system\'s
    whose RMS is a few percent of full scale. */
 var METER_FLOOR_DB = -60;
 
-var stopTracks = function (stream) {
-  if (!stream) return;
-  stream.getTracks().forEach(function (track) { track.stop(); });
-};
-
 /* The id of the device a stream actually records, which is not always the
    one asked for: the default, a fallback, or whatever the browser resolved
    "default" to. */
@@ -336,7 +331,7 @@ module.exports = {
         // STOP pressed, or STOP and START again, or the screen left, while
         // the browser was asking: this stream belongs to nobody.
         if (!self.liveCurrent(attempt)) {
-          stopTracks(stream);
+          SttCapture.stopTracks(stream);
           return;
         }
         self.openingLabel = '';
@@ -414,7 +409,7 @@ module.exports = {
         this.stopping.release();
         this.stopping = null;
       }
-      stopTracks(this.stream);
+      SttCapture.stopTracks(this.stream);
       this.stream = null;
       this.recordingId = null;
       this.level = 0;

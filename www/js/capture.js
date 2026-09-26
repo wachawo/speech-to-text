@@ -18,14 +18,6 @@
 (function () {
   'use strict';
 
-  // What the server takes: /api/stream wants 16 kHz mono PCM16.
-  var TARGET_RATE = 16000;
-
-  // One frame is 100 ms: 1600 samples, 3200 bytes. Small enough that the
-  // server sees speech about as soon as it is said, large enough that a
-  // session is ten messages a second rather than hundreds.
-  var FRAME_SAMPLES = 1600;
-
   // How long stop() waits for the worklet to hand over what it still holds.
   // The answer normally takes one message round trip; this is only for a
   // worklet that never answers, so a STOP cannot hang on it.
@@ -54,11 +46,15 @@
      - 16 kHz itself takes the down path with a span of exactly one, which
        passes every sample through unchanged.
 
-     Output is posted in blocks of FRAME_SAMPLES, transferred rather than
+     Output is posted in blocks of BLOCK samples, transferred rather than
      copied. 'flush' posts whatever is left and then 'flushed'; a port keeps
      its order, so every block posted before 'flushed' arrives before it. */
   var workletMain = function () {
+    // What the server takes: /api/stream wants 16 kHz mono PCM16.
     var OUT_RATE = 16000;
+    // One block is 100 ms: 1600 samples, 3200 bytes once converted. Small
+    // enough that the server sees speech about as soon as it is said, large
+    // enough that a session is ten messages a second rather than hundreds.
     var BLOCK = 1600;
 
     class SttResampler extends AudioWorkletProcessor {
@@ -167,6 +163,18 @@
     return Math.sqrt(total / samples.length);
   };
 
+  /* Every track of a stream stopped - the device light goes out - and, when
+     given, a listener taken off each first, so a track's own `ended` does not
+     report a stop this side asked for. The one place tracks are stopped, for
+     this file and for the DEVICE source. */
+  var stopTracks = function (stream, endedListener) {
+    if (!stream) return;
+    stream.getTracks().forEach(function (track) {
+      if (endedListener) track.removeEventListener('ended', endedListener);
+      track.stop();
+    });
+  };
+
   var mediaDevices = function () {
     return (typeof navigator !== 'undefined' && navigator.mediaDevices) || null;
   };
@@ -237,7 +245,7 @@
      the browser name its devices, and nothing is recorded. */
   var askPermission = function () {
     return mediaDevices().getUserMedia({ audio: true }).then(function (stream) {
-      stream.getTracks().forEach(function (track) { track.stop(); });
+      stopTracks(stream);
     });
   };
 
@@ -266,7 +274,7 @@
         stream.removeTrack(track);
       });
       if (stream.getAudioTracks().length) return stream;
-      stream.getTracks().forEach(function (track) { track.stop(); });
+      stopTracks(stream);
       var error = new Error('No audio was shared');
       error.name = 'NoAudioShared';
       throw error;
@@ -298,14 +306,6 @@
 
     var capture = {};
 
-    var stopTracks = function () {
-      if (!stream) return;
-      stream.getTracks().forEach(function (track) {
-        track.removeEventListener('ended', onTrackEnded);
-        track.stop();
-      });
-    };
-
     /* Safe to call twice: stop() tears down after its flush, and a release()
        that follows - the screen being left - must find nothing left to close
        rather than a closed context to close again. */
@@ -314,7 +314,7 @@
         source.disconnect();
         source = null;
       }
-      stopTracks();
+      stopTracks(stream, onTrackEnded);
       stream = null;
       if (node) {
         node.port.onmessage = null;
@@ -422,7 +422,7 @@
         source.disconnect();
         source = null;
       }
-      stopTracks();
+      stopTracks(stream, onTrackEnded);
       return new Promise(function (resolve) {
         var finish = function () {
           clearTimeout(timer);
@@ -449,12 +449,11 @@
   };
 
   window.SttCapture = {
-    TARGET_RATE: TARGET_RATE,
-    FRAME_SAMPLES: FRAME_SAMPLES,
     supported: supported,
     displaySupported: displaySupported,
     isChromium: isChromium,
     listInputs: listInputs,
+    stopTracks: stopTracks,
     askPermission: askPermission,
     openDevice: openDevice,
     openDisplay: openDisplay,
