@@ -6,15 +6,16 @@
       <small class="text-secondary">{{ summary }}</small>
       <span class="ms-auto"></span>
       <button type="button" class="btn btn-sm btn-secondary fw-bold btn-w85"
-              title="Copy the transcript as text" @click="copyText">
+              :title="exportTitle('Copy the transcript as text')" :disabled="exportLocked" @click="copyText">
         <i class="fa fa-copy"></i> COPY
       </button>
       <button type="button" class="btn btn-sm btn-secondary fw-bold btn-w85"
-              :title="'Save as ' + fileStem + '.txt'" @click="downloadText">
+              :title="exportTitle('Save as ' + fileStem + '.txt')" :disabled="exportLocked" @click="downloadText">
         <i class="fa fa-download"></i> TXT
       </button>
       <button type="button" class="btn btn-sm btn-secondary fw-bold btn-w85"
-              :title="'Save the server answer as ' + fileStem + '.json'" @click="downloadJson">
+              :title="exportTitle('Save the server answer as ' + fileStem + '.json')" :disabled="exportLocked"
+              @click="downloadJson">
         <i class="fa fa-download"></i> JSON
       </button>
     </div>
@@ -35,7 +36,7 @@
         </div>
         <div class="stt-block-text">{{ segment.text || '-' }}</div>
       </div>
-      <div v-if="segments.length === 0 && !result.listening" class="stt-block">
+      <div v-if="segments.length === 0 && !waiting" class="stt-block">
         <div class="stt-block-text text-secondary">No speech recognised</div>
       </div>
     </template>
@@ -43,17 +44,22 @@
     <!-- The words alone: one block, no speakers to tell apart. A live
          session without speakers still arrives phrase by phrase, so its
          phrases are joined into the one block as they come. -->
-    <div v-else-if="plainText || !result.listening" class="stt-block">
+    <div v-else-if="plainText || !waiting" class="stt-block">
       <div class="stt-block-text" v-if="plainText">{{ plainText }}</div>
       <div class="stt-block-text text-secondary" v-else>No speech recognised</div>
     </div>
 
     <!-- A live session between phrases. Nothing arrives while someone is
          talking - a phrase comes back after they pause - so this is what says
-         the capture is working. -->
-    <div v-if="result.listening" class="stt-listening">
+         the capture is working. After STOP, the last phrase is still on its
+         way, and the line says that instead. -->
+    <div v-if="result.listening" class="stt-live-note stt-listening">
       <i class="fa fa-ear-listen" aria-hidden="true"></i>
       Listening - each phrase appears about a second after the speaker pauses
+    </div>
+    <div v-else-if="result.finishing" class="stt-live-note">
+      <i class="fa fa-spinner fa-pulse" aria-hidden="true"></i>
+      Finishing - the last phrase is on its way
     </div>
   </div>
 </template>
@@ -73,11 +79,32 @@
    `data` the server's JSON as sent - JSON saves exactly that.
 
    A live session adds `live: true`, `listening` (between START and STOP),
-   `seconds` (audio the server has received), `stem` (the name its downloads
-   are saved under - a device label is no file name) and `messages` (every
-   message the server sent but `progress`, which is what JSON saves), and its
-   segments grow while it is on the screen.
+   `finishing` (between STOP and the server's `done` or `error`), `seconds`
+   (audio the server has received), `stem` (the name its downloads are saved
+   under - a device label is no file name) and `messages` (every message the
+   server sent but `progress`, which is what JSON saves), and its segments
+   grow while it is on the screen.
 */
+
+/* Scripts written without spaces between words or sentences: Chinese and
+   Japanese (CJK punctuation, kana, ideographs, full-width forms). Two live
+   phrases meeting at one of these are joined as they are; a space there would
+   be a gap no reader of the language expects. Korean is absent because it
+   spaces its words, and Thai because it puts a space between sentences, which
+   is what a phrase ending at a pause usually is. */
+var UNSPACED = /[\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/;
+
+/* Live phrases as one text: a space between two, unless either side of the
+   join is in an unspaced script. */
+var joinPhrases = function (phrases) {
+  return phrases.reduce(function (text, phrase) {
+    var next = (phrase || '').trim();
+    if (!next) return text;
+    if (!text) return next;
+    var glue = (UNSPACED.test(text.charAt(text.length - 1)) || UNSPACED.test(next.charAt(0))) ? '' : ' ';
+    return text + glue + next;
+  }, '');
+};
 
 /* Speaker labels are positions, and the name says so. */
 var SPEAKER_NOTE = 'Numbered in the order they first speak in this recording - a position, never an identity';
@@ -153,7 +180,20 @@ module.exports = {
        so far for a live session, which sends no text of its own. */
     plainText: function () {
       if (!this.result.live) return this.result.data.text || '';
-      return this.segments.map(function (segment) { return segment.text || ''; }).join(' ').trim();
+      return joinPhrases(this.segments.map(function (segment) { return segment.text; }));
+    },
+
+    /* A live session still has phrases coming: while listening, or after
+       STOP until the server's last word. The empty state waits for it. */
+    waiting: function () {
+      return !!(this.result.listening || this.result.finishing);
+    },
+
+    /* After STOP the last phrase is still on its way, and an export taken now
+       would be missing it - or, for a short session, be empty. COPY, TXT and
+       JSON wait for `done` or `error`. */
+    exportLocked: function () {
+      return !!this.result.finishing;
     },
 
     segments: function () {
@@ -199,6 +239,10 @@ module.exports = {
   },
 
   methods: {
+    exportTitle: function (text) {
+      return this.exportLocked ? 'Waiting for the last phrase' : text;
+    },
+
     /* Whether the page is scrolled to its end, give or take a line. */
     atBottom: function () {
       var page = document.documentElement;

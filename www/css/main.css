@@ -962,11 +962,13 @@ table thead { text-transform: uppercase; font-weight: 700; }
    and a marker that reads as a ninth speaker is worse than no marker. */
 .stt-block-overlap { color: var(--stt-text); font-style: italic; }
 
-/* A live session between phrases: one quiet line under the blocks, the ear
-   pulsing slowly so it reads as a state rather than a message. Still for
-   anyone who has asked for less motion. */
-.stt-listening { color: var(--stt-text); padding: 4px 2px; }
-.stt-listening i { color: var(--stt-primary); margin-right: 4px; animation: stt-pulse 1.6s ease-in-out infinite; }
+/* A live session's state, one quiet line under the blocks: listening
+   between phrases, or finishing after STOP. The listening ear pulses slowly
+   so it reads as a state rather than a message; still for anyone who has
+   asked for less motion. The finishing spinner is Bootstrap's own. */
+.stt-live-note { color: var(--stt-text); padding: 4px 2px; }
+.stt-live-note i { color: var(--stt-primary); margin-right: 4px; }
+.stt-listening i { animation: stt-pulse 1.6s ease-in-out infinite; }
 @keyframes stt-pulse {
   0%, 100% { opacity: .35; }
   50%      { opacity: 1; }

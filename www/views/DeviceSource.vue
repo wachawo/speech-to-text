@@ -2,17 +2,20 @@
   <div class="stt-source">
 
     <div class="form-check-inline m-1 d-flex flex-wrap row-gap-1 align-items-center">
-      <!-- The input: one field with one attachment, the button that reads the
-           list again - or, while the browser still hides the names, asks for
-           the access that makes it show them. -->
+      <!-- Read the list again - or, while the browser still hides the names,
+           ask for the access that makes it show them. Its own control, apart
+           from the select: two actions welded into one group read as one. -->
       <div style="margin-right: 0.25rem">
-        <div class="input-group input-group-sm" style="width: 340px" :title="deviceTitle">
-          <button type="button" class="btn btn-sm btn-secondary" :title="refreshTitle"
-                  :disabled="!usable || active" @click="refreshDevices(true)">
-            <i class="fa fa-rotate"></i>
-          </button>
+        <button type="button" class="btn btn-sm btn-secondary" :title="refreshTitle" :aria-label="refreshTitle"
+                :disabled="!usable || liveActive" @click="refreshDevices(true)">
+          <i class="fa fa-rotate"></i>
+        </button>
+      </div>
+
+      <div style="margin-right: 0.25rem">
+        <div class="input-group input-group-sm" style="width: 300px" :title="deviceTitle">
           <select class="form-select form-select-sm" aria-label="Device"
-                  v-model="deviceId" :disabled="!usable || active" @change="rememberDevice">
+                  v-model="deviceId" :disabled="!usable || liveActive" @change="rememberDevice">
             <option v-for="input in inputs" :key="input.id" :value="input.id">{{ input.label }}</option>
             <option v-if="displayOffered" :value="displayValue" :title="displayNote">Tab or screen audio</option>
           </select>
@@ -20,7 +23,7 @@
       </div>
 
       <!-- Mode and language: the screen's own, the same for every source. -->
-      <slot name="options" :busy="active || !usable"></slot>
+      <slot name="options" :busy="liveActive || !usable"></slot>
 
       <div style="margin-left: auto"></div>
 
@@ -32,14 +35,14 @@
               aria-label="Input level" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="levelPercent">
           <span class="stt-meter-fill" :style="{ width: levelPercent + '%' }"></span>
         </span>
-        <small class="text-secondary stt-clock" title="Audio the server has received">{{ clock }}</small>
+        <small class="text-secondary stt-clock" title="Audio the server has received">{{ liveClock }}</small>
       </div>
 
       <div>
         <button type="button" class="btn btn-sm fw-bold" style="min-width:100px"
-                :class="active ? 'btn-danger' : 'btn-primary'" :title="buttonTitle"
-                :disabled="!usable || state === 'finishing'" @click="toggle">
-          <i class="fa" :class="active ? 'fa-stop' : 'fa-microphone'"></i> {{ active ? 'STOP' : 'START' }}
+                :class="liveActive ? 'btn-danger' : 'btn-primary'" :title="buttonTitle"
+                :disabled="!usable || state === 'finishing' || (!liveActive && held)" @click="toggle">
+          <i class="fa" :class="liveActive ? 'fa-stop' : 'fa-microphone'"></i> {{ liveActive ? 'STOP' : 'START' }}
         </button>
       </div>
     </div>
@@ -63,71 +66,54 @@
 <script>
 /* The DEVICE source of the transcribe screen: live audio from an input -
    a microphone, a headset's microphone, a "Monitor of" source on Linux that
-   carries what the speakers play, or the sound of a browser tab or screen -
-   sent to /api/stream as it is captured, with each phrase coming back about a
-   second after the speaker pauses.
+   carries what the speakers play, or, in Chromium browsers, the sound of a
+   tab or screen - sent to /api/stream as it is captured.
 
-   The session, in order:
-   1. START opens the input (the browser may ask first).
-   2. A websocket to /api/stream; the first message is `start`, with the mode
-      and language the screen hands down and the stored token, if any.
-   3. On `ready` - never before it - the capture starts and each 100 ms frame
-      goes out as one binary message.
-   4. `segment` messages append to the transcript as they arrive; `progress`
-      moves the clock.
-   5. STOP cuts the input, flushes the last partial frame, sends `stop`, and
-      keeps the socket open until `done` or `error` - "finishing" meanwhile.
+   The session is the shared protocol client (js/live.js); what is this
+   source's own is the input:
+   - START opens it (the browser may ask first), then connects;
+   - on `ready` the capture starts and every 100 ms frame goes out;
+   - on STOP the input is cut and its last partial frame flushed before
+     `stop` is sent;
+   - on leaving, or on any failure, the input is closed at once.
 
-   Any failure - an `error` message, the socket closing without one, the input
-   refusing to open - lands in this source's error bar and ends the capture.
-
-   The transcript is one object for the whole session: emitted as `result`
-   when the server is ready, so the screen draws it, and then added to here as
-   messages arrive. The screen makes it reactive when it takes it, and every
-   field is present from the start, so the additions show. */
+   Every step of a START carries its attempt: a permission prompt answered
+   after STOP, or after STOP and a second START, closes the stream it granted
+   and does nothing else. */
 
 var DISPLAY = 'display';
 var DISPLAY_NOTE = 'Captures what plays in a browser tab, or the whole system\'s sound where the OS ' +
-  'allows it (Windows, ChromeOS) - tick "Share audio" in the browser\'s picker';
+  'allows it (Windows, ChromeOS); the browser asks what to share';
 
 /* How much the level meter shows: -60 dBFS (silence, for this purpose) to
    0 dBFS (full scale). A linear bar would sit near zero for ordinary speech,
    whose RMS is a few percent of full scale. */
 var METER_FLOOR_DB = -60;
 
-/* How long a session left behind when the screen goes may take to finish
-   before its socket is closed regardless. The server needs a few seconds for
-   the last phrase; this is only the bound on waiting for it. */
-var ABANDON_TIMEOUT_MS = 60000;
-
 var stopTracks = function (stream) {
   if (!stream) return;
   stream.getTracks().forEach(function (track) { track.stop(); });
 };
 
-/* m:ss for the clock. */
-var formatClock = function (seconds) {
-  var whole = Math.floor(Number(seconds) || 0);
-  var rest = whole % 60;
-  return Math.floor(whole / 60) + ':' + (rest < 10 ? '0' : '') + rest;
-};
-
-/* "20260925-103012", for the name a live transcript is saved under. */
-var fileStamp = function () {
-  var now = new Date();
-  var pad = function (value) { return (value < 10 ? '0' : '') + value; };
-  return now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '-' +
-    pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
+/* The id of the device a stream actually records, which is not always the
+   one asked for: the default, a fallback, or whatever the browser resolved
+   "default" to. */
+var recordedDeviceId = function (stream) {
+  var track = stream && stream.getAudioTracks()[0];
+  var settings = (track && track.getSettings) ? track.getSettings() : {};
+  return settings.deviceId || null;
 };
 
 module.exports = {
-  mixins: [SttWait],
+  mixins: [SttWait, SttLive],
 
   props: {
     // What the session asks for: 'speakers' or 'text', and a language code,
     // 'auto', or '' for none. Already reconciled with what the server offers.
     mode: { type: String, default: 'text' },
     language: { type: String, default: '' },
+    // The screen is still reading the catalogue: START waits for it.
+    held: { type: Boolean, default: false },
     // Passed to every source; there is no drop zone here to shrink.
     compact: { type: Boolean, default: false },
   },
@@ -140,6 +126,7 @@ module.exports = {
       warning: '',
       info: '',
       success: '',
+      liveKind: 'device',
       secure: secure,
       capable: SttCapture.supported(),
       displayOffered: SttCapture.displaySupported(),
@@ -150,45 +137,39 @@ module.exports = {
       inputs: [{ id: '', label: 'Default microphone' }],
       named: false,
       deviceId: this.$store.state.transcribe.device,
-      // 'idle', 'opening' (the input and the socket, before `ready`), 'live',
-      // 'finishing' (stop sent, waiting for `done`).
-      state: 'idle',
-      // The RMS of the last frame sent, and the seconds of audio the server
-      // reported receiving.
+      // The RMS of the last frame sent.
       level: 0,
-      seconds: 0,
       tlsPort: '',
     };
   },
 
   created: function () {
-    // The session's moving parts, kept off `data`: nothing renders from them,
-    // and Vue would walk every field of a socket or a stream it was handed.
+    // The input's moving parts, kept off `data`: nothing renders from them,
+    // and Vue would walk every field of a stream it was handed.
     this.stream = null;
     this.capture = null;
-    this.socket = null;
-    this.session = null;
+    // A capture STOP has taken out of service but whose flush has not
+    // finished yet; leaving the screen then must still close it.
+    this.stopping = null;
+    // The id of the device being recorded, once a stream is open: the select
+    // shows that one, never a different one.
+    this.recordingId = null;
+    // The wait label of an input still opening, so a STOP during the prompt
+    // can take it off the strip.
+    this.openingLabel = '';
     if (!this.secure) this.fetchUiConfig();
     if (!this.usable) return;
     this.refreshDevices(false);
     navigator.mediaDevices.addEventListener('devicechange', this.handleDeviceChange);
   },
 
-  /* Leaving - another source, another screen - ends the capture: the input is
-     closed at once, and the server is told to stop and left to finish on its
-     own (see abandon). */
   beforeDestroy: function () {
     if (this.usable) navigator.mediaDevices.removeEventListener('devicechange', this.handleDeviceChange);
-    this.abandon();
   },
 
   computed: {
     usable: function () {
       return this.secure && this.capable;
-    },
-
-    active: function () {
-      return this.state !== 'idle';
     },
 
     selectedLabel: function () {
@@ -211,7 +192,8 @@ module.exports = {
     buttonTitle: function () {
       if (!this.usable) return 'Audio devices are not available on this page';
       if (this.state === 'finishing') return 'Waiting for the last phrase';
-      if (this.active) return 'Stop, and keep what was transcribed';
+      if (this.liveActive) return 'Stop, and keep what was transcribed';
+      if (this.held) return 'Waiting for the server catalogue';
       return 'Start transcribing ' + this.selectedLabel;
     },
 
@@ -220,10 +202,6 @@ module.exports = {
       var db = 20 * Math.log10(this.level);
       var share = (db - METER_FLOOR_DB) / -METER_FLOOR_DB;
       return Math.round(Math.max(0, Math.min(1, share)) * 100);
-    },
-
-    clock: function () {
-      return formatClock(this.seconds);
     },
 
     /* The https address of this same screen, for the line that explains why
@@ -259,29 +237,45 @@ module.exports = {
       this.waitPush('devices');
       asking
         .then(function () { return SttCapture.listInputs(); })
-        .then(function (found) {
-          self.inputs = found.inputs;
-          self.named = found.named;
-          self.settleDevice();
-        })
+        .then(function (found) { self.applyInputs(found); })
         .catch(function (err) { self.error = self.mediaError(err, false); })
         .finally(function () { self.waitDrop('devices'); });
+    },
+
+    /* The list as the select shows it. Before access is granted the browser
+       lists one unnamed input with no id, so a remembered device cannot be
+       found in it; it is kept on the select as "Last used microphone" rather
+       than shown as the default, because START will ask for it and not for
+       the default. */
+    applyInputs: function (found) {
+      var inputs = found.inputs.slice();
+      var stored = this.$store.state.transcribe.device;
+      var listed = inputs.some(function (input) { return input.id === stored; });
+      if (!found.named && stored && stored !== DISPLAY && !listed) {
+        inputs.push({ id: stored, label: 'Last used microphone' });
+      }
+      this.inputs = inputs;
+      this.named = found.named;
+      this.settleDevice();
     },
 
     /* A headset plugged in or pulled out. Not while a session runs: the
        select is off then, and the input in use announces its own end. */
     handleDeviceChange: function () {
-      if (this.active) return;
+      if (this.liveActive) return;
       this.refreshDevices(false);
     },
 
-    /* Keep the choice on the select while the list still has it; otherwise
-       the remembered one, otherwise the first. Before access is granted the
-       list has no real ids, so a remembered device shows as the default until
-       the first START names them - and is picked up then. */
+    /* What the select shows: the device being recorded while there is one,
+       otherwise the choice on it while the list still has it, otherwise the
+       remembered one, otherwise the first. */
     settleDevice: function () {
       var ids = this.inputs.map(function (input) { return input.id; });
       if (this.displayOffered) ids.push(DISPLAY);
+      if (this.recordingId && ids.indexOf(this.recordingId) !== -1) {
+        this.deviceId = this.recordingId;
+        return;
+      }
       if (ids.indexOf(this.deviceId) !== -1) return;
       var stored = this.$store.state.transcribe.device;
       this.deviceId = ids.indexOf(stored) !== -1 ? stored : ids[0];
@@ -294,7 +288,7 @@ module.exports = {
     /* The sentence for an input that would not open. */
     mediaError: function (err, display) {
       var name = err && err.name;
-      if (name === 'NoAudioShared') return 'No audio was shared - tick "Share audio" in the browser\'s picker and try again';
+      if (name === 'NoAudioShared') return 'No audio came with the share - choose a tab or screen together with its sound';
       if (name === 'NotAllowedError') return display ? 'Sharing was cancelled or refused' : 'Microphone access was refused';
       if (name === 'NotFoundError' || name === 'OverconstrainedError') {
         return 'The chosen device is not available - read the device list again';
@@ -305,10 +299,24 @@ module.exports = {
       return (err && err.message) || 'The device could not be opened';
     },
 
+    /* The chosen input, exactly - a remembered one too, before access has
+       been granted and the list could name it. Only if that device is gone
+       does it fall back to the default, and says so. */
+    openInput: function (id) {
+      var self = this;
+      if (!id) return SttCapture.openDevice('');
+      return SttCapture.openDevice(id).catch(function (err) {
+        var gone = err && (err.name === 'OverconstrainedError' || err.name === 'NotFoundError');
+        if (!gone) throw err;
+        self.warning = 'The chosen device is not available - recording the default input instead';
+        return SttCapture.openDevice('');
+      });
+    },
+
     /* Session */
 
     toggle: function () {
-      if (this.active) this.stop();
+      if (this.liveActive) this.liveStop();
       else this.start();
     },
 
@@ -316,176 +324,104 @@ module.exports = {
        the socket only once there is something to send. */
     start: function () {
       var self = this;
-      if (!this.usable || this.active) return;
+      if (!this.usable || this.liveActive || this.held) return;
       var display = this.deviceId === DISPLAY;
+      var attempt = this.liveBegin();
       var label = display ? 'choosing what to share' : 'opening the device';
-      this.error = '';
-      this.warning = '';
-      this.state = 'opening';
+      this.openingLabel = label;
       this.waitPush(label);
-      var opening = display ? SttCapture.openDisplay() : SttCapture.openDevice(this.deviceId);
+      var opening = display ? SttCapture.openDisplay() : this.openInput(this.deviceId);
       opening.then(function (stream) {
         self.waitDrop(label);
-        // STOP pressed, or the screen left, while the browser was asking.
-        if (self.state !== 'opening') {
+        // STOP pressed, or STOP and START again, or the screen left, while
+        // the browser was asking: this stream belongs to nobody.
+        if (!self.liveCurrent(attempt)) {
           stopTracks(stream);
           return;
         }
+        self.openingLabel = '';
         self.stream = stream;
-        // Access is granted now, so the browser names its inputs.
-        if (!display && !self.named) self.refreshDevices(false);
-        self.connect();
+        if (!display) self.followRecording(stream);
+        self.liveConnect(attempt, {
+          diarize: self.mode === 'speakers',
+          language: self.language || undefined,
+        });
       }, function (err) {
         self.waitDrop(label);
-        if (self.state !== 'opening') return;
-        self.state = 'idle';
-        self.error = self.mediaError(err, display);
+        if (!self.liveCurrent(attempt)) return;
+        self.openingLabel = '';
+        self.liveFail(self.mediaError(err, display));
       });
     },
 
-    connect: function () {
+    /* The select follows the device actually recorded. Access has just been
+       granted if it was not before, so the list is read again for its names;
+       either way the one being recorded is what the select shows. */
+    followRecording: function (stream) {
+      this.recordingId = recordedDeviceId(stream);
+      if (!this.named) this.refreshDevices(false);
+      else this.settleDevice();
+    },
+
+    /* What the transcript is of: the track's own label, which for a shared
+       tab says what was shared. */
+    liveName: function () {
+      var track = this.stream && this.stream.getAudioTracks()[0];
+      return (track && track.label) || this.selectedLabel;
+    },
+
+    /* The server is listening: only now does audio start to flow. The
+       capture owns the stream from here. */
+    onLiveReady: function () {
       var self = this;
-      var address = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') +
-        window.location.host + '/api/stream';
-      var ws;
-      try {
-        ws = new WebSocket(address);
-      } catch (err) {
-        this.fail('The connection to the server was lost');
-        return;
-      }
-      this.socket = ws;
-      this.waitPush('connecting');
-      ws.onopen = function () {
-        if (ws === self.socket) ws.send(JSON.stringify(self.startMessage()));
-      };
-      ws.onmessage = function (event) { self.handleMessage(ws, event); };
-      ws.onclose = function () { self.handleClose(ws); };
-    },
-
-    /* A browser cannot set headers on a websocket, so the token rides in the
-       first message. Absent fields are left out rather than sent empty: an
-       omitted language is the server's default. */
-    startMessage: function () {
-      var message = { type: 'start', diarize: this.mode === 'speakers' };
-      if (this.language) message.language = this.language;
-      var token = this.$store.state.auth.token;
-      if (token) message.token = token;
-      return message;
-    },
-
-    handleMessage: function (ws, event) {
-      if (ws !== this.socket) return;
-      var message;
-      try {
-        message = JSON.parse(event.data);
-      } catch (err) {
-        return;
-      }
-      if (!message || typeof message !== 'object') return;
-      if (message.type === 'ready') this.onReady(message);
-      else if (message.type === 'segment') this.onSegment(message);
-      else if (message.type === 'progress') this.onProgress(message);
-      else if (message.type === 'done') this.onDone(message);
-      else if (message.type === 'error') this.onServerError(message);
-    },
-
-    /* The server is listening: the transcript is created and handed up, and
-       only now does audio start to flow. The name is the track's own label,
-       which for a shared tab says what was shared. */
-    onReady: function (message) {
-      var self = this;
-      if (this.state !== 'opening' || !this.stream) return;
-      this.waitDrop('connecting');
-      this.state = 'live';
-      this.seconds = 0;
-      this.level = 0;
-      var track = this.stream.getAudioTracks()[0];
-      this.session = {
-        mode: message.diarize ? 'speakers' : 'text',
-        name: (track && track.label) || this.selectedLabel,
-        stem: 'live-' + fileStamp(),
-        language: this.language,
-        live: true,
-        listening: true,
-        seconds: 0,
-        messages: [message],
-        data: { segments: [], speakers: 0, elapsed: null },
-      };
-      this.$emit('result', this.session);
+      var attempt = this.attempt;
       this.capture = SttCapture.create(this.stream, { onFrame: this.sendFrame, onEnded: this.handleEnded });
       this.stream = null;
       this.capture.start().catch(function (err) {
-        self.fail((err && err.message) || 'The audio could not be captured');
+        if (attempt === self.attempt && self.state === 'live') {
+          self.liveFail((err && err.message) || 'The audio could not be captured');
+        }
       });
     },
 
     /* One frame out, and the meter moved to what was in it. The flush after
-       STOP comes through here as well, which is why it checks the socket and
-       not the state. */
+       STOP comes through here as well. */
     sendFrame: function (buffer, level) {
       this.level = level;
-      var ws = this.socket;
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(buffer);
+      this.liveSend(buffer);
     },
 
-    /* A phrase. The fields are the ones /api/transcript segments have, so the
-       transcript draws both the same way; the message itself is kept as sent,
-       for JSON. The speaker count is the number of different speakers so far. */
-    onSegment: function (message) {
-      var session = this.session;
-      if (!session) return;
-      session.messages.push(message);
-      session.data.segments.push({
-        id: message.id,
-        start: message.start,
-        end: message.end,
-        text: message.text,
-        speaker: message.speaker === undefined ? null : message.speaker,
-        overlap: !!message.overlap,
+    /* STOP: the input is cut and its last partial frame sent before `stop`. */
+    onLiveStopping: function () {
+      var self = this;
+      var capture = this.capture;
+      this.capture = null;
+      this.level = 0;
+      if (!capture) return null;
+      this.stopping = capture;
+      return capture.stop().then(function () {
+        if (self.stopping === capture) self.stopping = null;
       });
-      var seen = {};
-      session.data.segments.forEach(function (segment) {
-        if (segment.speaker !== null) seen[segment.speaker] = true;
-      });
-      session.data.speakers = Object.keys(seen).length;
     },
 
-    onProgress: function (message) {
-      var seconds = Number(message.seconds);
-      if (!isFinite(seconds)) return;
-      this.seconds = seconds;
-      if (this.session) this.session.seconds = seconds;
-    },
-
-    onDone: function (message) {
-      var session = this.session;
-      if (session) {
-        session.messages.push(message);
-        if (isFinite(Number(message.seconds))) session.seconds = Number(message.seconds);
-        session.data.elapsed = message.elapsed === undefined ? null : message.elapsed;
-        session.listening = false;
+    /* Everything this source opened, closed; safe at any point, twice. */
+    onLiveRelease: function () {
+      if (this.capture) {
+        this.capture.release();
+        this.capture = null;
       }
-      this.finish();
-    },
-
-    /* The server's own account of what went wrong: the category and the id
-       that finds it in the server log, as every HTTP failure is shown. A
-       refused token is also what it is everywhere else - the sign-in screen. */
-    onServerError: function (message) {
-      if (this.session) this.session.messages.push(message);
-      var text = typeof message.error === 'string' && message.error ? message.error : 'Live transcription failed';
-      if (message.request_id) text += ' (request ' + message.request_id + ')';
-      this.fail(text);
-      if (message.error === 'Unauthorized') this.$signInAgain();
-    },
-
-    /* The socket closed on its own. After `done` or `error` it is no longer
-       this.socket, so arriving here means neither came: the network, or the
-       server going away mid-session. */
-    handleClose: function (ws) {
-      if (ws !== this.socket) return;
-      this.fail('The connection to the server was lost');
+      if (this.stopping) {
+        this.stopping.release();
+        this.stopping = null;
+      }
+      stopTracks(this.stream);
+      this.stream = null;
+      this.recordingId = null;
+      this.level = 0;
+      if (this.openingLabel) {
+        this.waitDrop(this.openingLabel);
+        this.openingLabel = '';
+      }
     },
 
     /* The input went away mid-session: unplugged, access revoked, or "Stop
@@ -495,104 +431,7 @@ module.exports = {
       if (this.state !== 'live') return;
       this.warning = this.deviceId === DISPLAY ? 'Sharing was stopped - the transcript ends here'
                                                : 'The device stopped sending audio - the transcript ends here';
-      this.stop();
-    },
-
-    /* STOP. Before `ready` nothing has been sent, so there is nothing to
-       finish: the input and the socket are simply closed. After it, the input
-       is cut and flushed, `stop` goes out, and the socket stays open for the
-       last phrase and `done`. */
-    stop: function () {
-      var self = this;
-      if (this.state === 'opening') {
-        this.closeSocket();
-        stopTracks(this.stream);
-        this.stream = null;
-        this.state = 'idle';
-        this.waitDrop('connecting');
-        return;
-      }
-      if (this.state !== 'live') return;
-      this.state = 'finishing';
-      this.waitPush('finishing');
-      if (this.session) this.session.listening = false;
-      var capture = this.capture;
-      this.capture = null;
-      var ws = this.socket;
-      (capture ? capture.stop() : Promise.resolve()).then(function () {
-        if (ws === self.socket && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'stop' }));
-      });
-    },
-
-    /* The session is over, however it ended: everything closed, the screen
-       back to START. */
-    finish: function () {
-      if (this.capture) {
-        this.capture.release();
-        this.capture = null;
-      }
-      stopTracks(this.stream);
-      this.stream = null;
-      this.closeSocket();
-      this.state = 'idle';
-      this.level = 0;
-      if (this.session) this.session.listening = false;
-      this.waitDrop('connecting');
-      this.waitDrop('finishing');
-    },
-
-    fail: function (text) {
-      this.error = text;
-      this.finish();
-    },
-
-    /* Forgotten before it is closed, so its own close event finds it is no
-       longer this.socket and does not report a lost connection. */
-    closeSocket: function () {
-      var ws = this.socket;
-      this.socket = null;
-      if (ws && ws.readyState <= WebSocket.OPEN) ws.close(1000);
-    },
-
-    /* The screen is going. The input closes at once. A live session is told
-       to stop and left to finish on its own - its socket closes on the
-       server's `done` or `error`, or after a minute regardless - so the server
-       ends the session the ordinary way rather than finding the client gone
-       mid-phrase. Anything earlier has nothing to finish and is closed. */
-    abandon: function () {
-      var wasLive = this.state === 'live' || this.state === 'finishing';
-      var sendStop = this.state === 'live';
-      this.state = 'idle';
-      // The transcript stays on the screen, but nothing more is coming to it.
-      if (this.session) this.session.listening = false;
-      if (this.capture) {
-        this.capture.release();
-        this.capture = null;
-      }
-      stopTracks(this.stream);
-      this.stream = null;
-      var ws = this.socket;
-      this.socket = null;
-      if (!ws) return;
-      if (!wasLive || ws.readyState !== WebSocket.OPEN) {
-        if (ws.readyState <= WebSocket.OPEN) ws.close(1000);
-        return;
-      }
-      if (sendStop) ws.send(JSON.stringify({ type: 'stop' }));
-      var timer = setTimeout(function () { ws.close(1000); }, ABANDON_TIMEOUT_MS);
-      ws.onmessage = function (event) {
-        var message = null;
-        try {
-          message = JSON.parse(event.data);
-        } catch (err) {
-          return;
-        }
-        if (message && (message.type === 'done' || message.type === 'error')) {
-          clearTimeout(timer);
-          ws.close(1000);
-        }
-      };
-      ws.onclose = function () { clearTimeout(timer); };
+      this.liveStop();
     },
   },
 };

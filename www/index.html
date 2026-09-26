@@ -54,9 +54,12 @@
   <script src="/vendor/vuex.min.js"></script>
   <script src="/vendor/httpVueLoader.min.js"></script>
   <script src="/vendor/axios.min.js"></script>
-  <!-- Live capture, before the app: it publishes window.SttCapture for the
-       transcribe screen's DEVICE source and has no dependency of its own. -->
+  <!-- Live transcription, before the app: capture.js publishes
+       window.SttCapture (the DEVICE source's audio), live.js window.SttLive
+       (the /api/stream client DEVICE and STREAM share). Neither depends on
+       anything but the libraries above. -->
   <script src="/js/capture.js"></script>
+  <script src="/js/live.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>
