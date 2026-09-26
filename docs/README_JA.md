@@ -80,6 +80,10 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 { "status": "ok", "pool_size": 4, "available": 3, "diarize": false }
 ```
 
+`GET /api/health?deep=1` はさらに、読み込まれているすべてのモデルに 1 秒間の無音を通し、それぞれを `ok`、`busy`（5 秒以内にインスタンスが空かなかった）、`failed` のいずれかとして報告します。1 つでも失敗すれば `503` を返します。GPU の処理を消費するため、`STT_TOKENS` が設定されている間はトークンが必要です。通常のチェックはコンテナのヘルスチェック用に開いたままです。
+
+`GET /metrics` は Prometheus のメトリクスを提供します。ルートとステータスごとのリクエスト数、その所要時間、カテゴリ別のエラーレスポンス、プールのサイズと空きインスタンス数、実行中および開始されたライブセッション、音声検出器が取り除いたセグメント、遅れたセッションが切り捨てたライブ音声です。ヘルスチェックと同じくトークンは不要で、`stt_www` はこれをプロキシしません。`STT_PORT` を直接スクレイプしてください。gunicorn では、各ワーカーがそれぞれ独自に集計します。
+
 `POST /api/stt` は `file` という名前の `multipart/form-data` フィールド、または生の `audio/*` ボディを受け付けます。オプションの `language`（クエリ文字列またはフォームフィールド）は、そのリクエストに限ってサーバーのデフォルトを上書きします。`auto` は自動検出します。成功すると、テキストと経過秒数を返します。
 
 ```json
@@ -172,7 +176,7 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 失敗は 1 つの `{"type": "error", "error": "<category>", "request_id": "..."}` として届き、その後に接続が閉じられます。カテゴリは HTTP のエラーカテゴリに加えて、`Invalid start message`、`Invalid audio frame`、`Invalid stream URL`、`Stream source failed`、`Forbidden` があります。
 
-フレーズは 0.6 秒のポーズで区切られるか、ダイアライザーがある話者から別の話者への交代を聞き取った箇所で区切られるか（`diarize` 指定時。互いに応答し合う人どうしの間は 0.6 秒に満たないことが多いため）、15 秒を超えた場合は最も静かな箇所で区切られます。各フレーズはアップロードと同じプールから借りたモデルで個別に文字起こしされるため、プールが混んでいてもリアルタイムのフレーズは失敗せず、遅れるだけです。`diarize` を指定すると、ダイアライザーはストリーミングモードで動作し、チャンクからチャンクへ話者キャッシュを引き継ぐため、セッション全体を通じて同じ話者は同じ番号を保ちます。このソケットは、サーバーが uvicorn で動いている場合（`python3 stt_server.py`、Docker のデフォルト）にのみ存在します。Flask のデバッグサーバーと gunicorn の sync ワーカーは WebSocket を扱えません。
+フレーズは 0.6 秒のポーズで区切られるか、ダイアライザーがある話者から別の話者への交代を聞き取った箇所で区切られるか（`diarize` 指定時。互いに応答し合う人どうしの間は 0.6 秒に満たないことが多いため）、15 秒を超えた場合は最も静かな箇所で区切られます。各フレーズはアップロードと同じプールから借りたモデルで個別に文字起こしされるため、プールが混んでいてもリアルタイムのフレーズは失敗せず、遅れるだけです。`diarize` を指定すると、ダイアライザーはストリーミングモードで動作し、チャンクからチャンクへ話者キャッシュを引き継ぐため、セッション全体を通じて同じ話者は同じ番号を保ちます。このソケットが存在するのは、サーバーが uvicorn で動いている場合です。つまり `python3 stt_server.py`（Docker のデフォルト）か、`GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker` で `stt_server:asgi_app` を配信する gunicorn です。Flask のデバッグサーバーや gunicorn のデフォルトの sync ワーカーは WebSocket を扱えないため、そこには存在しません。
 
 **返されるのは実際に話されたテキストだけです。** 発話がない箇所（トーン、音楽、ノイズ、呼び出し音、さらにはデジタル無音）では、Whisper は学習元となった字幕付き動画のクレジットで答えてしまいます（ロシア語の "字幕制作: DimaTorzok" というクレジット、"つづく..."、"ご視聴ありがとうございました。"）。しかも完全な自信を持ってそうします。テストコーパスでは、無音に対してさえ Whisper 自身の `no_speech_prob` は 0.00 でした。そのため、すべてのエンドポイントは音声に対して音声検出器 Silero VAD を実行し、検出された発話の外側に大部分がある文字起こしセグメントと、字幕クレジットの 1 行そのものであるセグメントを取り除きます。発話を含まない 9 件の録音からなるコーパスでは、これによりそうした行がすべて取り除かれ、発話を含む録音のフレーズは 1 つも失われませんでした。何も話されていない録音は、今では空のテキストになります。ライブストリームでは、発話が検出されなかったフレーズはモデルに送られることすらありません。検出器は CPU 上で動作し、音声 3 分あたり約 1 秒の処理時間が加わります。`SPEECH_GATE=false` で以前の動作に戻せます。
 
@@ -215,6 +219,7 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | アップロードの最大サイズ（MB）。これを超えるボディは `413` を返す |
 | `CORS_ORIGINS`          | `*`                     | 許可する CORS オリジン: `*` またはカンマ区切りのリスト   |
 | `GUNICORN_WORKERS`      | `4`                     | ワーカープロセスの数（gunicorn のみ）                 |
+| `GUNICORN_WORKER_CLASS` | `sync`                  | `uvicorn_worker.UvicornWorker` で `/api/stream` が加わる（gunicorn のみ） |
 | `LOG_LEVEL`             | `INFO`                  | ログレベル                                          |
 | `LOG_ACCESS`            | `false`                 | uvicorn のアクセスログを記録する                      |
 | `WHISPER_MODEL`         | `small.en`              | Whisper モデル名（例: `small.en`、`turbo`）          |
@@ -257,6 +262,7 @@ speech-to-text/
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
 │   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
 │   ├── speech_gate.py   # voice detector that drops text nobody spoke
+│   ├── metrics.py       # Prometheus metrics for GET /metrics
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND

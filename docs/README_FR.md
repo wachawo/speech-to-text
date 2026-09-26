@@ -80,6 +80,10 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 { "status": "ok", "pool_size": 4, "available": 3, "diarize": false }
 ```
 
+`GET /api/health?deep=1` fait en plus passer une seconde de silence dans chaque modèle chargé et indique pour chacun `ok`, `busy` (aucune instance libérée en cinq secondes) ou `failed`, en répondant `503` si l'un a échoué. Cela coûte du travail GPU : tant que `STT_TOKENS` est défini, il faut donc un jeton ; le contrôle simple reste ouvert pour les contrôles de santé des conteneurs.
+
+`GET /metrics` expose des métriques Prometheus : requêtes par route et par statut, leurs durées, réponses d'erreur par catégorie, taille des pools et instances libres, sessions en direct en cours et démarrées, segments écartés par le détecteur de voix et audio en direct abandonné par une session qui a pris du retard. Comme l'état de santé, cette route ne demande aucun jeton, et `stt_www` ne la relaie pas : interrogez directement `STT_PORT`. Sous gunicorn, chaque worker compte pour lui-même.
+
 `POST /api/stt` accepte un champ `multipart/form-data` nommé `file`, ou un corps brut `audio/*`. Un paramètre optionnel `language` (chaîne de requête ou champ de formulaire) remplace la valeur par défaut du serveur pour cette requête ; `auto` détecte automatiquement. En cas de succès, il renvoie le texte et les secondes écoulées :
 
 ```json
@@ -172,7 +176,7 @@ Comme cela amène le serveur à récupérer une adresse choisie par un client, c
 
 Un échec se traduit par un unique `{"type": "error", "error": "<category>", "request_id": "..."}` suivi d'une fermeture, avec les catégories d'erreur HTTP plus `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed` et `Forbidden`.
 
-Une phrase se termine à une pause de 0,6 s, là où le diariseur entend un locuteur passer la parole à un autre (avec `diarize`, car des personnes qui se répondent laissent souvent moins de 0,6 s), ou à son moment le plus calme dès qu'elle dépasse 15 s, et elle est transcrite seule avec un modèle emprunté au même pool que les envois, de sorte qu'un pool occupé retarde les phrases en direct au lieu de les faire échouer. Avec `diarize`, le diariseur fonctionne en mode streaming et conserve un cache de locuteurs d'un bloc à l'autre, si bien qu'un locuteur garde le même numéro pendant toute la session. Le socket n'existe que lorsque le serveur tourne sous uvicorn (`python3 stt_server.py`, le mode par défaut de Docker) : le serveur de débogage de Flask et les workers sync de gunicorn ne parlent pas WebSocket.
+Une phrase se termine à une pause de 0,6 s, là où le diariseur entend un locuteur passer la parole à un autre (avec `diarize`, car des personnes qui se répondent laissent souvent moins de 0,6 s), ou à son moment le plus calme dès qu'elle dépasse 15 s, et elle est transcrite seule avec un modèle emprunté au même pool que les envois, de sorte qu'un pool occupé retarde les phrases en direct au lieu de les faire échouer. Avec `diarize`, le diariseur fonctionne en mode streaming et conserve un cache de locuteurs d'un bloc à l'autre, si bien qu'un locuteur garde le même numéro pendant toute la session. Le socket existe lorsque le serveur tourne sous uvicorn - `python3 stt_server.py`, le mode par défaut de Docker, ou gunicorn avec `GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker` servant `stt_server:asgi_app` - et non sous le serveur de débogage de Flask ni sous les workers sync par défaut de gunicorn, qui ne parlent pas WebSocket.
 
 **Seul le texte réellement prononcé est renvoyé.** Là où il n'y a pas de parole - une tonalité, de la musique, du bruit, un retour d'appel, voire un silence numérique -, Whisper répond par le générique des vidéos sous-titrées sur lesquelles il a appris (une mention russe "sous-titres par DimaTorzok", "à suivre...", "Merci d'avoir regardé."), et il le fait avec une confiance totale : sur le corpus de test, son propre `no_speech_prob` valait 0,00 même sur du silence. Chaque route fait donc passer sur l'audio un détecteur de voix, Silero VAD, et écarte un segment transcrit qui se trouve en majeure partie hors de la parole détectée, ainsi que tout segment qui constitue à lui seul une ligne de générique de sous-titres. Sur un corpus de neuf enregistrements sans parole, cela a supprimé toutes ces lignes tout en conservant chaque phrase des enregistrements de parole. Un enregistrement où rien n'est dit donne désormais un texte vide. Dans le flux en direct, une phrase sans parole détectée n'est même pas envoyée au modèle. Le détecteur tourne sur le CPU et ajoute environ une seconde par tranche de trois minutes d'audio. `SPEECH_GATE=false` rétablit l'ancien comportement.
 
@@ -215,6 +219,7 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | taille maximale d'envoi en Mo ; un corps plus grand renvoie `413` |
 | `CORS_ORIGINS`          | `*`                     | origines CORS autorisées : `*` ou une liste séparée par des virgules |
 | `GUNICORN_WORKERS`      | `4`                     | processus de travail (gunicorn uniquement)           |
+| `GUNICORN_WORKER_CLASS` | `sync`                  | `uvicorn_worker.UvicornWorker` ajoute `/api/stream` (gunicorn uniquement) |
 | `LOG_LEVEL`             | `INFO`                  | niveau de journalisation                             |
 | `LOG_ACCESS`            | `false`                 | journaliser les lignes d'accès uvicorn               |
 | `WHISPER_MODEL`         | `small.en`              | nom du modèle Whisper (par ex. `small.en`, `turbo`)  |
@@ -257,6 +262,7 @@ speech-to-text/
 │   ├── stream.py        # cœur de la transcription en direct : pauses, phrases, transcription par phrase
 │   ├── url_source.py    # sources URL pour /api/stream : vérification de l'adresse, lancement de ffmpeg
 │   ├── speech_gate.py   # détecteur de voix qui écarte le texte que personne n'a prononcé
+│   ├── metrics.py       # métriques Prometheus pour GET /metrics
 │   ├── stt.py           # wrapper Whisper
 │   ├── parakeet.py      # wrapper NVIDIA Parakeet, le second transcripteur
 │   ├── backends.py      # quel module transcrit, selon STT_BACKEND

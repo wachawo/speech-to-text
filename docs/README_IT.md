@@ -80,6 +80,10 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 { "status": "ok", "pool_size": 4, "available": 3, "diarize": false }
 ```
 
+`GET /api/health?deep=1` fa inoltre passare un secondo di silenzio attraverso ogni modello caricato e riporta ciascuno come `ok`, `busy` (nessuna istanza si è liberata entro cinque secondi) o `failed`, rispondendo `503` se qualcuno è fallito. Costa lavoro di GPU, quindi finché `STT_TOKENS` è impostato richiede un token; il controllo semplice resta aperto per i controlli di integrità dei container.
+
+`GET /metrics` espone metriche Prometheus: richieste per rotta e stato, la loro durata, risposte di errore per categoria, dimensioni dei pool e istanze libere, sessioni in tempo reale attive e avviate, segmenti scartati dal rilevatore di voce e audio in tempo reale abbandonato da una sessione rimasta indietro. Come health non richiede token, e `stt_www` non lo inoltra: interroga direttamente `STT_PORT`. Sotto gunicorn ogni worker conta per sé.
+
 `POST /api/stt` accetta un campo `multipart/form-data` chiamato `file`, oppure un corpo grezzo `audio/*`. Un parametro opzionale `language` (query string o campo del form) sovrascrive il valore predefinito del server per quella richiesta; `auto` esegue il riconoscimento automatico. In caso di successo restituisce il testo e i secondi trascorsi:
 
 ```json
@@ -172,7 +176,7 @@ Poiché così il server va a leggere un indirizzo scelto da un client, la funzio
 
 Un errore è un singolo `{"type": "error", "error": "<category>", "request_id": "..."}` seguito da una chiusura, con le categorie di errore HTTP più `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed` e `Forbidden`.
 
-Una frase termina a una pausa di 0,6 s, dove il diarizzatore sente un parlante passare la parola a un altro (con `diarize`, perché le persone che si rispondono lasciano spesso meno di 0,6 s), oppure nel suo punto più silenzioso una volta superati i 15 s, e viene trascritta da sola con un modello preso in prestito dallo stesso pool degli upload, così un pool occupato ritarda le frasi in tempo reale invece di farle fallire. Con `diarize`, il diarizzatore funziona in modalità streaming e porta con sé una cache dei parlanti da un blocco all'altro, così un parlante mantiene lo stesso numero per tutta la sessione. Il socket esiste solo quando il server gira sotto uvicorn (`python3 stt_server.py`, il predefinito in Docker): il server di debug di Flask e i worker sync di gunicorn non parlano WebSocket.
+Una frase termina a una pausa di 0,6 s, dove il diarizzatore sente un parlante passare la parola a un altro (con `diarize`, perché le persone che si rispondono lasciano spesso meno di 0,6 s), oppure nel suo punto più silenzioso una volta superati i 15 s, e viene trascritta da sola con un modello preso in prestito dallo stesso pool degli upload, così un pool occupato ritarda le frasi in tempo reale invece di farle fallire. Con `diarize`, il diarizzatore funziona in modalità streaming e porta con sé una cache dei parlanti da un blocco all'altro, così un parlante mantiene lo stesso numero per tutta la sessione. Il socket esiste quando il server gira sotto uvicorn - `python3 stt_server.py`, il predefinito in Docker, oppure gunicorn con `GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker` che serve `stt_server:asgi_app` - e non con il server di debug di Flask né con i worker sync predefiniti di gunicorn, che non parlano WebSocket.
 
 **Viene restituito solo il testo parlato.** Dove non c'è parlato - un bip, musica, rumore, il tono di libero, persino silenzio digitale - Whisper risponde con i titoli di coda dei video sottotitolati da cui ha imparato (un credito russo "sottotitoli a cura di DimaTorzok", "continua...", "Grazie per la visione."), e lo fa con piena sicurezza: sul corpus di test il suo stesso `no_speech_prob` era 0,00 anche sul silenzio. Per questo ogni endpoint fa passare sull'audio un rilevatore di voce, Silero VAD, e scarta un segmento trascritto che cade per lo più fuori dal parlato rilevato, oltre a qualsiasi segmento che sia un'intera riga di titoli dei sottotitoli. Su un corpus di nove registrazioni senza parlato questo ha eliminato ogni riga del genere mantenendo ogni frase delle registrazioni con parlato. Una registrazione in cui non si dice nulla ora risulta come testo vuoto. Nello stream in tempo reale una frase senza parlato rilevato non viene nemmeno inviata al modello. Il rilevatore gira sulla CPU e aggiunge circa un secondo ogni tre minuti di audio. `SPEECH_GATE=false` ripristina il comportamento precedente.
 
@@ -215,6 +219,7 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | dimensione massima dell'upload in MB; un corpo più grande restituisce `413` |
 | `CORS_ORIGINS`          | `*`                     | origini CORS consentite: `*` o un elenco separato da virgole |
 | `GUNICORN_WORKERS`      | `4`                     | processi worker (solo gunicorn)                    |
+| `GUNICORN_WORKER_CLASS` | `sync`                  | `uvicorn_worker.UvicornWorker` aggiunge `/api/stream` (solo gunicorn) |
 | `LOG_LEVEL`             | `INFO`                  | livello di logging                                 |
 | `LOG_ACCESS`            | `false`                 | registra le righe di access di uvicorn             |
 | `WHISPER_MODEL`         | `small.en`              | nome del modello Whisper (es. `small.en`, `turbo`) |
@@ -257,6 +262,7 @@ speech-to-text/
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
 │   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
 │   ├── speech_gate.py   # voice detector that drops text nobody spoke
+│   ├── metrics.py       # Prometheus metrics for GET /metrics
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND

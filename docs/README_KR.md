@@ -80,6 +80,10 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 { "status": "ok", "pool_size": 4, "available": 3, "diarize": false }
 ```
 
+`GET /api/health?deep=1`은 여기에 더해 로드된 모든 모델에 1초 분량의 무음을 통과시키고, 각 모델을 `ok`, `busy`(5초 안에 비는 인스턴스가 없음), `failed` 중 하나로 보고하며, 하나라도 실패하면 `503`을 반환합니다. GPU 작업이 들기 때문에 `STT_TOKENS`가 설정되어 있는 동안에는 토큰이 필요하며, 일반 검사는 컨테이너 헬스체크를 위해 열린 채로 둡니다.
+
+`GET /metrics`는 Prometheus 메트릭을 제공합니다. 경로와 상태별 요청, 그 소요 시간, 범주별 오류 응답, 풀 크기와 빈 인스턴스 수, 실행 중이거나 시작된 실시간 세션, 음성 검출기가 버린 구간, 뒤처진 세션이 흘려 버린 실시간 오디오가 포함됩니다. 헬스체크와 마찬가지로 토큰이 필요 없으며, `stt_www`는 이를 프록시하지 않으므로 `STT_PORT`를 직접 수집하십시오. gunicorn에서는 워커마다 따로 집계합니다.
+
 `POST /api/stt`는 `file`이라는 이름의 `multipart/form-data` 필드 또는 원시 `audio/*` 본문을 받습니다. 선택적인 `language`(쿼리 문자열 또는 폼 필드)는 해당 요청에 대해 서버 기본값을 덮어쓰며, `auto`는 자동으로 감지합니다. 성공하면 텍스트와 소요 시간(초)을 반환합니다.
 
 ```json
@@ -172,7 +176,7 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 실패는 `{"type": "error", "error": "<category>", "request_id": "..."}` 하나로 전달되고 그 뒤에 연결이 닫힙니다. 범주는 HTTP 오류 범주에 `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed`, `Forbidden`이 더해진 것입니다.
 
-구절은 0.6초의 멈춤에서 끝나거나, 화자 분리기가 한 화자에서 다른 화자로 말이 넘어가는 것을 들은 지점에서 끝나거나(`diarize` 사용 시, 서로 대답을 주고받는 사람들은 흔히 0.6초보다 짧게 쉬기 때문), 15초를 넘기면 가장 조용한 지점에서 끝나며, 업로드와 같은 풀에서 빌린 모델로 따로 전사됩니다. 그래서 풀이 바쁘면 실시간 구절은 실패하지 않고 늦어질 뿐입니다. `diarize`를 쓰면 화자 분리기가 스트리밍 모드로 동작하며 청크에서 청크로 화자 캐시를 이어 가므로, 한 화자는 세션 내내 같은 번호를 유지합니다. 이 소켓은 서버가 uvicorn에서 실행될 때(`python3 stt_server.py`, Docker 기본값)만 존재합니다. Flask 디버그 서버와 gunicorn의 sync 워커는 WebSocket을 지원하지 않습니다.
+구절은 0.6초의 멈춤에서 끝나거나, 화자 분리기가 한 화자에서 다른 화자로 말이 넘어가는 것을 들은 지점에서 끝나거나(`diarize` 사용 시, 서로 대답을 주고받는 사람들은 흔히 0.6초보다 짧게 쉬기 때문), 15초를 넘기면 가장 조용한 지점에서 끝나며, 업로드와 같은 풀에서 빌린 모델로 따로 전사됩니다. 그래서 풀이 바쁘면 실시간 구절은 실패하지 않고 늦어질 뿐입니다. `diarize`를 쓰면 화자 분리기가 스트리밍 모드로 동작하며 청크에서 청크로 화자 캐시를 이어 가므로, 한 화자는 세션 내내 같은 번호를 유지합니다. 이 소켓은 서버가 uvicorn에서 실행될 때 존재합니다. 곧 `python3 stt_server.py`(Docker 기본값)이거나, `GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker`로 `stt_server:asgi_app`을 제공하는 gunicorn입니다. Flask 디버그 서버나 gunicorn의 기본 sync 워커에서는 존재하지 않는데, 이들은 WebSocket을 지원하지 않기 때문입니다.
 
 **실제로 말한 텍스트만 반환됩니다.** 음성이 없는 곳(신호음, 음악, 잡음, 연결음, 심지어 디지털 무음)에서 Whisper는 자신이 학습한 자막 영상의 크레딧으로 답하며(러시아어 "자막 제작: DimaTorzok" 크레딧, "다음 편에 계속...", "시청해 주셔서 감사합니다."), 그것도 완전한 확신을 가지고 그렇게 합니다. 테스트 코퍼스에서 Whisper 자신의 `no_speech_prob`는 무음에서조차 0.00이었습니다. 그래서 모든 엔드포인트는 오디오에 음성 검출기인 Silero VAD를 돌려, 검출된 음성 밖에 대부분 놓인 전사 구간과, 자막 크레딧 한 줄 전체로 이루어진 구간을 버립니다. 음성이 없는 녹음 아홉 개로 이루어진 코퍼스에서 이 방식은 그런 줄을 모두 없애면서도 음성 녹음의 구절은 하나도 잃지 않았습니다. 아무 말도 없는 녹음은 이제 빈 텍스트가 됩니다. 실시간 스트림에서는 음성이 검출되지 않은 구절은 아예 모델로 보내지지 않습니다. 검출기는 CPU에서 동작하며, 오디오 3분당 약 1초가 더 걸립니다. `SPEECH_GATE=false`로 이전 동작을 되돌릴 수 있습니다.
 
@@ -215,6 +219,7 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | 최대 업로드 크기(MB), 더 큰 본문은 `413` 반환      |
 | `CORS_ORIGINS`          | `*`                     | 허용되는 CORS 출처: `*` 또는 쉼표로 구분된 목록    |
 | `GUNICORN_WORKERS`      | `4`                     | 워커 프로세스 수(gunicorn 전용)                    |
+| `GUNICORN_WORKER_CLASS` | `sync`                  | `uvicorn_worker.UvicornWorker`는 `/api/stream`을 추가(gunicorn 전용) |
 | `LOG_LEVEL`             | `INFO`                  | 로깅 레벨                                          |
 | `LOG_ACCESS`            | `false`                 | uvicorn 액세스 로그 기록                           |
 | `WHISPER_MODEL`         | `small.en`              | Whisper 모델 이름(예: `small.en`, `turbo`)         |
@@ -257,6 +262,7 @@ speech-to-text/
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
 │   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
 │   ├── speech_gate.py   # voice detector that drops text nobody spoke
+│   ├── metrics.py       # Prometheus metrics for GET /metrics
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND
