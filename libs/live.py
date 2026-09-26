@@ -27,7 +27,7 @@ from typing import Any
 import numpy as np
 
 # Local imports
-from libs import auth, backends, config, diarize, model_pool, stream, url_source
+from libs import auth, backends, config, diarize, metrics, model_pool, stream, url_source
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,9 @@ CLOSE_CODES = {
 # queued phrases rather than grow its buffer and its lag without end. The client is told how much
 # was skipped, in a `skipped` message.
 MAX_BACKLOG_SECONDS = 120.0
+
+# Live sessions running in this process, for /metrics.
+ACTIVE_SESSIONS = 0
 
 # With no utterance to transcribe for this long, the worker catches the diarizer up and trims
 # the buffer, so a long silence neither piles up audio nor leaves the diarizer an hour behind.
@@ -177,6 +180,7 @@ def shed_backlog(session: dict[str, Any]) -> None:
         backlog -= length
         dropped += length
     if dropped:
+        metrics.SKIPPED_SECONDS.inc(dropped)
         session["skipped"] += dropped
         logger.warning("[%s] Stream fell behind: skipped %.1fs of queued audio", session["request_id"], dropped)
 
@@ -280,6 +284,10 @@ async def read_url_audio(session: dict[str, Any], receive, send_event) -> str:
     control = asyncio.create_task(watch_control(receive))
     try:
         await asyncio.wait({pump, control}, return_when=asyncio.FIRST_COMPLETED)
+        # A client that left in the same moment the source ended has left: reported as the source
+        # ending, the session would then try to send `done` to nobody and log it as abnormal.
+        if control.done() and control.result() == "disconnect":
+            return "disconnect"
         if pump.done():
             return pump.result()
         return control.result()
@@ -395,6 +403,7 @@ async def close_socket(send, code: int) -> None:
 
 async def fail_session(send, send_event, error: str, request_id: str) -> None:
     """Report one error in the same shape as every HTTP error body, then close."""
+    metrics.count_error(error)
     try:
         await send_event({"type": "error", "error": error, "request_id": request_id})
     except Exception as exc:
@@ -504,6 +513,17 @@ async def handle_stream(scope: dict[str, Any], receive, send) -> None:
 
 async def serve_session(session: dict[str, Any], options: dict[str, Any], receive, send, send_event) -> None:
     """Announce the session with `ready`, run it, and turn any unexpected failure into an error."""
+    global ACTIVE_SESSIONS
+    ACTIVE_SESSIONS += 1
+    metrics.STREAM_SESSIONS.labels(source=options["source"]).inc()
+    try:
+        await announce_and_run(session, options, receive, send, send_event)
+    finally:
+        ACTIVE_SESSIONS -= 1
+
+
+async def announce_and_run(session: dict[str, Any], options: dict[str, Any], receive, send, send_event) -> None:
+    """Send `ready`, run the session, and answer an unexpected failure with an error and a close."""
     request_id = session["request_id"]
     logger.info(
         "[%s] Stream started - source %s, backend %s, language %s, diarize %s",

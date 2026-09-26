@@ -22,6 +22,9 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
+# Local imports
+from libs import metrics
+
 logger = logging.getLogger(__name__)
 
 SAMPLE_RATE = 16000
@@ -156,6 +159,7 @@ def keep_spoken(
         share = speech_share(segment, ranges, duration)
         if share < MIN_SPEECH_SHARE or is_credit_line(segment["text"]):
             logger.info("[%s] Dropped as not spoken (speech %.0f%%): %r", request_id, share * 100, segment["text"].strip()[:80])
+            metrics.DROPPED_SEGMENTS.inc()
             continue
         kept.append(segment)
     return kept

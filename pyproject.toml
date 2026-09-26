@@ -41,6 +41,8 @@ dependencies = [
     "python-dotenv>=1.2.3",
     "requests>=2.34.2",
     "websockets>=13.0",
+    "prometheus-client>=0.20",
+    "uvicorn-worker>=0.3",
 ]
 
 [project.optional-dependencies]

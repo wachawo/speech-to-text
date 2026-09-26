@@ -107,6 +107,10 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 { "status": "ok", "pool_size": 4, "available": 3, "diarize": false }
 ```
 
+`GET /api/health?deep=1` also pushes one second of silence through every loaded model and reports each as `ok`, `busy` (no instance freed up within five seconds) or `failed`, answering `503` if any failed. It costs GPU work, so while `STT_TOKENS` is set it needs a token; the plain check stays open for container healthchecks.
+
+`GET /metrics` serves Prometheus metrics: requests by route and status, their durations, error responses by category, pool sizes and free instances, live sessions running and started, segments dropped by the speech gate and live audio shed by a session that fell behind. Like health it needs no token, and `stt_www` does not proxy it: scrape `STT_PORT` directly. Under gunicorn every worker counts for itself.
+
 `POST /api/stt` accepts a `multipart/form-data` field named `file`, or a raw `audio/*` body. An optional `language` (query string or form field) overrides the server default for that request; `auto` autodetects. On success it returns the text and the elapsed seconds:
 
 ```json
@@ -199,7 +203,7 @@ Because this makes the server fetch an address a client chose, it is fenced in. 
 
 A failure is one `{"type": "error", "error": "<category>", "request_id": "..."}` followed by a close, with the HTTP error categories plus `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed` and `Forbidden`.
 
-A phrase ends at a pause of 0.6 s, where the diarizer hears one speaker hand over to another (with `diarize`, since people answering each other often leave less than 0.6 s), or at its quietest moment once it runs past 15 s, and is transcribed on its own with a model borrowed from the same pool as the uploads, so a busy pool delays live phrases rather than failing them. With `diarize`, the diarizer runs in its streaming mode and carries a speaker cache from chunk to chunk, so a speaker keeps the same number for the whole session. The socket exists only when the server runs under uvicorn (`python3 stt_server.py`, the Docker default): the Flask debug server and gunicorn's sync workers do not speak websocket.
+A phrase ends at a pause of 0.6 s, where the diarizer hears one speaker hand over to another (with `diarize`, since people answering each other often leave less than 0.6 s), or at its quietest moment once it runs past 15 s, and is transcribed on its own with a model borrowed from the same pool as the uploads, so a busy pool delays live phrases rather than failing them. With `diarize`, the diarizer runs in its streaming mode and carries a speaker cache from chunk to chunk, so a speaker keeps the same number for the whole session. The socket exists when the server runs under uvicorn - `python3 stt_server.py`, the Docker default, or gunicorn with `GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker` serving `stt_server:asgi_app` - and not under the Flask debug server or gunicorn's default sync workers, which do not speak websocket.
 
 **Only spoken text is returned.** Where there is no speech - a tone, music, noise, a ringback, even digital silence - Whisper answers with the credits of the subtitled video it learned from - a Russian "subtitles by DimaTorzok" credit, "to be continued...", "Thank you for watching." - and it does so with full confidence: on the test corpus its own `no_speech_prob` was 0.00 even on silence. So every endpoint runs a voice detector, Silero VAD, over the audio and drops a transcribed segment that lies mostly outside detected speech, plus any segment that is a whole subtitle credit line. On a corpus of nine non-speech recordings this removed every such line while keeping every phrase of the speech recordings. A recording with nothing spoken in it now reads as empty text. In the live stream a phrase with no detected speech is not even sent to the model. The detector runs on the CPU and adds about a second per three minutes of audio. `SPEECH_GATE=false` restores the old behaviour.
 
@@ -242,6 +246,7 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | max upload size in MB; a larger body returns `413`  |
 | `CORS_ORIGINS`          | `*`                     | allowed CORS origins: `*` or a comma-separated list |
 | `GUNICORN_WORKERS`      | `4`                     | worker processes (gunicorn only)                    |
+| `GUNICORN_WORKER_CLASS` | `sync`                  | `uvicorn_worker.UvicornWorker` adds `/api/stream` (gunicorn only) |
 | `LOG_LEVEL`             | `INFO`                  | logging level                                       |
 | `LOG_ACCESS`            | `false`                 | log uvicorn access lines                            |
 | `WHISPER_MODEL`         | `small.en`              | Whisper model name (e.g. `small.en`, `turbo`)       |
@@ -284,6 +289,7 @@ speech-to-text/
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
 │   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
 │   ├── speech_gate.py   # voice detector that drops text nobody spoke
+│   ├── metrics.py       # Prometheus metrics for GET /metrics
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # which module transcribes, per STT_BACKEND

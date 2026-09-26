@@ -3,6 +3,16 @@
 ### [Unreleased]
 
 #### Added
+- **`GET /metrics` for Prometheus:** requests by route and status with durations, error
+  responses by category, pool sizes and free instances, live sessions, segments dropped by the
+  speech gate, live audio shed by a session that fell behind.
+- **`GET /api/health?deep=1`** runs one second of silence through every loaded model and answers
+  503 if one fails - the plain check only says the process is up.
+- **The live stream under gunicorn.** `GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker` with
+  `stt_server:asgi_app` serves `/api/stream` from several workers; checked under load on the
+  deployment GPU.
+- **Docker images in CI and on GHCR.** CI builds the CPU and web UI images on every PR; a release
+  tag pushes them to GHCR as `speech-to-text-cpu` and `speech-to-text-www`.
 - **Who spoke when, on its own, in the web UI.** FILE gets a Turns mode that calls
   `/api/diarize` and draws the result as a timeline: a lane per speaker, a bar per turn, and the
   stretches where two people talk at once marked. Each source now keeps its last result while
@@ -123,6 +133,7 @@
   linked from the language switcher at the top of each README.
 
 #### Fixed
+- **A URL source ending as the client left** is logged as the client leaving, not as an abnormal end.
 - **405 names the allowed methods** in an `Allow` header, as RFC 9110 requires.
 - **An SRT listener could still get past the URL check.** ffmpeg reads SRT options from the
   first `?` anywhere in the address, while the check read urlsplit's query, which stops at `#`, so

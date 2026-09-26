@@ -80,6 +80,10 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 { "status": "ok", "pool_size": 4, "available": 3, "diarize": false }
 ```
 
+`GET /api/health?deep=1` schickt zusätzlich eine Sekunde Stille durch jedes geladene Modell und meldet jedes als `ok`, `busy` (innerhalb von fünf Sekunden wurde keine Instanz frei) oder `failed`; ist eines gescheitert, antwortet der Endpunkt mit `503`. Das kostet GPU-Arbeit, daher braucht er ein Token, solange `STT_TOKENS` gesetzt ist; der einfache Check bleibt für Container-Healthchecks offen.
+
+`GET /metrics` liefert Prometheus-Metriken: Anfragen nach Route und Status, ihre Dauer, Fehlerantworten nach Kategorie, Pool-Größen und freie Instanzen, laufende und gestartete Live-Sitzungen, von der Sprachaktivitätserkennung verworfene Segmente und Live-Audio, das eine in Rückstand geratene Sitzung abgeworfen hat. Wie der Health-Endpunkt braucht er kein Token, und `stt_www` leitet ihn nicht weiter: Fragen Sie `STT_PORT` direkt ab. Unter gunicorn zählt jeder Worker für sich.
+
 `POST /api/stt` akzeptiert ein `multipart/form-data`-Feld namens `file` oder einen rohen `audio/*`-Body. Ein optionales `language` (Query-String oder Formularfeld) überschreibt für diese Anfrage den Server-Standard; `auto` erkennt die Sprache automatisch. Bei Erfolg werden der Text und die verstrichenen Sekunden zurückgegeben:
 
 ```json
@@ -172,7 +176,7 @@ Weil der Server damit eine Adresse abruft, die ein Client gewählt hat, ist das 
 
 Ein Fehler ist ein einzelnes `{"type": "error", "error": "<category>", "request_id": "..."}`, gefolgt vom Schließen der Verbindung, mit den Fehlerkategorien der HTTP-API sowie `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed` und `Forbidden`.
 
-Eine Phrase endet bei einer Pause von 0,6 s, an der Stelle, an der der Diarisierer einen Sprecher an einen anderen übergeben hört (mit `diarize`, da Menschen, die einander antworten, oft weniger als 0,6 s Pause lassen), oder, sobald sie länger als 15 s dauert, an ihrer leisesten Stelle und wird für sich allein mit einem Modell transkribiert, das aus demselben Pool geliehen wird wie für Uploads, sodass ein ausgelasteter Pool Live-Phrasen verzögert, statt sie scheitern zu lassen. Mit `diarize` läuft der Diarisierer in seinem Streaming-Modus und führt einen Sprecher-Cache von Abschnitt zu Abschnitt mit, sodass ein Sprecher für die ganze Sitzung dieselbe Nummer behält. Der Socket existiert nur, wenn der Server unter uvicorn läuft (`python3 stt_server.py`, der Docker-Standard): Der Flask-Debug-Server und die Sync-Worker von gunicorn sprechen kein WebSocket.
+Eine Phrase endet bei einer Pause von 0,6 s, an der Stelle, an der der Diarisierer einen Sprecher an einen anderen übergeben hört (mit `diarize`, da Menschen, die einander antworten, oft weniger als 0,6 s Pause lassen), oder, sobald sie länger als 15 s dauert, an ihrer leisesten Stelle und wird für sich allein mit einem Modell transkribiert, das aus demselben Pool geliehen wird wie für Uploads, sodass ein ausgelasteter Pool Live-Phrasen verzögert, statt sie scheitern zu lassen. Mit `diarize` läuft der Diarisierer in seinem Streaming-Modus und führt einen Sprecher-Cache von Abschnitt zu Abschnitt mit, sodass ein Sprecher für die ganze Sitzung dieselbe Nummer behält. Der Socket existiert, wenn der Server unter uvicorn läuft - `python3 stt_server.py`, der Docker-Standard, oder gunicorn mit `GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker`, das `stt_server:asgi_app` ausliefert -, und nicht unter dem Flask-Debug-Server oder den standardmäßigen Sync-Workern von gunicorn, die kein WebSocket sprechen.
 
 **Zurückgegeben wird nur gesprochener Text.** Wo keine Sprache vorkommt - ein Ton, Musik, Rauschen, ein Freizeichen, sogar digitale Stille -, antwortet Whisper mit dem Abspann der untertitelten Videos, aus denen es gelernt hat (eine russische Zeile "Untertitel von DimaTorzok", "Fortsetzung folgt...", "Danke fürs Zuschauen."), und zwar mit voller Zuversicht: Im Testkorpus lag sein eigenes `no_speech_prob` selbst bei Stille bei 0,00. Deshalb lässt jeder Endpunkt eine Sprachaktivitätserkennung, Silero VAD, über das Audio laufen und verwirft ein transkribiertes Segment, das größtenteils außerhalb erkannter Sprache liegt, sowie jedes Segment, das eine vollständige Abspannzeile aus Untertiteln ist. Auf einem Korpus aus neun Aufnahmen ohne Sprache entfernte das jede solche Zeile, während jede Phrase der Sprachaufnahmen erhalten blieb. Eine Aufnahme, in der nichts gesprochen wird, ergibt jetzt leeren Text. Im Live-Stream wird eine Phrase ohne erkannte Sprache gar nicht erst an das Modell geschickt. Die Erkennung läuft auf der CPU und kostet etwa eine Sekunde pro drei Minuten Audio. `SPEECH_GATE=false` stellt das alte Verhalten wieder her.
 
@@ -215,6 +219,7 @@ python3 stt_client.py --stream meeting.wav --speakers --language ru
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | maximale Upload-Größe in MB; ein größerer Body gibt `413` zurück |
 | `CORS_ORIGINS`          | `*`                     | erlaubte CORS-Ursprünge: `*` oder eine kommagetrennte Liste |
 | `GUNICORN_WORKERS`      | `4`                     | Worker-Prozesse (nur gunicorn)                      |
+| `GUNICORN_WORKER_CLASS` | `sync`                  | `uvicorn_worker.UvicornWorker` ergänzt `/api/stream` (nur gunicorn) |
 | `LOG_LEVEL`             | `INFO`                  | Logging-Level                                       |
 | `LOG_ACCESS`            | `false`                 | uvicorn-Access-Zeilen protokollieren                |
 | `WHISPER_MODEL`         | `small.en`              | Whisper-Modellname (z. B. `small.en`, `turbo`)      |
@@ -257,6 +262,7 @@ speech-to-text/
 │   ├── stream.py        # Kern der Live-Transkription: Pausen, Phrasen, Transkription je Phrase
 │   ├── url_source.py    # URL-Quellen für /api/stream: Prüfung der Adresse, Start von ffmpeg
 │   ├── speech_gate.py   # Sprachaktivitätserkennung, die Text verwirft, den niemand gesprochen hat
+│   ├── metrics.py       # Prometheus-Metriken für GET /metrics
 │   ├── stt.py           # Whisper-Wrapper
 │   ├── parakeet.py      # NVIDIA-Parakeet-Wrapper, der zweite Transkribierer
 │   ├── backends.py      # welches Modul transkribiert, je nach STT_BACKEND
