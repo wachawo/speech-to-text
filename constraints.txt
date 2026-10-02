@@ -60,7 +60,7 @@ rich==15.0.0
 safetensors==0.8.0
 scikit-learn==1.9.1
 scipy==1.18.1
-setuptools==78.1.0
+setuptools==84.0.0
 shellingham==1.5.4
 silero-vad==6.2.3
 soundfile==0.14.0
