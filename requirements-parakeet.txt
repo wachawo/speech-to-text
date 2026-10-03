@@ -4,7 +4,7 @@
 # Unlike the diarizer, this one needs no git pin: parakeet_tdt is in released transformers,
 # and AutoModelForTDT exists there. Kept as a floor rather than an exact pin so it can
 # co-exist with the diarize extra, which pulls a newer transformers from a commit.
-transformers>=5.17.0
+transformers>=5.18.0
 
 # Reading the 16 kHz mono WAV the server hands over.
 soundfile>=0.12.1
