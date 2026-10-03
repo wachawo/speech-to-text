@@ -15,6 +15,12 @@ updates:
       # both places at once, against a driver that supports it.
       - dependency-name: "torch"
       - dependency-name: "torchaudio"
+      # torch needs sympy, and sympy 1.14.0 - the newest release - caps mpmath
+      # below 1.4. A bump past that cap in constraints.txt leaves no installable
+      # torch, and the image build fails. Drop this once a sympy release
+      # accepts mpmath 1.4.
+      - dependency-name: "mpmath"
+        versions: [">=1.4"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
