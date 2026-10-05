@@ -21,6 +21,12 @@ updates:
       # accepts mpmath 1.4.
       - dependency-name: "mpmath"
         versions: [">=1.4"]
+      # Every tokenizers release caps huggingface-hub below 2.0, and transformers
+      # needs tokenizers. A bump past that cap in constraints.txt leaves no
+      # installable transformers, and a GPU image with the diarizer or Parakeet
+      # fails to build. Drop this once a tokenizers release accepts hub 2.0.
+      - dependency-name: "huggingface-hub"
+        versions: [">=2.0"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
