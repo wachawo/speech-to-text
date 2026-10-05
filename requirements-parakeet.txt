@@ -1,9 +1,8 @@
 # Parakeet transcription backend, installed only when the image is built with
 # --build-arg PARAKEET=true. Mirrors the `parakeet` extra in pyproject.toml.
 #
-# Unlike the diarizer, this one needs no git pin: parakeet_tdt is in released transformers,
-# and AutoModelForTDT exists there. Kept as a floor rather than an exact pin so it can
-# co-exist with the diarize extra, which pulls a newer transformers from a commit.
+# parakeet_tdt and AutoModelForTDT are in released transformers. The floor is the diarizer's,
+# so the two install together; the images hold the exact version through constraints.txt.
 transformers>=5.18.0
 
 # Reading the 16 kHz mono WAV the server hands over.

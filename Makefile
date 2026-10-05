@@ -56,7 +56,7 @@ stop:
 constraints:
 	@head -n 9 constraints.txt > constraints.txt.new
 	@docker run --rm --entrypoint uv stt_server_gpu:latest pip freeze --python /opt/venv/bin/python \
-		| grep -viE '^(torch|torchaudio|triton|nvidia-|cuda-|transformers)' >> constraints.txt.new
+		| grep -viE '^(torch|torchaudio|triton|nvidia-|cuda-)' >> constraints.txt.new
 	@mv constraints.txt.new constraints.txt
 	@echo "[constraints] $$(grep -vc '^#' constraints.txt) packages frozen"
 

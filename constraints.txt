@@ -3,8 +3,8 @@
 # Used with `-c`, so a package is only held to its version when something already asks for it;
 # nothing here gets installed on its own. Without it every rebuild re-resolved all unpinned
 # dependencies and could ship versions nobody tested. Left out on purpose: torch, torchaudio,
-# triton and the NVIDIA/CUDA wheels (pinned per image in the Dockerfiles, and different on CPU),
-# and transformers (a git commit in requirements-diarize.txt, 5.17 alone for Parakeet).
+# triton and the NVIDIA/CUDA wheels, which are pinned per image in the Dockerfiles and differ
+# between the CPU and the GPU build.
 #
 # Regenerate from a freshly built, verified GPU image with `make constraints`.
 annotated-doc==0.0.5
@@ -70,6 +70,7 @@ threadpoolctl==3.7.0
 tiktoken==0.14.0
 tokenizers==0.23.2
 tqdm==4.70.1
+transformers==5.18.0
 typer==0.27.2
 typing-extensions==4.16.0
 urllib3==2.8.0
