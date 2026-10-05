@@ -70,8 +70,7 @@
   from a CDN.
 - **NVIDIA Parakeet as a second transcription backend.** `STT_BACKEND=parakeet` serves
   `nvidia/parakeet-tdt-0.6b-v3`: 25 European languages, self-detected, with native
-  token-level timestamps. Opt-in at build time (`--build-arg PARAKEET=true`) and needs no
-  git pin, unlike the diarizer: `parakeet_tdt` ships in released transformers. It takes no
+  token-level timestamps. Opt-in at build time (`--build-arg PARAKEET=true`). It takes no
   `language` argument at all, and `GET /api/models` reports that rather than leaving a
   caller to discover it. The variant most write-ups name, v2, ships only as a NeMo
   checkpoint and is not installable against this project's pinned CUDA build of PyTorch;
@@ -203,6 +202,12 @@
   mounted dirs and drops privileges via `setpriv` before starting the server.
 
 #### Changed
+- **transformers comes from PyPI, not from a git commit.** 5.18.0 is the first release that
+  recognises the diarization model, so the `diarize` extra and `requirements-diarize.txt` ask
+  for `transformers>=5.18.0`, the same floor as Parakeet, and the two install together. The GPU
+  image no longer installs git to build it, the `diarize` extra no longer carries a direct
+  reference that PyPI would refuse, and the images hold transformers to 5.18.0 through
+  `constraints.txt` like every other package.
 - **The voice detector takes its lock per 30 s window**, so a long file's detection no longer
   holds every short request's speech gate for its whole length.
 - **Builds are reproducible.** Every install step runs with `-c constraints.txt`, the versions

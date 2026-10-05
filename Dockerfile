@@ -41,11 +41,8 @@ RUN uv pip install --no-cache \
 COPY requirements.txt constraints.txt /opt/
 RUN uv pip install --no-cache -r requirements.txt -c constraints.txt
 
-# Parakeet is opt-in at build time too, and needs no git: it ships in released transformers.
-# It is installed BEFORE the diarizer on purpose. Parakeet asks for transformers>=5.17.0 and the
-# diarizer pins a 5.18.0.dev0 commit; whether a resolver keeps an installed pre-release against
-# a plain `>=` is its own business, so the git pin simply goes last and always wins. That
-# commit carries both architectures, and the assertions below check it.
+# Parakeet is opt-in at build time too: `--build-arg PARAKEET=true`. It and the diarizer share
+# one transformers release, which carries both architectures; the assertions below check it.
 ARG PARAKEET=false
 COPY requirements-parakeet.txt /opt/requirements-parakeet.txt
 RUN if [ "$PARAKEET" = "true" ]; then uv pip install --no-cache -r requirements-parakeet.txt -c constraints.txt; fi
@@ -54,16 +51,7 @@ RUN if [ "$PARAKEET" = "true" ]; then uv pip install --no-cache -r requirements-
 # what it was before diarization existed.
 ARG DIARIZE=false
 COPY requirements-diarize.txt /opt/requirements-diarize.txt
-# git is here only because the transformers pin is a git+https ref: uv shells out to the git
-# binary and does not vendor one, and this base image has none. It is purged in the same layer
-# so it never reaches the running image, and it can go entirely once the pin is a version.
-RUN if [ "$DIARIZE" = "true" ]; then \
-        apt-get update \
-     && apt-get install -y --no-install-recommends git \
-     && uv pip install --no-cache -r requirements-diarize.txt -c constraints.txt \
-     && apt-get purge -y git && apt-get autoremove -y \
-     && rm -rf /var/lib/apt/lists/*; \
-    fi
+RUN if [ "$DIARIZE" = "true" ]; then uv pip install --no-cache -r requirements-diarize.txt -c constraints.txt; fi
 
 # The torch wheel above is a CUDA build chosen on purpose, and the resolutions that follow it
 # are unconstrained: anything depending on torch can replace it, and the failure surfaces much

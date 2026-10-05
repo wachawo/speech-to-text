@@ -55,20 +55,17 @@ whisper = [
     # The speech gate (libs/speech_gate.py); needs only torch, which the backend already brings.
     "silero-vad>=6.2",
 ]
-# Speaker diarization. transformers is pinned to a git commit because the model declares
-# transformers_version 5.18.0.dev0 while the newest PyPI release is 5.17.0, which does not
-# recognise the `nemotron3_diarization` architecture at all. A direct reference like this is
-# fine for `python -m build` and for the GitHub Release, and would be rejected by PyPI - so
-# swap it for a version pin before this package is ever published there.
+# Speaker diarization. The model declares transformers_version 5.18.0.dev0, and 5.18.0 is the
+# first release that recognises the `nemotron3_diarization` architecture.
 # It is an add-on to `whisper`, not a standalone install: torch comes with that one.
 #   pip install "speech-to-text[whisper,diarize]"
 diarize = [
-    "transformers @ git+https://github.com/huggingface/transformers@98d39824ed30e684e5122d04a2d9564efffc4965",
+    "transformers>=5.18.0",
     "soundfile>=0.12.1",
     # The checkpoint's feature extractor requires it; transformers does not install it.
     "librosa>=0.11.0",
 ]
-# The Parakeet transcription backend. No git pin: parakeet_tdt ships in released transformers.
+# The Parakeet transcription backend: parakeet_tdt ships in released transformers.
 # An add-on rather than a standalone install, like `diarize`: torch comes with `whisper`.
 parakeet = [
     "transformers>=5.18.0",
