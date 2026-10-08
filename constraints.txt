@@ -16,7 +16,7 @@ charset-normalizer==3.5.2
 click==8.5.0
 cloudpickle==3.1.2
 decorator==5.3.1
-filelock==4.0.7
+filelock==4.0.11
 flask==3.1.3
 flask-cors==6.0.5
 fsspec==2026.9.0
@@ -35,7 +35,7 @@ lazy-loader==0.6
 librosa==1.0.0
 llvmlite==0.50.0
 markdown-it-py==4.2.0
-markupsafe==3.0.3
+markupsafe==3.0.4
 mdurl==0.1.2
 more-itertools==11.1.0
 mpmath==1.3.0
@@ -46,13 +46,13 @@ numba==0.68.0
 numpy==2.5.3
 openai-whisper==20250625
 packaging==26.3
-platformdirs==4.12.2
+platformdirs==4.12.3
 pooch==1.9.0
 prometheus-client==0.26.0
 pycparser==3.0
 pydub==0.25.1
 pygments==2.21.0
-python-dotenv==1.2.3
+python-dotenv==1.2.4
 pyyaml==6.0.3
 regex==2026.9.29
 requests==2.34.2
@@ -76,7 +76,7 @@ typing-extensions==4.16.0
 urllib3==2.8.0
 uvicorn==0.54.0
 uvicorn-worker==0.4.0
-uvloop==0.22.1
+uvloop==0.23.0
 watchfiles==1.3.0
-websockets==17.1
+websockets==17.2
 werkzeug==3.1.9
