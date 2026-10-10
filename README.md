@@ -138,7 +138,7 @@ curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
 }
 ```
 
-`status` is `loaded` when an instance is waiting in a pool, `installed` when the weights are on disk but nothing is loaded yet, and `absent` otherwise. A backend that is configured but not installed says `absent` and nothing more; the reason goes to the log. `accepts_language` says whether `?language=` means anything to that backend at all. The diarizer reports `null` languages rather than an empty list, because it produces no text in any language.
+`status` is `loaded` when instances were loaded into a pool, free or busy, `installed` when the weights are on disk but nothing is loaded yet, and `absent` otherwise. A backend that is configured but not installed says `absent` and nothing more; the reason goes to the log. `accepts_language` says whether `?language=` means anything to that backend at all. The diarizer reports `null` languages rather than an empty list, because it produces no text in any language.
 
 The CLI client reads the same endpoint:
 

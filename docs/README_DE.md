@@ -111,7 +111,7 @@ curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
 }
 ```
 
-`status` ist `loaded`, wenn eine Instanz in einem Pool wartet, `installed`, wenn die Gewichte auf der Platte liegen, aber noch nichts geladen ist, und andernfalls `absent`. Ein Backend, das konfiguriert, aber nicht installiert ist, meldet `absent` und nichts weiter; der Grund geht ins Log. `accepts_language` sagt, ob `?language=` für dieses Backend überhaupt eine Bedeutung hat. Der Diarisierer meldet `null` als Sprachen statt einer leeren Liste, denn er erzeugt in keiner Sprache Text.
+`status` ist `loaded`, wenn Instanzen in einen Pool geladen wurden, frei oder belegt, `installed`, wenn die Gewichte auf der Platte liegen, aber noch nichts geladen ist, und andernfalls `absent`. Ein Backend, das konfiguriert, aber nicht installiert ist, meldet `absent` und nichts weiter; der Grund geht ins Log. `accepts_language` sagt, ob `?language=` für dieses Backend überhaupt eine Bedeutung hat. Der Diarisierer meldet `null` als Sprachen statt einer leeren Liste, denn er erzeugt in keiner Sprache Text.
 
 Der CLI-Client liest denselben Endpunkt:
 

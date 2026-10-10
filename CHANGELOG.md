@@ -150,6 +150,12 @@
   running it, an upload cut off midway leaves no directory behind, and a failed status write no
   longer keeps a job locked until the process exits. `POST /api/jobs` answered 500 on Flask 3.0,
   where a request's size limit cannot be set; Flask 3.1 is now the minimum.
+- **The catalogue, backend selection and the diarization routes.** `GET /api/models` reads a model
+  as `loaded` while a request or a job holds it, instead of flipping to `installed` whenever the
+  only instance was in use. A typo in `STT_BACKEND` is logged once, not on every request, and the
+  value is case-insensitive, so `Parakeet` no longer falls back to Whisper unnoticed.
+  `/api/diarize` with no diarizer loaded answers 503 before reading the upload, as
+  `/api/transcript` already did.
 - **A URL source ending as the client left** is logged as the client leaving, not as an abnormal end.
 - **A stopped live session in the web UI no longer hangs on a dead connection.** After STOP it
   waited for the server's last phrase with no limit, so a connection that died silently - a laptop
