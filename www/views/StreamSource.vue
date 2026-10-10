@@ -57,7 +57,25 @@
    STOP asks it to stop reading and waits for the last phrase, as for a device.
 
    No https is needed for this one: there is no device to ask the browser
-   for. */
+   for.
+
+   An address may carry a password (rtsp://user:pass@host/...) or a token in
+   its query. The full address lives only in the field while the page is
+   open: what is remembered has no user name or password, and what is shown
+   elsewhere has no query either, the way the server writes it to its log. */
+
+/* The address without the user name and password in front of its host,
+   everything else kept so it still works. The authority ends at the first
+   `/`, `?` or `#`, and the credentials at its last `@` - where ffmpeg splits
+   it too. */
+var removeCredentials = function (url) {
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^\/?#]*@/i, '$1');
+};
+
+/* The address as it may be shown: no credentials, no query, no fragment. */
+var formatShownUrl = function (url) {
+  return removeCredentials(url).replace(/[?#].*$/, '');
+};
 
 module.exports = {
   mixins: [SttWait, SttLive],
@@ -87,9 +105,9 @@ module.exports = {
   },
 
   created: function () {
-    // The address the running session was started with: the field can be
-    // edited only when nothing runs, but the transcript is named after what
-    // was actually read.
+    // The address the running session was started with, as it may be
+    // shown: the field can be edited only when nothing runs, but the
+    // transcript is named after what was actually read.
     this.startedUrl = '';
   },
 
@@ -99,7 +117,7 @@ module.exports = {
     },
 
     urlTitle: function () {
-      return this.url.trim() || 'The address the server reads: http, https, rtmp, rtmps, rtsp or srt';
+      return formatShownUrl(this.url.trim()) || 'The address the server reads: http, https, rtmp, rtmps, rtsp or srt';
     },
 
     buttonTitle: function () {
@@ -107,7 +125,7 @@ module.exports = {
       if (this.liveActive) return 'Stop reading, and keep what was transcribed';
       if (this.held) return 'Waiting for the server catalogue';
       if (!this.url.trim()) return 'Enter an address first';
-      return 'Start transcribing ' + this.url.trim();
+      return 'Start transcribing ' + formatShownUrl(this.url.trim());
     },
   },
 
@@ -117,14 +135,15 @@ module.exports = {
       else this.start();
     },
 
-    /* The address is trimmed and remembered as it is sent; which schemes the
-       server takes is the server's call, and its refusal says which they are. */
+    /* The address is trimmed and sent as it is, and remembered without its
+       credentials; which schemes the server takes is the server's call, and
+       its refusal says which they are. */
     start: function () {
       if (this.liveActive || !this.canStart) return;
       var url = this.url.trim();
       this.url = url;
-      this.startedUrl = url;
-      this.$savePrefs('transcribe', { url: url });
+      this.startedUrl = formatShownUrl(url);
+      this.$savePrefs('transcribe', { url: removeCredentials(url) });
       var attempt = this.liveBegin();
       this.liveConnect(attempt, {
         source: 'url',
