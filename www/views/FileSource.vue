@@ -78,8 +78,10 @@
    if the screen was left while the upload ran. The chosen file is kept there
    too, so a look at another screen does not lose it, and so is the upload in
    flight, so the source rebuilt on the way back shows it still running and
-   does not send the file again. `busy` tells the screen when an upload is in
-   flight, so it can keep the source switch from destroying it. Used as:
+   does not send the file again, and so is the reason it failed, so a failure
+   that comes while the screen is away is still on the error bar when it is
+   back. `busy` tells the screen when an upload is in flight, so it can keep
+   the source switch from destroying it. Used as:
 
      <stt-file-source :mode="mode" :language="language" :compact="!!result"
                       :held="catalogue loading" @busy="...">
@@ -112,7 +114,6 @@ module.exports = {
   data: function () {
     return {
       wait: [],
-      error: '',
       warning: '',
       info: '',
       success: '',
@@ -164,6 +165,18 @@ module.exports = {
 
     busy: function () {
       return !!this.upload;
+    },
+
+    /* The error bar, from the store: the failure of an upload this source
+       may not have sent, if the screen was left while it ran. Dismissing it
+       clears it there, so the rebuilt source does not show it again. */
+    error: {
+      get: function () {
+        return this.$store.state.uploadError;
+      },
+      set: function (value) {
+        this.$store.dispatch('keep_upload_error', value);
+      },
     },
 
     canTranscribe: function () {
@@ -237,7 +250,8 @@ module.exports = {
 
     /* The upload goes into the store before the request does, so TRANSCRIBE
        is off from this click on, whichever FILE source is on the screen when
-       the answer comes; the answer is filed under the upload's number. */
+       the answer comes; the answer, or the failure, is filed under the
+       upload's number. */
     transcribe: function () {
       var self = this;
       if (!this.canTranscribe || this.held) return;
@@ -256,14 +270,10 @@ module.exports = {
       // it, and a header set here would drop the boundary.
       this.$http.post(request.url, body)
         .then(function (resp) {
-          return { mode: mode, name: file.name, language: language, data: resp.data || {} };
-        })
-        .catch(function (err) {
-          self.error = self.$apiError(err);
-          return null;
-        })
-        .then(function (result) {
-          self.$store.dispatch('finish_upload', { serial: serial, result: result });
+          var result = { mode: mode, name: file.name, language: language, data: resp.data || {} };
+          self.$store.dispatch('finish_upload', { serial: serial, result: result, error: '' });
+        }, function (err) {
+          self.$store.dispatch('finish_upload', { serial: serial, result: null, error: self.$apiError(err) });
         });
     },
   },

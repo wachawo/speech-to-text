@@ -459,6 +459,12 @@ const state = {
   // keep TRANSCRIBE off instead of sending the same file a second time.
   // Replaced whole by start_upload and finish_upload.
   upload: null,
+  // Why the last FILE upload failed, or ''. Kept beside `upload` for the
+  // same reason: the source that sent the request may be gone when the
+  // failure comes, and the one on the screen then must still say it, not
+  // just drop the running upload. Set by finish_upload, cleared by
+  // keep_upload_error when the operator dismisses it or presses TRANSCRIBE.
+  uploadError: '',
 };
 
 /* A GET /api/models answer into the catalog. Its own action because two
@@ -519,13 +525,20 @@ const start_upload = function (context, caption) {
   context.state.upload = { serial: uploadSerial, caption: caption, started: Date.now() };
 };
 
-/* An upload answered: {serial, result}, the result null when the request
-   failed. An answer from an upload that is no longer the latest is dropped,
-   and leaves the latest one running. */
+/* An upload answered: {serial, result, error}, the result null and the
+   error the sentence for the error bar when the request failed. An answer
+   from an upload that is no longer the latest is dropped, and leaves the
+   latest one running. */
 const finish_upload = function (context, payload) {
   if (payload.serial !== uploadSerial) return;
   context.state.upload = null;
+  if (payload.error) context.state.uploadError = payload.error;
   if (payload.result) context.dispatch('keep_transcript', { source: 'file', result: payload.result });
+};
+
+/* The FILE error bar's text: '' when it is dismissed or a new upload starts. */
+const keep_upload_error = function (context, text) {
+  context.state.uploadError = text || '';
 };
 
 const actions = {
@@ -537,6 +550,7 @@ const actions = {
   choose_file,
   start_upload,
   finish_upload,
+  keep_upload_error,
 };
 
 const store = new Vuex.Store({ state, actions });
