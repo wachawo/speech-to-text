@@ -59,8 +59,10 @@ CREDIT_LINES = re.compile("|".join(f"(?:{pattern})" for pattern in CREDIT_PATTER
 VAD_MODEL: Any = None
 VAD_LOCK = threading.Lock()
 
-# Set after the detector failed once, so a missing silero-vad is one error in the log, not one
-# per request. Transcripts are then passed through unfiltered.
+# Set when the detector could not be imported or loaded, so a missing silero-vad is one error in
+# the log, not one per request. Transcripts are then passed through unfiltered. A failure on one
+# piece of audio after the detector loaded does not set it: that request goes out unfiltered and
+# the next one is vetted again.
 VAD_BROKEN = False
 
 
@@ -123,8 +125,9 @@ def detect_speech(samples: np.ndarray) -> list[tuple[float, float]]:
 def find_speech(samples: np.ndarray, request_id: str = "-") -> list[tuple[float, float]] | None:
     """Speech ranges, or None when the detector is unavailable and nothing should be filtered.
 
-    A quality filter must not take transcription down with it: a failure is logged once and the
-    text goes out as the transcriber produced it.
+    A quality filter must not take transcription down with it: the text goes out as the transcriber
+    produced it. A detector that never loaded is logged once and given up on for the process; a
+    failure on this audio alone is logged and costs only this call its filtering.
     """
     global VAD_BROKEN
     if VAD_BROKEN:
@@ -132,14 +135,23 @@ def find_speech(samples: np.ndarray, request_id: str = "-") -> list[tuple[float,
     try:
         return detect_speech(samples)
     except Exception as exc:
-        VAD_BROKEN = True
-        logger.error(
-            "[%s] Speech gate unavailable, transcripts go out unfiltered: %s: %s\n%s",
-            request_id,
-            type(exc).__name__,
-            exc,
-            traceback.format_exc(),
-        )
+        if VAD_MODEL is None:
+            VAD_BROKEN = True
+            logger.error(
+                "[%s] Speech gate unavailable, transcripts go out unfiltered: %s: %s\n%s",
+                request_id,
+                type(exc).__name__,
+                exc,
+                traceback.format_exc(),
+            )
+        else:
+            logger.error(
+                "[%s] Speech gate failed on this audio, its transcript goes out unfiltered: %s: %s\n%s",
+                request_id,
+                type(exc).__name__,
+                exc,
+                traceback.format_exc(),
+            )
         return None
 
 
@@ -154,8 +166,12 @@ def speech_share(segment: dict[str, Any], ranges: list[tuple[float, float]], dur
     With `duration`, the segment is first cut at the end of the audio: Whisper decodes a window
     padded to 30 s and often ends the last segment far past the audio, and measured over that
     padding a phrase spoken from start to finish reads as mostly silence.
+
+    A zero-length segment (Parakeet emits them) is an instant: all of it is in speech or none is.
     """
     seg_start = float(segment["start"])
+    if float(segment["end"]) == seg_start:
+        return 1.0 if any(start <= seg_start < end for start, end in ranges) else 0.0
     seg_end = float(segment["end"]) if duration is None else min(float(segment["end"]), duration)
     length = seg_end - seg_start
     if length <= 0:

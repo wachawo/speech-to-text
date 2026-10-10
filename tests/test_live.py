@@ -632,7 +632,9 @@ def test_a_diarized_session_attributes_segments_from_the_turns_so_far(monkeypatc
 
     monkeypatch.setattr(stream, "new_diarization", lambda: state)
     monkeypatch.setattr(stream, "advance_diarization", record_advance)
-    monkeypatch.setattr(live, "diarize", types.SimpleNamespace(stream_turns=answer_turns))
+    monkeypatch.setattr(
+        live, "diarize", types.SimpleNamespace(stream_turns=answer_turns, trim_activity=lambda state, keep_from: None)
+    )
 
     result = run_stream([build_connect(), build_start(diarize=True), *build_audio(build_speech()), build_stop()])
     assert read_events(result)[0]["diarize"] is True

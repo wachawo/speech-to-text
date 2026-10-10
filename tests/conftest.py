@@ -130,11 +130,17 @@ def fake_find_handover(state, start, end):
     return None
 
 
+def fake_trim_activity(state, keep_from):
+    """Stand in for diarize.trim_activity(): the fake diarizer keeps no activity to drop."""
+    return None
+
+
 fake_diarize = types.ModuleType("libs.diarize")
 fake_diarize.get_diarizer = fake_get_diarizer
 fake_diarize.diarize_wav = fake_diarize_wav
 fake_diarize.describe_backend = fake_describe_diarizer
 fake_diarize.find_handover = fake_find_handover
+fake_diarize.trim_activity = fake_trim_activity
 fake_diarize.STREAM_FRAME_SECONDS = 0.01
 sys.modules["libs.diarize"] = fake_diarize
 libs.diarize = fake_diarize
@@ -147,7 +153,7 @@ from libs import config, model_pool, speech_gate  # noqa: E402  (must follow the
 def speech_gate_off(monkeypatch):
     """Run every test with the speech gate off unless the test switches it on.
 
-    CI installs no silero-vad, and a detector that failed once stays off for the process; the
+    CI installs no silero-vad, and a detector that cannot be loaded stays off for the process; the
     gate's own tests replace the detector and switch the gate on themselves.
     """
     monkeypatch.setattr(config, "SPEECH_GATE", False)
