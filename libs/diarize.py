@@ -271,10 +271,14 @@ def find_handover(state: dict, start: float, end: float) -> float | None:
 
     The phrase's speaker is the one who talks most in its first HANDOVER_MIN_OFFSET, and the one
     whose turn begins first when nobody talks there. Not simply the first turn: a phrase opened by
-    a cut here starts exactly where the new speaker does, the previous one may trail past it by a
-    few frames, and a tie on start would then hand the phrase back to whoever just stopped. That
-    trail is under HANDOVER_SECONDS / 4 while the new speaker has talked HANDOVER_SECONDS, so the
-    new speaker always has the larger share. A handover is the first turn of anybody else that
+    a cut here starts where the new speaker does, yet the previous speaker's last frame can still
+    fall inside it - stream_turns rounds the first frame down (1.15 s reads from frame 114), and the
+    voice may trail past the cut. That turn then begins first, or ties and wins on the lower label,
+    and the phrase would go back to whoever just stopped. The cut left the previous speaker under
+    HANDOVER_SECONDS / 4 of the new speaker's first HANDOVER_SECONDS, and the rest of the opening
+    adds at most HANDOVER_MIN_OFFSET - HANDOVER_SECONDS, so the new speaker's HANDOVER_SECONDS is
+    the larger share while HANDOVER_SECONDS <= HANDOVER_MIN_OFFSET < 1.75 * HANDOVER_SECONDS.
+    A handover is the first turn of anybody else that
     starts at least HANDOVER_MIN_OFFSET into the window, has lasted HANDOVER_SECONDS, and during
     which the phrase's speaker is silent - two people talking at once is overlap, which stays one
     phrase and is marked as such.
