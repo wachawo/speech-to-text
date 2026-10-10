@@ -139,7 +139,7 @@
 
 #### Fixed
 - **Background jobs, after a review.** A job whose run takes its process down - out of memory, a
-  crash inside a model - is run at most twice and then fails as `Transcription failed`, instead
+  crash inside a model - is run at most three times and then fails as `Transcription failed`, instead
   of being claimed by every worker in turn and taking each one down; waiting for a busy model
   does not count as a run, while a restart in the middle of a job does: nothing hands a running
   job back on shutdown. A long recording is no longer read into memory whole and converted to

@@ -39,8 +39,9 @@ CLEANUP_SECONDS = 600
 # A job is claimed at most this many times. One whose process died under it - out of memory, a
 # crash inside the model - would otherwise be claimed again by every worker, and take each one down.
 # A restart mid-job counts as well: nothing hands a running job back on shutdown, and uvicorn ends
-# the process by re-raising SIGTERM, which skips any exit hook.
-MAX_ATTEMPTS = 2
+# the process by re-raising SIGTERM, which skips any exit hook. Three rather than two, so a long
+# job outlives two deploys, or a deploy and a crash, before it is given up on.
+MAX_ATTEMPTS = 3
 
 JOB_ID_LENGTH = 16
 INPUT_NAME = "input"
