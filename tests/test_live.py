@@ -7,6 +7,7 @@ import json
 import logging
 import queue
 import re
+import socket
 import threading
 import types
 
@@ -22,6 +23,23 @@ CHUNK_SECONDS = 0.1
 REQUEST_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 STREAM_URL = "http://example.com/live"
 
+# What the stand-in resolver answers. Any other name does not resolve, so no test reaches the network.
+TEST_ADDRESSES = {
+    "example.com": ["93.184.215.14"],
+    "localhost": ["127.0.0.1", "::1"],
+    "metadata.example.com": ["93.184.215.14", "169.254.169.254"],
+}
+
+
+def resolve_test_name(host, port, *args, **kwargs):
+    """Stand in for socket.getaddrinfo: answer from TEST_ADDRESSES, never from a real resolver."""
+    if host not in TEST_ADDRESSES:
+        raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+    return [
+        (socket.AF_INET6 if ":" in address else socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port or 0))
+        for address in TEST_ADDRESSES[host]
+    ]
+
 
 def answer_hello(bio, model=None, device=None, language=None):
     """Stand in for the transcriber: one half-second phrase at the start of every utterance."""
@@ -30,7 +48,7 @@ def answer_hello(bio, model=None, device=None, language=None):
 
 @pytest.fixture(autouse=True)
 def live_env(monkeypatch, stt_module):
-    """A one-slot model pool, no auth, diarization off, the whisper stub, and no URL session running."""
+    """A one-slot model pool, no auth, diarization off, the whisper stub, no URL session running, no real DNS."""
     pool: queue.Queue = queue.Queue()
     pool.put("model-sentinel")
     monkeypatch.setattr(model_pool, "MODEL_POOL", pool)
@@ -41,6 +59,7 @@ def live_env(monkeypatch, stt_module):
     monkeypatch.setattr(config, "STT_BACKEND", "whisper")
     monkeypatch.setattr(config, "CORS_ORIGINS", ["*"])
     monkeypatch.setattr(url_source, "URL_SESSIONS", 0)
+    monkeypatch.setattr(socket, "getaddrinfo", resolve_test_name)
     monkeypatch.setattr(stt_module, "get_stt_segments", answer_hello)
     return pool
 
@@ -358,7 +377,18 @@ def test_an_odd_length_audio_frame_is_refused():
     assert_refused(result, "Invalid audio frame", live.CLOSE_UNSUPPORTED, after_ready=True)
 
 
-@pytest.mark.parametrize("url", ["file:///etc/passwd", "srt://relay.example.com:9000?mode=listener", None, ""])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "srt://relay.example.com:9000?mode=listener",
+        None,
+        "",
+        # Names that resolve to a loopback address, or to the metadata address among others
+        "http://localhost:5051/health",
+        "http://metadata.example.com/latest/meta-data/",
+    ],
+)
 def test_a_malformed_url_is_refused(monkeypatch, url):
     """A URL source that is not an outbound network address never reaches ffmpeg."""
     started = install_fake_ffmpeg(monkeypatch)

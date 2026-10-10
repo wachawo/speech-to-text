@@ -151,8 +151,9 @@ A failed check stops the build instead of producing an image that fails at its f
 - **URL sources are fenced in.** The fence:
   - ffmpeg is held to network protocols;
   - it never listens;
-  - at most four URL sources run at once;
-  - a browser page from another site cannot start one.
+  - the address may not be a loopback one, a link-local one (the cloud metadata service at `169.254.169.254` among them) or `0.0.0.0`, checked when the session starts;
+  - at most four URL sources run at once in each worker process;
+  - a browser page from another site cannot start one, unless DNS rebinding makes it look like this one, which only a token stops.
 
-  None of that stops a client on the network from pointing the server at an internal address.
+  None of that stops a client on the network from pointing the server at another host on the local network, which is allowed on purpose for cameras and encoders, at the server's own LAN or container address, or at an address a redirect or a playlist leads to.
 - **The web UI asks for the token itself** and keeps it in the browser. nginx adds none of its own.

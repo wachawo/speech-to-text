@@ -514,6 +514,16 @@ async def handle_stream(scope: dict[str, Any], receive, send) -> None:
         await fail_session(send, send_event, "Service Unavailable", request_id)
         return
     try:
+        # Resolved only now, past the origin check and with a slot held: the lookup blocks a thread
+        # for as long as the resolver takes, and the slot caps how many do that at once.
+        if options["url"] and await asyncio.to_thread(url_source.points_at_refused_address, options["url"]):
+            logger.warning(
+                "[%s] Stream refused: Invalid stream URL - %s resolves to a loopback, link-local or unspecified address",
+                request_id,
+                url_source.redact_url(options["url"]),
+            )
+            await fail_session(send, send_event, "Invalid stream URL", request_id)
+            return
         await serve_session(new_session(options, request_id), options, receive, send, send_event)
     finally:
         if options["url"]:

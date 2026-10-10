@@ -180,6 +180,14 @@
   source no longer runs 7-35 s behind: `-re` paced its backlog too, and an initial burst now takes
   it at once. A malformed address or an ffmpeg that cannot start ends in an `error` and a close
   instead of a dropped or silent socket, and the string that is checked is the one ffmpeg runs.
+- **A URL source can no longer reach loopback or link-local addresses.** An address that is, or
+  whose name resolves to, a loopback, link-local or unspecified address - `localhost`, `127.1`,
+  `[::ffff:127.0.0.1]`, the cloud metadata service at `169.254.169.254` - is refused as
+  `Invalid stream URL`. Hosts on the local network stay allowed for cameras and encoders, and that
+  includes the server's own LAN or container address. The check runs when the session starts;
+  ffmpeg still follows redirects and playlists. The limit of four URL sources was always per
+  worker process, and the docs now say so, along with the fact that the origin check cannot stop
+  DNS rebinding and only `STT_TOKENS` does.
 - **URL sources are fenced in.** A page on another site cannot start one (`Forbidden`), SRT
   listener and rendezvous modes and `listen` parameters are refused, at most four run at once,
   and the log no longer records credentials or query strings.

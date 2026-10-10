@@ -186,7 +186,7 @@ curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
 
 音频也可以来自别处。在开始消息中加入 `"source": "url", "url": "https://..."` 后，客户端完全不发送音频：服务器通过 ffmpeg 读取该地址上的流，直到流结束或客户端发送 `stop`。网络电台、HLS、RTMP、RTSP 和 SRT 都可以使用；协议方案必须是 `http`、`https`、`rtmp`、`rtmps`、`rtsp` 或 `srt`。实时音源已经积压的部分会被一次性读取，其余部分则按音源自身的节奏读取，因此远程文件会像广播一样到达。
 
-由于这会让服务器去访问由客户端选定的地址，因此它受到了限制。ffmpeg 只能使用网络协议，因此 URL 和播放列表都无法让它读取本地文件，也没有任何办法让它进入监听状态：SRT 的 `listener` 和 `rendezvous` 模式以及任何 `listen` 参数都会被拒绝。其他站点上的页面无法启动 URL 音源（`Forbidden`）：浏览器不会对 WebSocket 应用 CORS，因此该套接字会检查页面的来源（origin）是否为本主机，或是否列在 `CORS_ORIGINS` 中。最多同时运行四个 URL 音源（超出时返回 `Service Unavailable`），日志记录每个地址时会去掉其中的凭据和查询字符串。它仍然可以访问服务器自身所在网络中的主机，这对摄像头来说正是用途所在，也是在他人可以访问到的服务器上设置 `STT_TOKENS` 的原因。
+由于这会让服务器去访问由客户端选定的地址，因此它受到了限制。ffmpeg 只能使用网络协议，因此 URL 和播放列表都无法让它读取本地文件，也没有任何办法让它进入监听状态：SRT 的 `listener` 和 `rendezvous` 模式以及任何 `listen` 参数都会被拒绝。指向或解析到服务器自身（回环地址）、链路本地地址（例如位于 `169.254.169.254` 的云元数据服务）或 `0.0.0.0` 的地址会以 `Invalid stream URL` 被拒绝；该检查在会话开始时进行，之后 ffmpeg 仍会跟随重定向和播放列表。其他站点上的页面无法启动 URL 音源（`Forbidden`）：浏览器不会对 WebSocket 应用 CORS，因此该套接字会检查页面的来源（origin）是否为本主机，或是否列在 `CORS_ORIGINS` 中。每个服务器进程最多同时运行四个 URL 音源（超出时返回 `Service Unavailable`），因此有多个 worker 的 gunicorn 在每个 worker 中都允许这么多；日志记录每个地址时会去掉其中的凭据和查询字符串。它仍然可以访问服务器自身所在网络中的主机，这对摄像头来说正是用途所在，也是在他人可以访问到的服务器上设置 `STT_TOKENS` 的原因。
 
 失败时会发送一条 `{"type": "error", "error": "<category>", "request_id": "..."}`，随后关闭连接；错误类别与 HTTP 接口相同，另外还有 `Invalid start message`、`Invalid audio frame`、`Invalid stream URL`、`Stream source failed` 和 `Forbidden`。
 

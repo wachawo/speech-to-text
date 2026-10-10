@@ -3,13 +3,16 @@
 """Audio from a network address for /api/stream: vet the URL, run ffmpeg on it, read its PCM.
 
 A URL source makes the server fetch an address a client chose, so everything here leans towards
-refusing: one normalised string is both what is checked and what ffmpeg is given, ffmpeg may use
-network protocols only and never listen, a browser page may use it only from its own site, and
-only a few such sessions run at once.
+refusing: one normalised string is both what is checked and what ffmpeg is given, the address may
+not be a loopback or a link-local one, ffmpeg may use network protocols only and never
+listen, a browser page may use it only from its own site, and only a few such sessions run at once
+in each worker process.
 """
 
 import asyncio
+import ipaddress
 import logging
+import socket
 from collections import deque
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -43,7 +46,8 @@ READ_BYTES = int(stream.SAMPLE_RATE * 0.1) * stream.SAMPLE_WIDTH
 STDERR_LINES = 20
 
 # Each URL session is an ffmpeg process and an outbound connection; a handful is a demo, a
-# hundred is a way to make the server attack something.
+# hundred is a way to make the server attack something. The count lives in the process, so under
+# gunicorn the server as a whole runs up to GUNICORN_WORKERS times this many.
 MAX_URL_SESSIONS = 4
 
 URL_SESSIONS = 0
@@ -55,7 +59,8 @@ def normalize_url(url: Any) -> str | None:
     Surrounding whitespace is trimmed and the scheme lower-cased, because ffmpeg matches schemes
     case-sensitively. Anything else unusual is refused rather than repaired: urlsplit silently
     drops tabs and newlines that ffmpeg would keep, so validating a cleaned copy and running the
-    raw one is how a URL passes the check and then does something else.
+    raw one is how a URL passes the check and then does something else. An IP literal at a refused
+    address is refused here; a host name is not resolved, see points_at_refused_address.
     """
     if not isinstance(url, str):
         return None
@@ -71,7 +76,47 @@ def normalize_url(url: Any) -> str | None:
     scheme = parts.scheme.lower()
     if scheme not in URL_SCHEMES or not hostname or opens_listener(scheme, url):
         return None
+    if is_refused_address(hostname):
+        return None
     return scheme + url[len(parts.scheme) :]
+
+
+def is_refused_address(address: str) -> bool:
+    """Whether an IP address is one no stream lives at: loopback, link-local or unspecified.
+
+    Those reach the server itself, the services its neighbours bind to localhost, and
+    169.254.169.254, the cloud metadata address. An IPv4 address wrapped in IPv6
+    (`::ffff:127.0.0.1`) is judged as the IPv4 address it is, which Python 3.12 does not do on its
+    own. Private LAN ranges (RFC 1918, IPv6 ULA) stay allowed on purpose: a camera or an encoder on
+    the local network is what a URL source is mostly for. A string that is not an IP address is not
+    refused here.
+    """
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback or ip.is_link_local or ip.is_unspecified
+
+
+def points_at_refused_address(url: str) -> bool:
+    """Whether the normalised URL's host resolves to an address a URL source may not use.
+
+    The name is resolved the way ffmpeg resolves it, which also turns spellings like `2130706433`
+    or `127.1` into the address they mean, and is refused when any of its addresses is refused,
+    because ffmpeg may connect to any of them. A name that does not resolve is left for ffmpeg to
+    fail on. The lookup blocks for as long as the resolver takes, so the caller runs it in a thread,
+    after the origin check and with a session slot held, which bounds how many run at once. This is
+    a check at start only: ffmpeg resolves the name again and follows HTTP redirects and playlists,
+    so it narrows the door rather than closes it.
+    """
+    hostname = urlsplit(url).hostname or ""
+    try:
+        addresses = socket.getaddrinfo(hostname, None)
+    except (OSError, UnicodeError):
+        return False
+    return any(is_refused_address(str(info[4][0])) for info in addresses)
 
 
 def opens_listener(scheme: str, url: str) -> bool:
@@ -114,6 +159,11 @@ def is_allowed_origin(scope: dict[str, Any]) -> bool:
     to open could drive the server into fetching internal addresses. A client that sends no Origin
     is not a browser page. Hosts are compared without ports, because nginx forwards `Host` without
     one; an origin listed explicitly in CORS_ORIGINS is allowed as well (`*` does not count).
+
+    It does not stop DNS rebinding: a page whose name is re-pointed at this server sends an Origin
+    and a Host that match, both chosen by the attacker. With STT_TOKENS set that page has no token
+    and is refused anyway; with auth off any network client can open the socket without a browser
+    at all. A server that browsers visiting untrusted sites can reach should set STT_TOKENS.
     """
     headers = read_headers(scope)
     origin = headers.get("origin")
