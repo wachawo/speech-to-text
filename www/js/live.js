@@ -20,8 +20,9 @@
    5. liveStop(): the source's onLiveStopping hook runs (a device flushes its
       last frame), `stop` goes out, and the socket stays open until `done` or
       `error` - the "finishing" state, which a deadline ends as a lost
-      connection if neither comes. The server may also end a session on its
-      own with `done`, when a URL source runs out.
+      connection if the server falls silent before either comes. The server
+      may also end a session on its own with `done`, when a URL source runs
+      out.
    6. Any failure - an `error` message, a close without either, the source's
       own - is liveFail(): the error bar, and everything released.
 
@@ -41,12 +42,19 @@
 (function () {
   'use strict';
 
-  /* How long a session may take to finish after STOP, or after its screen
-     goes, before it is given up regardless. The server needs a few seconds
-     for the last phrase; this is only the bound on waiting for it - a
-     half-open connection (a laptop that slept, a NAT entry that expired)
-     never closes on its own. */
+  /* How long a session left behind when its screen goes may take to finish
+     before its socket is closed regardless. The server needs a few seconds
+     for the last phrase; this is only the bound on waiting for it. */
   var ABANDON_TIMEOUT_MS = 60000;
+
+  /* How long a stopped session may hear nothing from the server before it is
+     given up as lost: a half-open connection (a laptop that slept, a NAT
+     entry that expired) never closes on its own. Every message starts the
+     wait again, so a server still sending its last phrases is never cut off,
+     and it outlasts the longest silence of a live one - a phrase waiting 30 s
+     for the diarizer and 120 s for a transcription model (libs/model_pool.py)
+     before the server answers with an error itself. */
+  var FINISH_SILENCE_MS = 180000;
 
   /* How much audio may wait in the socket's own buffer before frames are
      dropped: three seconds of 16 kHz PCM16. A link slower than the audio
@@ -111,7 +119,7 @@
       this.session = null;
       this.attempt = 0;
       this.backlogWarned = false;
-      // The deadline on `done` after STOP.
+      // The deadline on `done` after STOP, restarted by every message.
       this.stopTimer = null;
     },
 
@@ -197,6 +205,7 @@
 
       liveMessage: function (ws, event) {
         if (ws !== this.socket) return;
+        if (this.state === 'finishing') this.liveArmDeadline(ws);
         var message;
         try {
           message = JSON.parse(event.data);
@@ -319,9 +328,9 @@
       /* STOP. Before `ready` nothing has been sent, so there is nothing to
          finish: the attempt is retired and everything closed. After it, the
          source is stopped, `stop` goes out, and the socket stays open for the
-         last phrase and `done` - for as long as the deadline allows: a socket
-         that is still finishing then is reported lost, and START, the source
-         switch and the downloads are free again. */
+         last phrase and `done` - for as long as the server keeps talking: a
+         socket silent past the deadline is reported lost, and START, the
+         source switch and the downloads are free again. */
       liveStop: function () {
         var self = this;
         if (this.state === 'opening') {
@@ -342,9 +351,17 @@
           if (ws === self.socket) sendStop(ws);
         };
         Promise.resolve(stopping).then(send, send);
+        this.liveArmDeadline(ws);
+      },
+
+      /* The deadline on a stopped session, started again by every message: a
+         socket still finishing when it runs out is reported lost. */
+      liveArmDeadline: function (ws) {
+        var self = this;
+        clearTimeout(this.stopTimer);
         this.stopTimer = setTimeout(function () {
           if (ws === self.socket && self.state === 'finishing') self.liveFail(LOST);
-        }, ABANDON_TIMEOUT_MS);
+        }, FINISH_SILENCE_MS);
       },
 
       /* The session is over, however it ended: the source released, the

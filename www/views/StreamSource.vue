@@ -60,7 +60,7 @@
    for.
 
    An address may carry a password (rtsp://user:pass@host/...) or a token in
-   its query. The full address lives only in the field while the page is
+   its query. The full address stays in the page only, for as long as it is
    open: what is remembered has no user name or password, and what is shown
    elsewhere has no query either, the way the server writes it to its log. */
 
@@ -72,10 +72,26 @@ var removeCredentials = function (url) {
   return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^\/?#]*@/i, '$1');
 };
 
-/* The address as it may be shown: no credentials, no query, no fragment. */
-var formatShownUrl = function (url) {
-  return removeCredentials(url).replace(/[?#].*$/, '');
+/* The address as it may be remembered, or '' when it cannot be. An @ left
+   once the credentials are gone is rarely in a path or a query, which
+   escape it, and far more often in a password with a raw `/`, `?` or `#`,
+   which ends the host early for ffmpeg and the server alike, so the split
+   above leaves the password in. Such an address is not remembered at all. */
+var formatRememberedUrl = function (url) {
+  var kept = removeCredentials(url);
+  return kept.indexOf('@') === -1 ? kept : '';
 };
+
+/* The address as it may be shown: nothing up to its last @, so a password
+   the split above would miss is gone too, and no query, no fragment. */
+var formatShownUrl = function (url) {
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)?.*@/i, '$1').replace(/[?#].*$/, '');
+};
+
+/* The last address started, credentials and all. Kept here and not in the
+   store, which is what storage is written from: a source re-created after
+   FILE and back must find the address that worked, not the one remembered. */
+var startedAddress = '';
 
 module.exports = {
   mixins: [SttWait, SttLive],
@@ -100,7 +116,7 @@ module.exports = {
       success: '',
       liveKind: 'stream',
       // The address, starting from the last one used.
-      url: this.$store.state.transcribe.url,
+      url: startedAddress || this.$store.state.transcribe.url,
     };
   },
 
@@ -142,8 +158,9 @@ module.exports = {
       if (this.liveActive || !this.canStart) return;
       var url = this.url.trim();
       this.url = url;
+      startedAddress = url;
       this.startedUrl = formatShownUrl(url);
-      this.$savePrefs('transcribe', { url: removeCredentials(url) });
+      this.$savePrefs('transcribe', { url: formatRememberedUrl(url) });
       var attempt = this.liveBegin();
       this.liveConnect(attempt, {
         source: 'url',

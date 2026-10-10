@@ -142,10 +142,13 @@
 - **A stopped live session in the web UI no longer hangs on a dead connection.** After STOP it
   waited for the server's last phrase with no limit, so a connection that died silently - a laptop
   that slept, a router that forgot it - left START, the source switch and the downloads locked
-  until the page was reloaded. It now gives up after a minute and says the connection was lost.
-  A STREAM address no longer keeps its user name and password in the browser's storage, and the
-  transcript line and the hints show it without them and without its query string; the full
-  address stays only in the field while the page is open.
+  until the page was reloaded. It now gives up when the server has said nothing for three minutes
+  and says the connection was lost; a server still sending its last phrases is never cut off.
+- **A STREAM address no longer keeps its user name and password in the browser's storage.** The
+  transcript line and the hints show it without them and without its query string, and the full
+  address stays only in the open page. An address that cannot be split safely - a password with a
+  raw `/`, `?` or `#` - is not remembered at all, and one saved by an earlier version keeps its
+  credentials until the next START.
 - **405 names the allowed methods** in an `Allow` header, as RFC 9110 requires.
 - **An SRT listener could still get past the URL check.** ffmpeg reads SRT options from the
   first `?` anywhere in the address, while the check read urlsplit's query, which stops at `#`, so
