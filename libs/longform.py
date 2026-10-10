@@ -12,6 +12,7 @@ steps aside for anyone already waiting: the pool's queue would otherwise hand th
 """
 
 import logging
+import os
 import time
 from typing import Any
 
@@ -40,14 +41,36 @@ DIARIZE_STEP_SECONDS = 60
 QUIET_FRAME = SAMPLE_RATE * 30 // 1000
 
 
+def find_data_chunk(path: str) -> tuple[int, int]:
+    """Byte offset and length of a WAV file's samples, found by walking its RIFF chunks."""
+    with open(path, "rb") as handle:
+        handle.seek(12)
+        while True:
+            header = handle.read(8)
+            if len(header) < 8:
+                raise ValueError(f"No data chunk in {path}")
+            length = int.from_bytes(header[4:], "little")
+            if header[:4] == b"data":
+                start = handle.tell()
+                return start, min(length, os.path.getsize(path) - start)
+            # Chunks are padded to an even length.
+            handle.seek(length + length % 2, os.SEEK_CUR)
+
+
 def load_samples(path: str) -> np.ndarray:
-    """A 16 kHz mono WAV file as int16 samples."""
-    samples, rate = sf.read(path, dtype="int16")
-    if rate != SAMPLE_RATE:
-        raise ValueError(f"Expected {SAMPLE_RATE} Hz audio, got {rate} Hz")
-    if samples.ndim == 2:
-        samples = samples.mean(axis=1).astype(np.int16)
-    return samples
+    """A 16 kHz mono 16-bit WAV file as int16 samples, memory-mapped rather than read.
+
+    A job may be many hours long: read whole, and converted to float32 after that, it was gigabytes
+    per job on a host whose memory the GPU shares. Mapped, a page is read when a window or a piece
+    uses it and the kernel can drop it again, and each consumer converts only its own window.
+    """
+    info = sf.info(path)
+    if info.format != "WAV" or info.samplerate != SAMPLE_RATE or info.channels != 1 or info.subtype != "PCM_16":
+        raise ValueError(
+            f"Expected {SAMPLE_RATE} Hz mono 16-bit WAV, got {info.samplerate} Hz, {info.channels} channels, {info.subtype}"
+        )
+    offset, length = find_data_chunk(path)
+    return np.memmap(path, dtype="<i2", mode="r", offset=offset, shape=(length // 2,))
 
 
 def find_pause(samples: np.ndarray, ranges: list[tuple[float, float]] | None, around: int) -> int:
@@ -154,7 +177,7 @@ def run(mode: str, wav_path: str, language: str | None, request_id: str) -> dict
     ranges = None
     if config.SPEECH_GATE and mode != "turns":
         started = time.monotonic()
-        ranges = speech_gate.find_speech(samples.astype(np.float32) / 32768.0, request_id)
+        ranges = speech_gate.find_speech(samples, request_id)
         logger.info(
             "[%s] Voice detection: %.1fs of speech in %.1fs (%.1fs)",
             request_id,

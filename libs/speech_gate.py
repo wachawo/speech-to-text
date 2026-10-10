@@ -77,7 +77,7 @@ def load_vad() -> Any:
 
 
 def detect_speech(samples: np.ndarray) -> list[tuple[float, float]]:
-    """Speech ranges in seconds in 16 kHz mono float32 samples.
+    """Speech ranges in seconds in 16 kHz mono float32 samples, or int16 ones scaled a window at a time.
 
     Serialised by a lock: the detector keeps recurrent state between chunks and resets it per call,
     so two requests sharing it at once would read each other's state. The audio is taken in windows
@@ -93,6 +93,9 @@ def detect_speech(samples: np.ndarray) -> list[tuple[float, float]]:
     ranges: list[tuple[float, float]] = []
     for offset in range(0, max(1, samples.shape[0]), window):
         piece = np.ascontiguousarray(samples[offset : offset + window], dtype=np.float32)
+        if samples.dtype == np.int16:
+            # A long job's samples stay int16 and on disk: only this window becomes float.
+            piece /= 32768.0
         waiting_since = time.monotonic()
         with VAD_LOCK:
             waited = time.monotonic() - waiting_since
