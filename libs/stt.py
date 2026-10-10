@@ -146,6 +146,35 @@ def describe_backend() -> dict:
     }
 
 
+def decode_buffer(
+    bio: io.BytesIO,
+    model: whisper.Whisper | None = None,
+    device: str | None = None,
+    language: str | None = None,
+) -> dict:
+    """Run the one decode every public function here shares and return whisper's raw result.
+
+    Seeded and greedy, so the same audio always produces the same output. Kept in one place so
+    /api/stt and /api/transcript cannot drift apart: an edit to these settings changes both or
+    neither. Without an explicit `model` one is loaded on the spot, which is slow - the server
+    passes an instance borrowed from the pool.
+    """
+    if model is None:
+        model = get_model(device=device)
+    data = read_waveform(bio)
+    torch.manual_seed(0)
+    np.random.seed(0)
+    return model.transcribe(
+        audio=data,
+        language=normalize_language(language),
+        task="transcribe",
+        temperature=0.0,
+        beam_size=1,
+        best_of=1,
+        condition_on_previous_text=False,
+    )
+
+
 def get_stt_bio(
     bio: io.BytesIO,
     model: whisper.Whisper | None = None,
@@ -159,20 +188,7 @@ def get_stt_bio(
     the server passes an instance borrowed from the pool. Decoding is seeded and
     greedy so the same audio always produces the same text.
     """
-    if model is None:
-        model = get_model(device=device)
-    data = read_waveform(bio)
-    torch.manual_seed(0)
-    np.random.seed(0)
-    result = model.transcribe(
-        audio=data,
-        language=normalize_language(language),
-        task="transcribe",
-        temperature=0.0,
-        beam_size=1,
-        best_of=1,
-        condition_on_previous_text=False,
-    )
+    result = decode_buffer(bio, model=model, device=device, language=language)
     text = result["text"].strip()
     logger.debug("Transcribed %d chars", len(text))
     return text
@@ -192,20 +208,7 @@ def get_stt_segments(
     the text, so it can change the transcription the rest of this module fixes on purpose.
     Segment times come free and change nothing.
     """
-    if model is None:
-        model = get_model(device=device)
-    data = read_waveform(bio)
-    torch.manual_seed(0)
-    np.random.seed(0)
-    result = model.transcribe(
-        audio=data,
-        language=normalize_language(language),
-        task="transcribe",
-        temperature=0.0,
-        beam_size=1,
-        best_of=1,
-        condition_on_previous_text=False,
-    )
+    result = decode_buffer(bio, model=model, device=device, language=language)
     # float() rather than the raw values: whisper hands back numpy scalars, which the JSON
     # encoder refuses.
     segments = [

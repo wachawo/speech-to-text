@@ -134,6 +134,7 @@ fake_parakeet.get_model = fake_get_model
 fake_parakeet.get_stt_bio = fake_parakeet_get_stt_bio
 fake_parakeet.get_stt_segments = fake_parakeet_get_stt_segments
 fake_parakeet.describe_backend = fake_describe_parakeet
+fake_parakeet.WORD_SEGMENTS = True
 sys.modules["libs.parakeet"] = fake_parakeet
 libs.parakeet = fake_parakeet
 

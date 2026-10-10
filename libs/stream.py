@@ -237,6 +237,42 @@ def encode_wav(samples: np.ndarray) -> io.BytesIO:
     return bio
 
 
+def transcribe_piece(
+    samples: np.ndarray, offset: float, language: str | None, ranges: list[tuple[float, float]] | None, request_id: str
+) -> list[dict[str, Any]]:
+    """Transcribe one piece of audio with a pooled model; segments come back shifted by `offset` seconds.
+
+    The one way a piece of audio is transcribed, for a live utterance and for a piece of a
+    background job alike. The model is borrowed for this piece only and returned in `finally`.
+    `ranges` are the piece's speech ranges from zero, or None without a detector; segments mostly
+    outside them are dropped. Raises queue.Empty when no model frees up in time.
+
+    The text stays exactly as the transcriber emitted it, leading space included: joined with
+    nothing, those spaces are what makes a readable transcript - Whisper's segments and Parakeet's
+    words each start with one, and a language written without spaces has none that a join could
+    put back. A caller that shows a segment on its own strips it there. Only a segment with no
+    text at all is dropped.
+    """
+    length = samples.size / SAMPLE_RATE
+    model = model_pool.acquire_model()
+    try:
+        segments = backends.transcriber().get_stt_segments(encode_wav(samples), model=model, language=language)
+    finally:
+        model_pool.release_model(model)
+    timed = []
+    for segment in speech_gate.keep_spoken(segments, ranges, request_id, length):
+        if not segment["text"].strip():
+            continue
+        # Clamped to the piece: whisper pads to 30 s and can place segment times past the audio.
+        # A segment that starts there was made up in the padding, not heard, and is dropped.
+        start = float(segment["start"])
+        if start >= length:
+            continue
+        end = min(float(segment["end"]), length)
+        timed.append({"start": round(offset + start, 2), "end": round(offset + end, 2), "text": segment["text"]})
+    return timed
+
+
 def transcribe_utterance(
     buffer: dict[str, Any], utterance: dict[str, int], language: str | None, request_id: str = "-"
 ) -> list[dict[str, Any]]:
@@ -250,40 +286,29 @@ def transcribe_utterance(
     speech ranges. Raises queue.Empty when no model frees up in time.
     """
     samples = read_samples(buffer, utterance["start"], utterance["end"])
-    length = samples.size / SAMPLE_RATE
     ranges = None
     if config.SPEECH_GATE:
         ranges = speech_gate.find_speech(samples.astype(np.float32) / 32768.0, request_id)
         if ranges is not None and speech_gate.spoken_seconds(ranges) < MIN_VOICED_SECONDS:
             return []
-    offset = utterance["start"] / SAMPLE_RATE
-    model = model_pool.acquire_model()
-    try:
-        segments = backends.transcriber().get_stt_segments(encode_wav(samples), model=model, language=language)
-    finally:
-        model_pool.release_model(model)
-    segments = speech_gate.keep_spoken(segments, ranges, request_id, length)
-    timed = []
-    for segment in segments:
-        text = segment["text"].strip()
-        if not text:
-            continue
-        # Clamped to the utterance: whisper pads to 30 s and can place segment times past the audio.
-        # A segment that starts there was made up in the padding, not heard, and is dropped.
-        start = float(segment["start"])
-        if start >= length:
-            continue
-        end = min(float(segment["end"]), length)
-        timed.append({"start": round(offset + start, 2), "end": round(offset + end, 2), "text": text})
-    return timed
+    segments = transcribe_piece(samples, utterance["start"] / SAMPLE_RATE, language, ranges, request_id)
+    # A live segment is shown on its own, so it goes out without the transcriber's leading space.
+    return [{**segment, "text": segment["text"].strip()} for segment in segments]
 
 
 def attribute_live_segments(segments: list[dict[str, Any]], turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Give each segment a speaker and an overlap flag from the turns diarized so far.
+    """Give the segments of one utterance a speaker and an overlap flag from the turns diarized so far.
 
-    Segments are not merged into runs here, unlike the upload path: a live segment has already
-    been sent by the time the next one exists.
+    Whisper's segments are phrases and go out one by one, not merged into runs as on the upload
+    path: a live segment has already been sent by the time the next utterance exists. A backend
+    whose segments are words (WORD_SEGMENTS) would send every word as a line of its own, so its
+    words are joined into phrases here, within this one utterance, by the upload path's own join:
+    a new phrase starts wherever the attributed speaker changes or another speaker held a turn in
+    between, and a phrase is marked `overlap` when any of its words was. With no turns, as without
+    diarization, all the words of the utterance make one phrase.
     """
+    if getattr(backends.transcriber(), "WORD_SEGMENTS", False):
+        return align.attribute_segments(segments, turns)
     attributed = []
     for segment in segments:
         speaker = align.assign_speaker(segment, turns)

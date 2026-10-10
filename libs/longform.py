@@ -20,7 +20,7 @@ import numpy as np
 import soundfile as sf
 
 # Local imports
-from libs import align, backends, config, diarize, model_pool, speech_gate, stream
+from libs import align, config, diarize, model_pool, speech_gate, stream
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +121,8 @@ def transcribe_long(
 ) -> list[dict[str, Any]]:
     """Transcribe a whole file piece by piece; segments come back in file time.
 
-    A piece with no detected speech is skipped without borrowing the model.
+    A piece with no detected speech is skipped without borrowing the model. Each piece goes through
+    stream.transcribe_piece, the same path as a live utterance, and keeps the transcriber's own text.
     """
     segments: list[dict[str, Any]] = []
     for start, end in plan_chunks(samples, ranges):
@@ -129,25 +130,8 @@ def transcribe_long(
         local_ranges = shift_ranges(ranges, offset, offset + length)
         if local_ranges is not None and speech_gate.spoken_seconds(local_ranges) < stream.MIN_VOICED_SECONDS:
             continue
-        model = model_pool.acquire_model()
-        try:
-            found = backends.transcriber().get_stt_segments(
-                stream.encode_wav(samples[start:end]), model=model, language=language
-            )
-        finally:
-            model_pool.release_model(model)
+        segments.extend(stream.transcribe_piece(samples[start:end], offset, language, local_ranges, request_id))
         model_pool.yield_to_waiters("model")
-        for segment in speech_gate.keep_spoken(found, local_ranges, request_id, length):
-            seg_start = float(segment["start"])
-            if seg_start >= length or not segment["text"].strip():
-                continue
-            segments.append(
-                {
-                    "start": round(offset + seg_start, 2),
-                    "end": round(offset + min(float(segment["end"]), length), 2),
-                    "text": segment["text"],
-                }
-            )
     return segments
 
 
