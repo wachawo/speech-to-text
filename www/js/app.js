@@ -452,6 +452,19 @@ const state = {
   // The file chosen on the FILE source, for the same reason. A File, which
   // Vue leaves unobserved.
   chosenFile: null,
+  // The FILE upload in flight, {serial, caption, started}, or null. Here
+  // rather than on the source because leaving the screen does not stop the
+  // request: the FILE source rebuilt on the way back reads it to show the
+  // upload still running, with its seconds counted from the start, and to
+  // keep TRANSCRIBE off instead of sending the same file a second time.
+  // Replaced whole by start_upload and finish_upload.
+  upload: null,
+  // Why the last FILE upload failed, or ''. Kept beside `upload` for the
+  // same reason: the source that sent the request may be gone when the
+  // failure comes, and the one on the screen then must still say it, not
+  // just drop the running upload. Set by finish_upload, cleared by
+  // keep_upload_error when the operator dismisses it or presses TRANSCRIBE.
+  uploadError: '',
 };
 
 /* A GET /api/models answer into the catalog. Its own action because two
@@ -498,6 +511,36 @@ const choose_file = function (context, file) {
   context.state.chosenFile = file || null;
 };
 
+/* The FILE upload, from TRANSCRIBE to its answer. Numbered off a counter,
+   like the toasts, so the answer can say which upload it belongs to: only
+   the latest one's is kept. An older request answering last would otherwise
+   replace the newer result with its own. The upload is written synchronously,
+   so the caller reads its number off the store straight after dispatching. */
+var uploadSerial = 0;
+
+/* An upload starting: `caption` is what the wait strip says before the
+   seconds. */
+const start_upload = function (context, caption) {
+  uploadSerial += 1;
+  context.state.upload = { serial: uploadSerial, caption: caption, started: Date.now() };
+};
+
+/* An upload answered: {serial, result, error}, the result null and the
+   error the sentence for the error bar when the request failed. An answer
+   from an upload that is no longer the latest is dropped, and leaves the
+   latest one running. */
+const finish_upload = function (context, payload) {
+  if (payload.serial !== uploadSerial) return;
+  context.state.upload = null;
+  if (payload.error) context.state.uploadError = payload.error;
+  if (payload.result) context.dispatch('keep_transcript', { source: 'file', result: payload.result });
+};
+
+/* The FILE error bar's text: '' when it is dismissed or a new upload starts. */
+const keep_upload_error = function (context, text) {
+  context.state.uploadError = text || '';
+};
+
 const actions = {
   push_toast,
   dismiss_toast,
@@ -505,6 +548,9 @@ const actions = {
   fetch_models,
   keep_transcript,
   choose_file,
+  start_upload,
+  finish_upload,
+  keep_upload_error,
 };
 
 const store = new Vuex.Store({ state, actions });
