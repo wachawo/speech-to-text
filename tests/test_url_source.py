@@ -26,8 +26,9 @@ ACCEPTED_URLS = [
     ("srt://relay.example.com:9000", "srt://relay.example.com:9000"),
     ("srt://relay.example.com:9000?mode=caller&latency=200", "srt://relay.example.com:9000?mode=caller&latency=200"),
     ("SRT://relay.example.com:9000?MODE=Caller", "srt://relay.example.com:9000?MODE=Caller"),
-    ("http://[::1]:8080/radio", "http://[::1]:8080/radio"),
     ("http://192.168.0.10/radio", "http://192.168.0.10/radio"),
+    ("rtsp://10.1.2.3:554/cam", "rtsp://10.1.2.3:554/cam"),
+    ("http://[fd00::10]:8000/radio", "http://[fd00::10]:8000/radio"),
     ("http://user:secret@example.com/a?token=x#frag", "http://user:secret@example.com/a?token=x#frag"),
 ]
 
@@ -88,6 +89,21 @@ REFUSED_URLS = [
     "rtsp://example.com/s?listen=0",
     "srt://relay.example.com:9000?listen=1",
     "rtmps://example.com/app?a=1&listen=1",
+    # Addresses no stream lives at: loopback, link-local (the cloud metadata address) and unspecified,
+    # written as IP literals, wrapped in IPv6, in other spellings of IPv4, or as a name resolving there
+    "http://127.0.0.1:5051/health",
+    "http://127.8.9.10/radio",
+    "http://[::1]:8080/radio",
+    "http://169.254.169.254/latest/meta-data/",
+    "rtsp://[fe80::1]:554/cam",
+    "http://0.0.0.0:5051/",
+    "http://[::]/radio",
+    "http://[::ffff:127.0.0.1]/radio",
+    "http://[::ffff:169.254.169.254]/latest/meta-data/",
+    "http://2130706433/radio",
+    "http://127.1/radio",
+    "http://localhost:5051/health",
+    "srt://LOCALHOST:9000",
 ]
 
 REDACTIONS = [

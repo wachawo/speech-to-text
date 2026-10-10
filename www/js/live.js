@@ -68,7 +68,7 @@
      category is what stays in the JSON; this is only the error bar. Anything
      not listed is shown as the category itself, the way every HTTP failure is. */
   var CATEGORY_TEXT = {
-    'Invalid stream URL': 'Invalid stream URL - use an http, https, rtmp, rtmps, rtsp or srt address',
+    'Invalid stream URL': 'Invalid stream URL - use an http, https, rtmp, rtmps, rtsp or srt address, not a loopback or link-local one',
     'Stream source failed': 'The server could not read the stream at that address',
     'Forbidden': 'This server does not allow URL sources from this page',
     'Service Unavailable': 'The server is busy - too many live sessions at once, try again later',

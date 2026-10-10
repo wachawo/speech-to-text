@@ -502,7 +502,9 @@ async def handle_stream(scope: dict[str, Any], receive, send) -> None:
     await send({"type": "websocket.accept"})
     send_event = build_sender(send)
 
-    error, options = check_start(scope, await read_start(receive))
+    start = await read_start(receive)
+    # A URL source's host name is resolved while the start is checked, which blocks.
+    error, options = await asyncio.to_thread(check_start, scope, start)
     if error:
         logger.warning("[%s] Stream refused: %s", request_id, error)
         await fail_session(send, send_event, error, request_id)
