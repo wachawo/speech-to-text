@@ -57,7 +57,41 @@
    STOP asks it to stop reading and waits for the last phrase, as for a device.
 
    No https is needed for this one: there is no device to ask the browser
-   for. */
+   for.
+
+   An address may carry a password (rtsp://user:pass@host/...) or a token in
+   its query. The full address stays in the page only, for as long as it is
+   open: what is remembered has no user name or password, and what is shown
+   elsewhere has no query either, the way the server writes it to its log. */
+
+/* The address without the user name and password in front of its host,
+   everything else kept so it still works. The authority ends at the first
+   `/`, `?` or `#`, and the credentials at its last `@` - where ffmpeg splits
+   it too. */
+var removeCredentials = function (url) {
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^\/?#]*@/i, '$1');
+};
+
+/* The address as it may be remembered, or '' when it cannot be. An @ left
+   once the credentials are gone is rarely in a path or a query, which
+   escape it, and far more often in a password with a raw `/`, `?` or `#`,
+   which ends the host early for ffmpeg and the server alike, so the split
+   above leaves the password in. Such an address is not remembered at all. */
+var formatRememberedUrl = function (url) {
+  var kept = removeCredentials(url);
+  return kept.indexOf('@') === -1 ? kept : '';
+};
+
+/* The address as it may be shown: nothing up to its last @, so a password
+   the split above would miss is gone too, and no query, no fragment. */
+var formatShownUrl = function (url) {
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)?.*@/i, '$1').replace(/[?#].*$/, '');
+};
+
+/* The last address started, credentials and all. Kept here and not in the
+   store, which is what storage is written from: a source re-created after
+   FILE and back must find the address that worked, not the one remembered. */
+var startedAddress = '';
 
 module.exports = {
   mixins: [SttWait, SttLive],
@@ -82,14 +116,14 @@ module.exports = {
       success: '',
       liveKind: 'stream',
       // The address, starting from the last one used.
-      url: this.$store.state.transcribe.url,
+      url: startedAddress || this.$store.state.transcribe.url,
     };
   },
 
   created: function () {
-    // The address the running session was started with: the field can be
-    // edited only when nothing runs, but the transcript is named after what
-    // was actually read.
+    // The address the running session was started with, as it may be
+    // shown: the field can be edited only when nothing runs, but the
+    // transcript is named after what was actually read.
     this.startedUrl = '';
   },
 
@@ -99,7 +133,7 @@ module.exports = {
     },
 
     urlTitle: function () {
-      return this.url.trim() || 'The address the server reads: http, https, rtmp, rtmps, rtsp or srt';
+      return formatShownUrl(this.url.trim()) || 'The address the server reads: http, https, rtmp, rtmps, rtsp or srt';
     },
 
     buttonTitle: function () {
@@ -107,7 +141,7 @@ module.exports = {
       if (this.liveActive) return 'Stop reading, and keep what was transcribed';
       if (this.held) return 'Waiting for the server catalogue';
       if (!this.url.trim()) return 'Enter an address first';
-      return 'Start transcribing ' + this.url.trim();
+      return 'Start transcribing ' + formatShownUrl(this.url.trim());
     },
   },
 
@@ -117,14 +151,16 @@ module.exports = {
       else this.start();
     },
 
-    /* The address is trimmed and remembered as it is sent; which schemes the
-       server takes is the server's call, and its refusal says which they are. */
+    /* The address is trimmed and sent as it is, and remembered without its
+       credentials; which schemes the server takes is the server's call, and
+       its refusal says which they are. */
     start: function () {
       if (this.liveActive || !this.canStart) return;
       var url = this.url.trim();
       this.url = url;
-      this.startedUrl = url;
-      this.$savePrefs('transcribe', { url: url });
+      startedAddress = url;
+      this.startedUrl = formatShownUrl(url);
+      this.$savePrefs('transcribe', { url: formatRememberedUrl(url) });
       var attempt = this.liveBegin();
       this.liveConnect(attempt, {
         source: 'url',

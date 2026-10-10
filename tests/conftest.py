@@ -116,10 +116,23 @@ def fake_describe_parakeet():
     }
 
 
+def fake_parakeet_get_stt_bio(bio, model=None, device=None, language=None):
+    """Stand in for parakeet.get_stt_bio() with a transcription the Whisper stub never gives."""
+    return "parakeet transcription"
+
+
+def fake_parakeet_get_stt_segments(bio, model=None, device=None, language=None):
+    """Stand in for parakeet.get_stt_segments(): the Whisper stub's timing, but its own words."""
+    return [
+        {"start": 0.0, "end": 1.1, "text": " parakeet first"},
+        {"start": 1.3, "end": 2.4, "text": " parakeet second"},
+    ]
+
+
 fake_parakeet = types.ModuleType("libs.parakeet")
 fake_parakeet.get_model = fake_get_model
-fake_parakeet.get_stt_bio = fake_get_stt_bio
-fake_parakeet.get_stt_segments = fake_get_stt_segments
+fake_parakeet.get_stt_bio = fake_parakeet_get_stt_bio
+fake_parakeet.get_stt_segments = fake_parakeet_get_stt_segments
 fake_parakeet.describe_backend = fake_describe_parakeet
 sys.modules["libs.parakeet"] = fake_parakeet
 libs.parakeet = fake_parakeet
