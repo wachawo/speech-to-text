@@ -32,7 +32,7 @@ classifiers = [
 # client. The backend lives in the `whisper` extra, and the Docker images
 # install from requirements*.txt where the torch build is pinned per image.
 dependencies = [
-    "flask>=3.0.0",
+    "flask>=3.1.0",
     "flask-cors>=4.0.0",
     "werkzeug>=3.1.9",
     "uvicorn[standard]>=0.29.0",
