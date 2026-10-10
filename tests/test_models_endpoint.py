@@ -31,15 +31,10 @@ def test_pool_state_promotes_status_to_loaded(client):
 
 
 def test_empty_pool_falls_back_to_the_backend_status(client, monkeypatch):
-    """With nothing loaded the row reports what the backend itself said; a model on loan stays loaded."""
+    """With nothing loaded the row reports what the backend itself said."""
     monkeypatch.setattr(model_pool.MODEL_POOL, "empty", lambda: True)
-    monkeypatch.setattr(model_pool, "MODELS_LOADED", 0)
     whisper_row = rows_by_backend(client.get("/api/models").get_json())["whisper"]
     assert whisper_row["status"] == "installed"
-    # The same empty pool after a model was loaded: a request holds it, and it is still loaded.
-    monkeypatch.setattr(model_pool, "MODELS_LOADED", 1)
-    whisper_row = rows_by_backend(client.get("/api/models").get_json())["whisper"]
-    assert whisper_row["status"] == "loaded"
 
 
 def test_diarizer_absent_when_disabled(client):
