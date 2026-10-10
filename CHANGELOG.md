@@ -138,6 +138,18 @@
   linked from the language switcher at the top of each README.
 
 #### Fixed
+- **Background jobs, after a review.** A job whose run takes its process down - out of memory, a
+  crash inside a model - is run at most three times and then fails as `Transcription failed`, instead
+  of being claimed by every worker in turn and taking each one down; waiting for a busy model
+  does not count as a run, while a restart in the middle of a job does: nothing hands a running
+  job back on shutdown. A long recording is no longer read into memory whole and converted to
+  float in one go: the decoded audio is mapped from disk and each stage converts only the window
+  it works on, so an hours-long job no longer costs gigabytes of RAM. A job sent back to the queue
+  because no model came free waits the poll interval before it is claimed again, instead of
+  starting the same work over at once. Deleting a waiting job can no longer race a worker into
+  running it, an upload cut off midway leaves no directory behind, and a failed status write no
+  longer keeps a job locked until the process exits. `POST /api/jobs` answered 500 on Flask 3.0,
+  where a request's size limit cannot be set; Flask 3.1 is now the minimum.
 - **A URL source ending as the client left** is logged as the client leaving, not as an abnormal end.
 - **405 names the allowed methods** in an `Allow` header, as RFC 9110 requires.
 - **An SRT listener could still get past the URL check.** ffmpeg reads SRT options from the

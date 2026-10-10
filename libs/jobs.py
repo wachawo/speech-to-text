@@ -6,7 +6,8 @@ A synchronous request holds the client, and nginx, for as long as the transcript
 is written to disk at once and answered with its id; a worker thread in each server process takes
 queued jobs one at a time and writes the result next to them. Everything lives in files under
 JOBS_DIR, so a job survives a restart, and a job is claimed with an flock, so several gunicorn
-workers never run the same one twice and a job whose worker died is simply claimed again.
+workers never run the same one twice and a job whose worker died is claimed again, up to
+MAX_ATTEMPTS claims in all.
 """
 
 import fcntl
@@ -34,6 +35,13 @@ POLL_SECONDS = 2.0
 
 # Finished jobs are looked at for removal at most this often.
 CLEANUP_SECONDS = 600
+
+# A job is claimed at most this many times. One whose process died under it - out of memory, a
+# crash inside the model - would otherwise be claimed again by every worker, and take each one down.
+# A restart mid-job counts as well: nothing hands a running job back on shutdown, and uvicorn ends
+# the process by re-raising SIGTERM, which skips any exit hook. Three rather than two, so a long
+# job outlives two deploys, or a deploy and a crash, before it is given up on.
+MAX_ATTEMPTS = 3
 
 JOB_ID_LENGTH = 16
 INPUT_NAME = "input"
@@ -92,21 +100,28 @@ def create_job(save_input, filename: str, mode: str, language: str | None) -> di
     """Accept a job: `save_input(path)` writes the upload to disk, then the job is queued."""
     job_id = uuid.uuid4().hex[:JOB_ID_LENGTH]
     os.makedirs(job_path(job_id), exist_ok=True)
-    save_input(job_path(job_id, INPUT_NAME))
-    job = {
-        "id": job_id,
-        "status": "queued",
-        "mode": mode,
-        "language": language,
-        "filename": filename,
-        "size": os.path.getsize(job_path(job_id, INPUT_NAME)),
-        "created": time.time(),
-        "started": None,
-        "finished": None,
-        "seconds": None,
-        "error": None,
-    }
-    write_json(job_path(job_id, JOB_NAME), job)
+    try:
+        save_input(job_path(job_id, INPUT_NAME))
+        job = {
+            "id": job_id,
+            "status": "queued",
+            "mode": mode,
+            "language": language,
+            "filename": filename,
+            "size": os.path.getsize(job_path(job_id, INPUT_NAME)),
+            "created": time.time(),
+            "started": None,
+            "finished": None,
+            "seconds": None,
+            "error": None,
+            "attempts": 0,
+        }
+        write_json(job_path(job_id, JOB_NAME), job)
+    except BaseException:
+        # A client gone mid-upload, a full disk, or a gunicorn sync worker aborted by its timeout
+        # (SystemExit): no job.json means nothing would ever remove it.
+        shutil.rmtree(job_path(job_id), ignore_errors=True)
+        raise
     metrics.JOBS.labels(status="queued").inc()
     logger.info("[%s] Job queued - %s, %s, %d bytes", job_id, mode, filename, job["size"])
     WAKE.set()
@@ -135,8 +150,11 @@ def read_result(job_id: str) -> dict[str, Any] | None:
 
 
 def try_lock(job_id: str) -> int | None:
-    """Take the job's lock without waiting: its file descriptor, or None when somebody holds it."""
-    descriptor = os.open(job_path(job_id, LOCK_NAME), os.O_CREAT | os.O_RDWR, 0o644)
+    """Take the job's lock without waiting: its file descriptor, or None when somebody holds it or it is gone."""
+    try:
+        descriptor = os.open(job_path(job_id, LOCK_NAME), os.O_CREAT | os.O_RDWR, 0o644)
+    except FileNotFoundError:
+        return None
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -157,9 +175,16 @@ def delete_job(job_id: str) -> str:
         return "missing"
     descriptor = try_lock(job_id)
     if descriptor is None:
-        return "running"
+        return "running" if read_job(job_id) is not None else "missing"
+    # Renamed to a name that is not a job id while the lock is held, then removed: removing it in
+    # place unlinks job.lock, and another worker could create a new one, lock it and run the job.
+    doomed = os.path.join(config.JOBS_DIR, f".deleted-{job_id}")
     try:
-        shutil.rmtree(job_path(job_id), ignore_errors=True)
+        if read_job(job_id) is None:
+            # Another process deleted it between the first look and the lock.
+            return "missing"
+        os.rename(job_path(job_id), doomed)
+        shutil.rmtree(doomed, ignore_errors=True)
     finally:
         os.close(descriptor)
     logger.info("[%s] Job deleted", job_id)
@@ -170,7 +195,7 @@ def claim_next() -> tuple[dict[str, Any], int] | None:
     """Lock the oldest job that still needs running, with its lock; None when there is none.
 
     A job recorded as running whose lock is free was being run by a process that died; it is run
-    again from the start.
+    again from the start, unless it has used up MAX_ATTEMPTS, and then run_job fails it.
     """
     for job in all_jobs():
         if job["status"] not in ("queued", "running"):
@@ -220,8 +245,15 @@ def run_job(job: dict[str, Any], descriptor: int) -> None:
     """Run one claimed job to its end: done with a result, failed with a category, or back in the queue."""
     job_id = job["id"]
     started = time.time()
-    update_job(job, status="running", started=started)
+    # Records written before the counter existed have none.
+    attempts = job.get("attempts") or 0
     try:
+        if attempts >= MAX_ATTEMPTS:
+            logger.error("[%s] Job was claimed %d times and never finished, not running it again", job_id, attempts)
+            update_job(job, status="failed", error="Transcription failed", finished=time.time())
+            metrics.JOBS.labels(status="failed").inc()
+            return
+        update_job(job, status="running", started=started, attempts=attempts + 1)
         if not os.path.exists(job_path(job_id, AUDIO_NAME)) and not decode_to_wav(
             job_path(job_id, INPUT_NAME), job_path(job_id, AUDIO_NAME)
         ):
@@ -242,7 +274,7 @@ def run_job(job: dict[str, Any], descriptor: int) -> None:
     except queue.Empty:
         # Every model stayed busy for the whole acquire timeout: not the job's fault, try again later.
         logger.warning("[%s] Job waited too long for a model, back in the queue", job_id)
-        update_job(job, status="queued", started=None)
+        update_job(job, status="queued", started=None, attempts=attempts)
     except Exception as exc:
         logger.error("[%s] Job failed: %s: %s\n%s", job_id, type(exc).__name__, exc, traceback.format_exc())
         update_job(job, status="failed", error="Transcription failed", finished=time.time())
@@ -270,8 +302,13 @@ def run_pending() -> int:
         claimed = claim_next()
         if claimed is None:
             return count
-        run_job(*claimed)
+        job, descriptor = claimed
+        run_job(job, descriptor)
         count += 1
+        if job["status"] == "queued":
+            # Back in the queue because no model was free: it is still the oldest, and claiming it
+            # at once would only start the same work over.
+            STOP.wait(POLL_SECONDS)
     return count
 
 
