@@ -89,8 +89,8 @@ REFUSED_URLS = [
     "rtsp://example.com/s?listen=0",
     "srt://relay.example.com:9000?listen=1",
     "rtmps://example.com/app?a=1&listen=1",
-    # Addresses no stream lives at: loopback, link-local (the cloud metadata address) and unspecified,
-    # written as IP literals, wrapped in IPv6, in other spellings of IPv4, or as a name resolving there
+    # IP literals no stream lives at: loopback, link-local (the cloud metadata address) and
+    # unspecified, IPv4 wrapped in IPv6 included. Names are resolved later, see test_live.
     "http://127.0.0.1:5051/health",
     "http://127.8.9.10/radio",
     "http://[::1]:8080/radio",
@@ -100,10 +100,6 @@ REFUSED_URLS = [
     "http://[::]/radio",
     "http://[::ffff:127.0.0.1]/radio",
     "http://[::ffff:169.254.169.254]/latest/meta-data/",
-    "http://2130706433/radio",
-    "http://127.1/radio",
-    "http://localhost:5051/health",
-    "srt://LOCALHOST:9000",
 ]
 
 REDACTIONS = [

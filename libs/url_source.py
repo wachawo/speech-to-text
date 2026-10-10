@@ -4,7 +4,7 @@
 
 A URL source makes the server fetch an address a client chose, so everything here leans towards
 refusing: one normalised string is both what is checked and what ffmpeg is given, the address may
-not be the server itself or a link-local one, ffmpeg may use network protocols only and never
+not be a loopback or a link-local one, ffmpeg may use network protocols only and never
 listen, a browser page may use it only from its own site, and only a few such sessions run at once
 in each worker process.
 """
@@ -59,8 +59,8 @@ def normalize_url(url: Any) -> str | None:
     Surrounding whitespace is trimmed and the scheme lower-cased, because ffmpeg matches schemes
     case-sensitively. Anything else unusual is refused rather than repaired: urlsplit silently
     drops tabs and newlines that ffmpeg would keep, so validating a cleaned copy and running the
-    raw one is how a URL passes the check and then does something else. A host name is resolved,
-    which blocks, so an event loop calls this from a thread.
+    raw one is how a URL passes the check and then does something else. An IP literal at a refused
+    address is refused here; a host name is not resolved, see points_at_refused_address.
     """
     if not isinstance(url, str):
         return None
@@ -76,8 +76,7 @@ def normalize_url(url: Any) -> str | None:
     scheme = parts.scheme.lower()
     if scheme not in URL_SCHEMES or not hostname or opens_listener(scheme, url):
         return None
-    if points_at_refused_address(hostname):
-        logger.warning("Stream URL refused: %s is a loopback, link-local or unspecified address", hostname)
+    if is_refused_address(hostname):
         return None
     return scheme + url[len(parts.scheme) :]
 
@@ -89,27 +88,30 @@ def is_refused_address(address: str) -> bool:
     169.254.169.254, the cloud metadata address. An IPv4 address wrapped in IPv6
     (`::ffff:127.0.0.1`) is judged as the IPv4 address it is, which Python 3.12 does not do on its
     own. Private LAN ranges (RFC 1918, IPv6 ULA) stay allowed on purpose: a camera or an encoder on
-    the local network is what a URL source is mostly for. Raises ValueError when it is not an IP.
+    the local network is what a URL source is mostly for. A string that is not an IP address is not
+    refused here.
     """
-    ip = ipaddress.ip_address(address)
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
     return ip.is_loopback or ip.is_link_local or ip.is_unspecified
 
 
-def points_at_refused_address(hostname: str) -> bool:
-    """Whether the host is, or resolves to, an address a URL source may not use.
+def points_at_refused_address(url: str) -> bool:
+    """Whether the normalised URL's host resolves to an address a URL source may not use.
 
-    An IP literal is judged as written. A name is resolved the way ffmpeg resolves it, which also
-    turns spellings like `2130706433` or `127.1` into the address they mean, and is refused when
-    any of its addresses is refused, because ffmpeg may connect to any of them. A name that does
-    not resolve is left for ffmpeg to fail on. This is a check at start only: ffmpeg resolves the
-    name again and follows HTTP redirects and playlists, so it narrows the door rather than closes it.
+    The name is resolved the way ffmpeg resolves it, which also turns spellings like `2130706433`
+    or `127.1` into the address they mean, and is refused when any of its addresses is refused,
+    because ffmpeg may connect to any of them. A name that does not resolve is left for ffmpeg to
+    fail on. The lookup blocks for as long as the resolver takes, so the caller runs it in a thread,
+    after the origin check and with a session slot held, which bounds how many run at once. This is
+    a check at start only: ffmpeg resolves the name again and follows HTTP redirects and playlists,
+    so it narrows the door rather than closes it.
     """
-    try:
-        return is_refused_address(hostname)
-    except ValueError:
-        pass
+    hostname = urlsplit(url).hostname or ""
     try:
         addresses = socket.getaddrinfo(hostname, None)
     except (OSError, UnicodeError):
