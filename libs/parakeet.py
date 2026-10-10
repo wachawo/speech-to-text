@@ -53,6 +53,10 @@ LANGUAGES = (
 )
 LANGUAGES_BY_MODEL = {"nvidia/parakeet-tdt-0.6b-v3": LANGUAGES}
 
+# get_stt_segments returns words, not phrases (see group_tokens). The live stream reads this to
+# join them into phrases before sending; a backend without the name returns phrases.
+WORD_SEGMENTS = True
+
 
 def resolve_device(device: str | None = None) -> str:
     """Resolve "auto" to cuda/cpu and reject a device this machine cannot serve."""

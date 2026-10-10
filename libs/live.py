@@ -331,7 +331,8 @@ async def process_utterance(session: dict[str, Any], utterance: dict[str, int]) 
         stream.transcribe_utterance, session["buffer"], utterance, session["language"], session["request_id"]
     )
     if diarization is None:
-        return [{**segment, "speaker": None, "overlap": False} for segment in segments]
+        # No turns: every segment is unattributed and none is overlapped, and words still join.
+        return stream.attribute_live_segments(segments, [])
     start = utterance["start"] / stream.SAMPLE_RATE
     end = utterance["end"] / stream.SAMPLE_RATE
     return stream.attribute_live_segments(segments, diarize.stream_turns(diarization, start, end))

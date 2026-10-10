@@ -191,6 +191,12 @@
   `exec`, so the shell stayed PID 1, never forwarded SIGTERM, and every stop and redeploy
   waited out Docker's 10 s grace period and then SIGKILLed the server with requests in flight
   (seen on the deployment host as exit 137 on every restart).
+- **A live phrase under Parakeet arrives as one segment, not one per word.** Parakeet returns
+  words, and `/api/stream` sent each as a `segment` of its own, so a five-word phrase showed as
+  five lines in the web UI and in `stt_client.py --stream`. The words of an utterance are now
+  joined the way `/api/transcript` joins them: a new phrase where the speaker changes or another
+  speaker spoke in between, and `overlap` set when any of its words had it. Whisper's live
+  segments are unchanged.
 - **No empty segments in a speaker transcript.** A whitespace-only token became a segment of
   its own, `{"speaker": null, "text": ""}`.
 - **The README no longer promises a 400 for an unknown language under Parakeet.** That holds

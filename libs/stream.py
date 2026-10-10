@@ -297,11 +297,18 @@ def transcribe_utterance(
 
 
 def attribute_live_segments(segments: list[dict[str, Any]], turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Give each segment a speaker and an overlap flag from the turns diarized so far.
+    """Give the segments of one utterance a speaker and an overlap flag from the turns diarized so far.
 
-    Segments are not merged into runs here, unlike the upload path: a live segment has already
-    been sent by the time the next one exists.
+    Whisper's segments are phrases and go out one by one, not merged into runs as on the upload
+    path: a live segment has already been sent by the time the next utterance exists. A backend
+    whose segments are words (WORD_SEGMENTS) would send every word as a line of its own, so its
+    words are joined into phrases here, within this one utterance, by the upload path's own join:
+    a new phrase starts wherever the attributed speaker changes or another speaker held a turn in
+    between, and a phrase is marked `overlap` when any of its words was. With no turns, as without
+    diarization, all the words of the utterance make one phrase.
     """
+    if getattr(backends.transcriber(), "WORD_SEGMENTS", False):
+        return align.attribute_segments(segments, turns)
     attributed = []
     for segment in segments:
         speaker = align.assign_speaker(segment, turns)
