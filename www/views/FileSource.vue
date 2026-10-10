@@ -76,9 +76,10 @@
    source) and hands this the values to send. The answer is kept in the store
    as FILE's transcript, where the screen reads it - and where it still lands
    if the screen was left while the upload ran. The chosen file is kept there
-   too, so a look at another screen does not lose it. `busy` tells the screen
-   when an upload is in flight, so it can keep the source switch from
-   destroying it. Used as:
+   too, so a look at another screen does not lose it, and so is the upload in
+   flight, so the source rebuilt on the way back shows it still running and
+   does not send the file again. `busy` tells the screen when an upload is in
+   flight, so it can keep the source switch from destroying it. Used as:
 
      <stt-file-source :mode="mode" :language="language" :compact="!!result"
                       :held="catalogue loading" @busy="...">
@@ -119,8 +120,10 @@ module.exports = {
   },
 
   created: function () {
-    // Kept off `data`: nothing renders from it.
+    // Kept off `data`: nothing renders from them.
     this.tickTimer = null;
+    this.uploadLabel = '';
+    this.showUpload(this.upload);
   },
 
   beforeDestroy: function () {
@@ -133,6 +136,10 @@ module.exports = {
       handler: function (value) {
         this.$emit('busy', value);
       },
+    },
+
+    upload: function (value) {
+      this.showUpload(value);
     },
   },
 
@@ -149,8 +156,14 @@ module.exports = {
       },
     },
 
+    /* The upload in flight, from the store: it may have been started by
+       the FILE source that stood here before the screen was left. */
+    upload: function () {
+      return this.$store.state.upload;
+    },
+
     busy: function () {
-      return this.wait.length > 0;
+      return !!this.upload;
     },
 
     canTranscribe: function () {
@@ -198,9 +211,33 @@ module.exports = {
 
     /* Transcribe */
 
-    /* The wait strip counts the seconds: a long recording takes minutes, and
-       a spinner that does not count is a spinner that may have stopped. The
-       label is replaced in place and dropped under its last text. */
+    /* The upload in flight on the wait strip, or nothing. The strip counts
+       the seconds from the upload's start: a long recording takes minutes,
+       and a spinner that does not count is a spinner that may have stopped.
+       The label is replaced in place and dropped under its last text. */
+    showUpload: function (upload) {
+      var self = this;
+      if (this.tickTimer) clearInterval(this.tickTimer);
+      this.tickTimer = null;
+      this.waitDrop(this.uploadLabel);
+      this.uploadLabel = '';
+      if (!upload) return;
+      var labelNow = function () {
+        return upload.caption + Math.round((Date.now() - upload.started) / 1000) + 's';
+      };
+      this.uploadLabel = labelNow();
+      this.waitPush(this.uploadLabel);
+      this.tickTimer = setInterval(function () {
+        var next = labelNow();
+        var i = self.wait.indexOf(self.uploadLabel);
+        if (i !== -1) self.wait.splice(i, 1, next);
+        self.uploadLabel = next;
+      }, 1000);
+    },
+
+    /* The upload goes into the store before the request does, so TRANSCRIBE
+       is off from this click on, whichever FILE source is on the screen when
+       the answer comes; the answer is filed under the upload's number. */
     transcribe: function () {
       var self = this;
       if (!this.canTranscribe || this.held) return;
@@ -213,28 +250,20 @@ module.exports = {
       if (language) body.append('language', language);
       this.error = '';
       this.warning = '';
-      var started = Date.now();
-      var caption = request.doing + ' ' + file.name + ' ';
-      var label = caption + '0s';
-      this.waitPush(label);
-      this.tickTimer = setInterval(function () {
-        var next = caption + Math.round((Date.now() - started) / 1000) + 's';
-        var i = self.wait.indexOf(label);
-        if (i !== -1) self.wait.splice(i, 1, next);
-        label = next;
-      }, 1000);
+      this.$store.dispatch('start_upload', request.doing + ' ' + file.name + ' ');
+      var serial = this.$store.state.upload.serial;
       // No Content-Type of our own: axios writes the multipart boundary into
       // it, and a header set here would drop the boundary.
       this.$http.post(request.url, body)
         .then(function (resp) {
-          var result = { mode: mode, name: file.name, language: language, data: resp.data || {} };
-          self.$store.dispatch('keep_transcript', { source: 'file', result: result });
+          return { mode: mode, name: file.name, language: language, data: resp.data || {} };
         })
-        .catch(function (err) { self.error = self.$apiError(err); })
-        .finally(function () {
-          clearInterval(self.tickTimer);
-          self.tickTimer = null;
-          self.waitDrop(label);
+        .catch(function (err) {
+          self.error = self.$apiError(err);
+          return null;
+        })
+        .then(function (result) {
+          self.$store.dispatch('finish_upload', { serial: serial, result: result });
         });
     },
   },

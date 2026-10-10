@@ -182,6 +182,12 @@
   START-STOP-START no longer leaves the microphone on, the remembered device is the one
   recorded, a device below 16 kHz is resampled instead of sent too fast, and a stopped session
   says it is finishing rather than "No speech recognised".
+- **An upload in the web UI survives a look at another screen.** Opening MODELS while a file was
+  being transcribed and coming back showed no upload at all and left TRANSCRIBE on, so a second
+  press sent the same file again - twice the GPU work, or a 503 from a one-instance pool. FILE
+  now shows the upload still running, with its seconds counted from the start, and keeps
+  TRANSCRIBE off until it answers. An answer from an earlier upload no longer replaces the result
+  of a later one.
 - **Gunicorn starts again.** Since the module split, `gu.py` bound the settings module to the
   name `config`, which is also a gunicorn setting; gunicorn read it as one and refused to start
   with `Invalid value for config`. The default `python3 stt_server.py` run was not affected.
