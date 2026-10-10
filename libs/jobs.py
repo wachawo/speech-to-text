@@ -6,7 +6,8 @@ A synchronous request holds the client, and nginx, for as long as the transcript
 is written to disk at once and answered with its id; a worker thread in each server process takes
 queued jobs one at a time and writes the result next to them. Everything lives in files under
 JOBS_DIR, so a job survives a restart, and a job is claimed with an flock, so several gunicorn
-workers never run the same one twice and a job whose worker died is simply claimed again.
+workers never run the same one twice and a job whose worker died is claimed again, up to
+MAX_ATTEMPTS claims in all.
 """
 
 import fcntl
@@ -37,6 +38,8 @@ CLEANUP_SECONDS = 600
 
 # A job is claimed at most this many times. One whose process died under it - out of memory, a
 # crash inside the model - would otherwise be claimed again by every worker, and take each one down.
+# A restart mid-job counts as well: nothing hands a running job back on shutdown, and uvicorn ends
+# the process by re-raising SIGTERM, which skips any exit hook.
 MAX_ATTEMPTS = 2
 
 JOB_ID_LENGTH = 16
@@ -113,8 +116,9 @@ def create_job(save_input, filename: str, mode: str, language: str | None) -> di
             "attempts": 0,
         }
         write_json(job_path(job_id, JOB_NAME), job)
-    except Exception:
-        # A client gone mid-upload or a full disk: no job.json means nothing would ever remove it.
+    except BaseException:
+        # A client gone mid-upload, a full disk, or a gunicorn sync worker aborted by its timeout
+        # (SystemExit): no job.json means nothing would ever remove it.
         shutil.rmtree(job_path(job_id), ignore_errors=True)
         raise
     metrics.JOBS.labels(status="queued").inc()
