@@ -160,7 +160,9 @@ def new_stream_state() -> dict:
     chunk, which is what keeps speaker 0 the same person ten minutes in. `frame` is the next
     spectrogram frame to emit and `next_start` the first sample its chunk reads, which is how far
     back a caller trimming its buffer may go. `activity` holds the per-frame speaker decisions so
-    far, one bool array of shape `(frames, 8)` per chunk, at one frame every 10 ms.
+    far, one bool array of shape `(frames, 8)` per chunk, at one frame every 10 ms; `frames` counts
+    every frame ever emitted, so after trim_activity has dropped chunks from the front, the first
+    one kept starts at frame `frames` minus the frames still held.
     """
     return {"cache": None, "first": True, "frame": 0, "next_start": 0, "activity": [], "frames": 0, "finished": False}
 
@@ -220,12 +222,12 @@ def stream_turns(state: dict, start: float, end: float) -> list[dict]:
     them for a whole file, but only over the window asked for: a session can run for hours, and
     attributing one phrase needs only the frames around it.
     """
-    first = max(0, int(start / STREAM_FRAME_SECONDS))
+    position = state["frames"] - sum(chunk.shape[0] for chunk in state["activity"])
+    first = max(position, int(start / STREAM_FRAME_SECONDS))
     last = min(state["frames"], int(end / STREAM_FRAME_SECONDS) + 1)
     if last <= first:
         return []
     parts = []
-    position = 0
     for chunk in state["activity"]:
         chunk_end = position + chunk.shape[0]
         if chunk_end > first and position < last:
@@ -248,6 +250,20 @@ def stream_turns(state: dict, start: float, end: float) -> list[dict]:
             )
     turns.sort(key=lambda turn: (turn["start"], turn["speaker"]))
     return turns
+
+
+def trim_activity(state: dict, keep_from: float) -> None:
+    """Drop the whole chunks of activity that end before `keep_from` seconds of the stream.
+
+    A live session runs for hours and nobody asks about its first minute again: without this the
+    activity, and every stream_turns walk over it, would grow for as long as the session lasts.
+    Frame numbers stay absolute, so turns read afterwards keep their stream times.
+    """
+    keep_frame = int(keep_from / STREAM_FRAME_SECONDS)
+    position = state["frames"] - sum(chunk.shape[0] for chunk in state["activity"])
+    while state["activity"] and position + state["activity"][0].shape[0] <= keep_frame:
+        position += state["activity"][0].shape[0]
+        state["activity"].pop(0)
 
 
 def find_handover(state: dict, start: float, end: float) -> float | None:

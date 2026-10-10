@@ -314,6 +314,14 @@ def find_keep_from(session: dict[str, Any]) -> int:
     return keep_from
 
 
+def trim_session(session: dict[str, Any]) -> None:
+    """Drop the samples, and the diarizer's per-frame decisions, that nothing will ask about again."""
+    keep_from = find_keep_from(session)
+    stream.trim_samples(session["buffer"], keep_from)
+    if session["diarization"] is not None:
+        diarize.trim_activity(session["diarization"], keep_from / stream.SAMPLE_RATE)
+
+
 async def process_utterance(session: dict[str, Any], utterance: dict[str, int]) -> list[dict[str, Any]]:
     """Diarize up to the end of the utterance, transcribe it, and attribute its segments."""
     diarization = session["diarization"]
@@ -358,7 +366,7 @@ async def catch_up(session: dict[str, Any]) -> None:
         buffer = session["buffer"]
         await asyncio.to_thread(stream.advance_diarization, diarization, buffer, buffer["total"], False)
         split_at_handover(session)
-    stream.trim_samples(session["buffer"], find_keep_from(session))
+    trim_session(session)
 
 
 async def run_worker(session: dict[str, Any], send_event) -> str | None:
@@ -376,7 +384,7 @@ async def run_worker(session: dict[str, Any], send_event) -> str | None:
                 for segment in segments:
                     session["segments"] += 1
                     await send_event({"type": "segment", "id": session["segments"], **segment})
-                stream.trim_samples(session["buffer"], find_keep_from(session))
+                trim_session(session)
                 continue
             if session["final"]:
                 return None

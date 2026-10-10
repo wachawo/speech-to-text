@@ -132,10 +132,15 @@ def close_utterance(segmenter: dict[str, Any], end: int) -> dict[str, int] | Non
     return utterance if enough else None
 
 
+def count_voiced_samples(frame_levels: list[tuple[int, float, bool]]) -> int:
+    """Samples in the voiced frames only: a fragment carried past a cut keeps its quiet frames uncounted."""
+    return sum(FRAME_SAMPLES for unused_start, unused_level, voiced in frame_levels if voiced)
+
+
 def find_quiet_cut(segmenter: dict[str, Any], frame_end: int) -> int:
     """Where to cut an utterance that has run too long: the quietest frame of its last few seconds."""
     earliest = frame_end - int(CUT_SEARCH_SECONDS * SAMPLE_RATE)
-    candidates = [(level, start) for start, level in segmenter["frame_levels"] if start >= earliest]
+    candidates = [(level, start) for start, level, unused_voiced in segmenter["frame_levels"] if start >= earliest]
     if not candidates:
         return frame_end
     level, start = min(candidates)
@@ -163,10 +168,10 @@ def advance_segmenter(segmenter: dict[str, Any], buffer: dict[str, Any], final: 
                 segmenter["speech_start"] = max(segmenter["cut_floor"], frame_start - int(PRE_ROLL_SECONDS * SAMPLE_RATE))
                 segmenter["last_voiced_end"] = frame_end
                 segmenter["voiced_samples"] = FRAME_SAMPLES
-                segmenter["frame_levels"] = [(frame_start, level)]
+                segmenter["frame_levels"] = [(frame_start, level, True)]
             continue
 
-        segmenter["frame_levels"].append((frame_start, level))
+        segmenter["frame_levels"].append((frame_start, level, voiced))
         if voiced:
             segmenter["last_voiced_end"] = frame_end
             segmenter["voiced_samples"] += FRAME_SAMPLES
@@ -177,7 +182,7 @@ def advance_segmenter(segmenter: dict[str, Any], buffer: dict[str, Any], final: 
                 closed.append(utterance)
         elif frame_end - segmenter["speech_start"] >= MAX_UTTERANCE_SECONDS * SAMPLE_RATE:
             cut = find_quiet_cut(segmenter, frame_end)
-            carried_levels = [(start, level) for start, level in segmenter["frame_levels"] if start >= cut]
+            carried_levels = [frame for frame in segmenter["frame_levels"] if frame[0] >= cut]
             utterance = close_utterance(segmenter, cut)
             if utterance:
                 closed.append(utterance)
@@ -185,7 +190,7 @@ def advance_segmenter(segmenter: dict[str, Any], buffer: dict[str, Any], final: 
             segmenter["in_speech"] = True
             segmenter["speech_start"] = cut
             segmenter["last_voiced_end"] = frame_end
-            segmenter["voiced_samples"] = frame_end - cut
+            segmenter["voiced_samples"] = count_voiced_samples(carried_levels)
             segmenter["frame_levels"] = carried_levels
 
     if final and segmenter["in_speech"]:
@@ -204,8 +209,8 @@ def cut_utterance(segmenter: dict[str, Any], at: int) -> dict[str, int] | None:
     """
     if not segmenter["in_speech"] or not segmenter["speech_start"] < at < segmenter["position"]:
         return None
-    carried_levels = [(start, level) for start, level in segmenter["frame_levels"] if start >= at]
-    voiced_after = sum(FRAME_SAMPLES for start, level in carried_levels)
+    carried_levels = [frame for frame in segmenter["frame_levels"] if frame[0] >= at]
+    voiced_after = count_voiced_samples(carried_levels)
     utterance = close_utterance(segmenter, at)
     segmenter["in_speech"] = True
     segmenter["speech_start"] = at
@@ -277,7 +282,7 @@ def attribute_live_segments(segments: list[dict[str, Any]], turns: list[dict[str
     attributed = []
     for segment in segments:
         speaker = align.assign_speaker(segment, turns)
-        attributed.append({**segment, "speaker": speaker, "overlap": align.is_overlapped(segment, speaker, turns)})
+        attributed.append({**segment, "speaker": speaker, "overlap": align.is_overlapped(segment, turns)})
     return attributed
 
 
