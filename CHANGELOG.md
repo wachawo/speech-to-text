@@ -200,19 +200,22 @@
   root-owned, so `whisper.load_model` died with `PermissionError` (same trap
   for `./logs` and `./recs`). A root entrypoint now fixes ownership of the
   mounted dirs and drops privileges via `setpriv` before starting the server.
-- **Transcripts with speakers say less that is not true.** `overlap` was set whenever
-  another speaker's turn touched a segment, so a phrase spanning an ordinary handover was
-  marked as contested and nearly every segment carried the flag; it is now set only when two
-  different speakers talk at the same moment inside the segment. A zero-length word (Parakeet
-  emits them) was dropped by the speech gate and left without a speaker; it is now kept when
-  it falls inside speech and goes to the speaker whose turn contains it. One failure of the
-  voice detector on one recording no longer switches the gate off until a restart: only a
-  detector that cannot be loaded does, and any other failure costs just that request its
-  filtering. A live phrase cut at a speaker change or at the length limit no longer counts
-  its quiet frames as voice, so a near-silent remainder is dropped instead of transcribed
-  into a hallucination. And a diarized live or URL session no longer keeps every speaker
-  decision since it started: what no phrase can still ask about is dropped, so a session
-  that runs for days stays the same size.
+- **`overlap` means two voices at once.** It was set whenever another speaker's turn
+  touched a segment, so a phrase spanning an ordinary handover was marked as contested and
+  nearly every segment carried the flag; it is now set only when two different speakers talk
+  at the same moment inside the segment.
+- **Zero-length words are kept and attributed.** Parakeet emits them; the speech gate dropped
+  them and the join left them without a speaker. One is now kept when it falls inside speech
+  and goes to the speaker whose turn contains it.
+- **One detector failure no longer switches the speech gate off.** A failure of the voice
+  detector on one recording disabled the gate until a restart; now only a detector that cannot
+  be loaded does, and any other failure costs just that request its filtering.
+- **A live phrase cut short counts only its voice.** At a cut on a speaker change or on the
+  length limit, quiet frames were counted as voice on both sides of the cut, so a near-silent
+  fragment passed the minimum and was transcribed into a hallucination. Each side is now
+  judged on its own voiced frames.
+- **A long diarized live session stays the same size.** A live or URL session kept every
+  speaker decision since it started; what no phrase can still ask about is now dropped.
 
 #### Changed
 - **transformers comes from PyPI, not from a git commit.** 5.18.0 is the first release that

@@ -95,7 +95,7 @@ def attribute_segments(segments: list[dict[str, Any]], turns: list[dict[str, Any
 
     `segments` are the transcriber's own phrases with their times; `turns` are the diarizer's
     output. Neither is modified. The result carries the joined text, the range it covers and
-    whether somebody else was speaking across it.
+    whether two different speakers were talking at the same moment inside it.
     """
     attributed: list[dict[str, Any]] = []
     for segment in segments:

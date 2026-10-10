@@ -183,6 +183,9 @@ def advance_segmenter(segmenter: dict[str, Any], buffer: dict[str, Any], final: 
         elif frame_end - segmenter["speech_start"] >= MAX_UTTERANCE_SECONDS * SAMPLE_RATE:
             cut = find_quiet_cut(segmenter, frame_end)
             carried_levels = [frame for frame in segmenter["frame_levels"] if frame[0] >= cut]
+            voiced_after = count_voiced_samples(carried_levels)
+            # The head is judged on its own voice: frames past the cut belong to the next utterance.
+            segmenter["voiced_samples"] -= voiced_after
             utterance = close_utterance(segmenter, cut)
             if utterance:
                 closed.append(utterance)
@@ -190,7 +193,7 @@ def advance_segmenter(segmenter: dict[str, Any], buffer: dict[str, Any], final: 
             segmenter["in_speech"] = True
             segmenter["speech_start"] = cut
             segmenter["last_voiced_end"] = frame_end
-            segmenter["voiced_samples"] = count_voiced_samples(carried_levels)
+            segmenter["voiced_samples"] = voiced_after
             segmenter["frame_levels"] = carried_levels
 
     if final and segmenter["in_speech"]:
@@ -211,6 +214,8 @@ def cut_utterance(segmenter: dict[str, Any], at: int) -> dict[str, int] | None:
         return None
     carried_levels = [frame for frame in segmenter["frame_levels"] if frame[0] >= at]
     voiced_after = count_voiced_samples(carried_levels)
+    # The head is judged on its own voice: frames past the cut belong to the next utterance.
+    segmenter["voiced_samples"] -= voiced_after
     utterance = close_utterance(segmenter, at)
     segmenter["in_speech"] = True
     segmenter["speech_start"] = at

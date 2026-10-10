@@ -667,7 +667,6 @@ def test_idle_catch_up_diarizes_and_trims_no_further_than_the_diarizer_needs(mon
 
     monkeypatch.setattr(stream, "new_diarization", lambda: state)
     monkeypatch.setattr(stream, "advance_diarization", record_advance)
-    monkeypatch.setattr(live.diarize, "trim_activity", lambda state, keep_from: None, raising=False)
     silence = make_silence(5.0)
 
     async def hold_stop(message):
