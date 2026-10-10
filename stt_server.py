@@ -118,6 +118,32 @@ def read_language_argument() -> str | None:
     return language.strip().lower() or None
 
 
+def resolve_request_language() -> tuple[str | None, Any]:
+    """Read the per-request language and resolve it against the backend.
+
+    Returns (language, None) - the language None when the request names none - or
+    (None, the 400 to answer) when the backend knows no such language.
+    """
+    language = read_language_argument()
+    if language is None:
+        return None, None
+    resolved = backends.resolve_language(language)
+    if resolved is None:
+        return None, build_error_response("Invalid language", 400)
+    return resolved, None
+
+
+def diarization_refusal():
+    """The 503 for a request that needs the diarizer when there is none, or None when there is one."""
+    if not config.DIARIZE_ENABLED:
+        logger.warning("[%s] %s needs diarization, which is disabled", get_request_id(), request.path)
+        return build_error_response("Diarization disabled", 503)
+    if not model_pool.diarizer_ready():
+        logger.warning("[%s] %s needs diarization, but no diarizer is loaded", get_request_id(), request.path)
+        return build_error_response("Diarization unavailable", 503)
+    return None
+
+
 def convert_upload(bio):
     """Turn an uploaded buffer into a 16 kHz mono WAV, or None when it is not decodable audio.
 
@@ -209,7 +235,7 @@ def list_models():
     Behind the token like every other non-health route: a catalogue publishes the server's
     configuration, including which model is loaded and where it is in its lifecycle.
 
-    `status` is one of `loaded` (an instance is waiting in a pool), `installed` (the weights
+    `status` is one of `loaded` (instances were loaded into a pool, free or busy), `installed` (the weights
     are on disk but nothing is loaded yet) or `absent`. A backend that is configured but not
     installed says `absent` and nothing more; the reason is in the log.
 
@@ -256,11 +282,9 @@ def transcribe():
     bio, filename = upload
     size_kb = len(bio.getvalue()) // 1024
 
-    language = read_language_argument()
-    if language is not None:
-        language = backends.resolve_language(language)
-        if language is None:
-            return build_error_response("Invalid language", 400)
+    language, refusal = resolve_request_language()
+    if refusal is not None:
+        return refusal
 
     wav_bio = convert_upload(bio)
     if wav_bio is None:
@@ -312,9 +336,9 @@ def diarize_speakers():
     Returns::
         {"segments": [{"speaker": 0, "start": 0.51, "end": 12.62}], "speakers": 2, "elapsed": 1.23}
     """
-    if not config.DIARIZE_ENABLED:
-        logger.warning("[%s] Diarization requested while disabled", get_request_id())
-        return build_error_response("Diarization disabled", 503)
+    refusal = diarization_refusal()
+    if refusal is not None:
+        return refusal
 
     start_time = time.monotonic()
 
@@ -327,10 +351,6 @@ def diarize_speakers():
     wav_bio = convert_upload(bio)
     if wav_bio is None:
         return build_error_response("Invalid audio data", 400)
-
-    if not model_pool.diarizer_ready():
-        logger.warning("[%s] Diarization enabled but no diarizer loaded", get_request_id())
-        return build_error_response("Diarization unavailable", 503)
 
     try:
         diarizer = model_pool.acquire_diarizer()
@@ -405,12 +425,9 @@ def transcribe_by_speaker():
     Returns::
         {"segments": [...], "turns": [...], "speakers": 2, "text": "...", "elapsed": 1.23}
     """
-    if not config.DIARIZE_ENABLED:
-        logger.warning("[%s] Speaker transcript requested while diarization is disabled", get_request_id())
-        return build_error_response("Diarization disabled", 503)
-    if not model_pool.diarizer_ready():
-        logger.warning("[%s] Speaker transcript requested but no diarizer loaded", get_request_id())
-        return build_error_response("Diarization unavailable", 503)
+    refusal = diarization_refusal()
+    if refusal is not None:
+        return refusal
 
     start_time = time.monotonic()
 
@@ -420,11 +437,9 @@ def transcribe_by_speaker():
     bio, filename = upload
     size_kb = len(bio.getvalue()) // 1024
 
-    language = read_language_argument()
-    if language is not None:
-        language = backends.resolve_language(language)
-        if language is None:
-            return build_error_response("Invalid language", 400)
+    language, refusal = resolve_request_language()
+    if refusal is not None:
+        return refusal
 
     wav_bio = convert_upload(bio)
     if wav_bio is None:
@@ -500,15 +515,6 @@ def job_view(job: dict[str, Any]) -> dict[str, Any]:
     return view
 
 
-def diarization_refusal():
-    """The 503 for a mode that needs the diarizer when there is none, or None when there is one."""
-    if not config.DIARIZE_ENABLED:
-        return build_error_response("Diarization disabled", 503)
-    if not model_pool.diarizer_ready():
-        return build_error_response("Diarization unavailable", 503)
-    return None
-
-
 @app.route(JOBS_PATH, methods=["POST"])
 @token_required
 def submit_job():
@@ -526,11 +532,9 @@ def submit_job():
         refusal = diarization_refusal()
         if refusal is not None:
             return refusal
-    language = read_language_argument()
-    if language is not None:
-        language = backends.resolve_language(language)
-        if language is None:
-            return build_error_response("Invalid language", 400)
+    language, refusal = resolve_request_language()
+    if refusal is not None:
+        return refusal
     if "file" in request.files:
         upload = request.files["file"]
         filename = upload.filename or "upload"

@@ -17,11 +17,15 @@ BACKENDS = ("whisper", "parakeet", "diarize")
 
 
 def describe_transcriber(name: str) -> dict[str, Any]:
-    """A transcription row, upgraded to "loaded" when this backend is the active one and filled."""
+    """A transcription row, upgraded to "loaded" when this backend is the active one and loaded.
+
+    Loaded means instances were loaded into the pool, not that one is free right now: with one
+    instance per pool, a free count would read "installed" whenever a request held the model.
+    """
     row = backends.TRANSCRIBERS[name].describe_backend()
     active = name == backends.transcriber_name()
     row["default"] = active
-    if active and not model_pool.MODEL_POOL.empty():
+    if active and model_pool.model_ready():
         row["status"] = "loaded"
     return row
 
@@ -32,7 +36,7 @@ def describe_diarizer() -> dict[str, Any] | None:
         return None
     row = diarize.describe_backend()
     row["default"] = False
-    if not model_pool.DIARIZER_POOL.empty():
+    if model_pool.diarizer_ready():
         row["status"] = "loaded"
     return row
 

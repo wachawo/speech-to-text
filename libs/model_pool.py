@@ -36,6 +36,10 @@ WAITING_LOCK = threading.Lock()
 # of requests slows a job down without stopping it.
 YIELD_LIMIT_SECONDS = 60
 
+# How many transcription models were loaded into MODEL_POOL. The catalogue reads this rather than
+# the free count, because with one instance per pool the pool is empty whenever it is in use.
+MODELS_LOADED = 0
+
 # How many diarizers actually loaded. Zero with diarization switched on means loading failed,
 # which is not the same as "all of them are busy" and must not cost a request the full timeout.
 DIARIZERS_LOADED = 0
@@ -47,12 +51,15 @@ def init_model_pool(size: int | None = None) -> None:
     The size is read at call time rather than bound as a default argument, so a test or a
     caller that changes `config.MODEL_POOL_SIZE` is actually obeyed.
     """
+    global MODELS_LOADED
+
     size = config.MODEL_POOL_SIZE if size is None else size
     transcriber = backends.transcriber()
     logger.info("Initializing %d %s model instances...", size, backends.transcriber_name())
     for number in range(1, size + 1):
         start_time = time.monotonic()
         MODEL_POOL.put(transcriber.get_model())
+        MODELS_LOADED += 1
         logger.info("Model #%d ready (%.2fs)", number, time.monotonic() - start_time)
     logger.info("Model pool ready: %d instances", MODEL_POOL.qsize())
 
@@ -122,6 +129,15 @@ def yield_to_waiters(kind: str) -> None:
 def release_model(model: Any) -> None:
     """Return a Whisper model to the pool so the next request can use it."""
     MODEL_POOL.put(model)
+
+
+def model_ready() -> bool:
+    """Whether a transcription model was loaded at all, whether it is free or busy right now.
+
+    True as soon as one instance was loaded, or as soon as the pool holds anything, so a test
+    that fills the pool directly is served without also setting the counter.
+    """
+    return MODELS_LOADED > 0 or not MODEL_POOL.empty()
 
 
 def diarizer_ready() -> bool:

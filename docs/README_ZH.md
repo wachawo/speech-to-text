@@ -111,7 +111,7 @@ curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
 }
 ```
 
-当有实例在池中等待时，`status` 为 `loaded`；当权重已在磁盘上但尚未加载任何实例时为 `installed`；其余情况为 `absent`。已配置但未安装的后端只会返回 `absent`，不作其他说明；原因记录在日志中。`accepts_language` 说明 `?language=` 对该后端是否有任何意义。说话人分离器报告的 `languages` 为 `null` 而非空列表，因为它不产生任何语言的文本。
+当实例已加载到池中时（无论空闲还是忙碌），`status` 为 `loaded`；当权重已在磁盘上但尚未加载任何实例时为 `installed`；其余情况为 `absent`。已配置但未安装的后端只会返回 `absent`，不作其他说明；原因记录在日志中。`accepts_language` 说明 `?language=` 对该后端是否有任何意义。说话人分离器报告的 `languages` 为 `null` 而非空列表，因为它不产生任何语言的文本。
 
 命令行客户端读取的是同一个接口：
 

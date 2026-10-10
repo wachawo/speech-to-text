@@ -46,7 +46,7 @@ COMPUTE_TYPE = os.getenv("COMPUTE_TYPE", "auto").lower()
 
 # Which backend transcribes: "whisper" or "parakeet". A deploy-time choice, not a per-request
 # one - a second resident ASR would mean a second set of weights in every worker.
-STT_BACKEND = os.getenv("STT_BACKEND", "whisper")
+STT_BACKEND = os.getenv("STT_BACKEND", "whisper").strip().lower()
 
 # Parakeet, the optional second transcription backend. It detects the language itself and
 # takes no language argument, which GET /api/models reports as accepts_language false.

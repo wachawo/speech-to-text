@@ -21,13 +21,19 @@ DEFAULT_TRANSCRIBER = "whisper"
 # The value that asks the backend to detect the language rather than be told it.
 AUTODETECT = "auto"
 
+# Unknown STT_BACKEND values already warned about. The name is resolved several times per request,
+# once per job piece and on every catalogue read, so without this a typo would flood the log.
+UNKNOWN_BACKENDS_LOGGED: set[str] = set()
+
 
 def transcriber_name() -> str:
     """The configured backend name, falling back to the default when it names nothing real."""
     name = config.STT_BACKEND
     if name in TRANSCRIBERS:
         return name
-    logger.warning("STT_BACKEND=%s is not a known backend; using %s", name, DEFAULT_TRANSCRIBER)
+    if name not in UNKNOWN_BACKENDS_LOGGED:
+        UNKNOWN_BACKENDS_LOGGED.add(name)
+        logger.warning("STT_BACKEND=%s is not a known backend; using %s", name, DEFAULT_TRANSCRIBER)
     return DEFAULT_TRANSCRIBER
 
 
