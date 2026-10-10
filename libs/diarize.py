@@ -269,15 +269,30 @@ def trim_activity(state: dict, keep_from: float) -> None:
 def find_handover(state: dict, start: float, end: float) -> float | None:
     """Where, in [start, end] seconds of the stream, one speaker hands over to another; None if nowhere.
 
-    The phrase's speaker is the one whose turn begins first in the window. A handover is the first
-    turn of anybody else that starts at least HANDOVER_MIN_OFFSET into the window, has lasted
-    HANDOVER_SECONDS, and during which the phrase's speaker is silent - two people talking at once
-    is overlap, which stays one phrase and is marked as such.
+    The phrase's speaker is the one who talks most in its first HANDOVER_MIN_OFFSET, and the one
+    whose turn begins first when nobody talks there. Not simply the first turn: a phrase opened by
+    a cut here starts where the new speaker does, yet the previous speaker's last frame can still
+    fall inside it - stream_turns rounds the first frame down (1.15 s reads from frame 114), and the
+    voice may trail past the cut. That turn then begins first, or ties and wins on the lower label,
+    and the phrase would go back to whoever just stopped. The cut left the previous speaker under
+    HANDOVER_SECONDS / 4 of the new speaker's first HANDOVER_SECONDS, and the rest of the opening
+    adds at most HANDOVER_MIN_OFFSET - HANDOVER_SECONDS, so the new speaker's HANDOVER_SECONDS is
+    the larger share while HANDOVER_SECONDS <= HANDOVER_MIN_OFFSET < 1.75 * HANDOVER_SECONDS.
+    A handover is the first turn of anybody else that
+    starts at least HANDOVER_MIN_OFFSET into the window, has lasted HANDOVER_SECONDS, and during
+    which the phrase's speaker is silent - two people talking at once is overlap, which stays one
+    phrase and is marked as such.
     """
     turns = stream_turns(state, start, end)
     if not turns:
         return None
-    speaker = turns[0]["speaker"]
+    opening_end = start + HANDOVER_MIN_OFFSET
+    opening: dict[int, float] = {}
+    for turn in turns:
+        share = max(0.0, min(turn["end"], opening_end) - max(turn["start"], start))
+        opening[turn["speaker"]] = opening.get(turn["speaker"], 0.0) + share
+    # Turns are sorted by start, and max() keeps the first of equals: silence falls to the first turn.
+    speaker = max(opening, key=opening.__getitem__)
     for turn in turns:
         if turn["speaker"] == speaker or turn["start"] < start + HANDOVER_MIN_OFFSET:
             continue

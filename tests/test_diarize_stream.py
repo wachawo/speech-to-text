@@ -337,7 +337,7 @@ def test_talking_over_each_other_is_not_a_handover(real_diarize):
 
 def test_a_turn_at_the_opening_of_the_phrase_is_not_a_handover(real_diarize):
     """Another speaker starting within HANDOVER_MIN_OFFSET of the window start belongs to its opening."""
-    state = build_state(build_activity(300, {0: [(0, 20)], 1: [(20, 200)]}))
+    state = build_state(build_activity(300, {0: [(0, 30)], 1: [(30, 200)]}))
     assert real_diarize.find_handover(state, 0.0, 3.0) is None
 
 

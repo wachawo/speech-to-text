@@ -213,6 +213,13 @@
   Found on the deployment host: when the transcriber produced no words for one voice, the
   other voice's two phrases merged into one run that claimed a single person spoke straight
   through the other's turn. A run now continues only if nobody else held a turn in the gap.
+- **A live phrase cut at a speaker change belongs to the speaker who starts it.** The phrase that
+  follows a cut begins where the new speaker does, yet the previous speaker's last 10 ms frame
+  could still fall inside it: the phrase's start was rounded down to a whole frame, or that voice
+  trailed past the cut. Its turn then began first, or tied and won on the lower speaker number, and
+  the phrase was taken for the previous speaker's: the new speaker's turn was read as part of its
+  opening and the next change back as no change at all, so in a quick dialog the phrase ran on
+  until a pause. The phrase's speaker is now whoever talks most in its first half second.
 - **Parakeet's timestamps are joined word by word.** They were grouped into phrases on a
   0.6 s silence, and speakers hand over faster than that, so a phrase could swallow the
   handover and be attributed whole to whoever spoke longer.
