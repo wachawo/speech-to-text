@@ -80,18 +80,27 @@ def create_app() -> Flask:
 app = create_app()
 
 
+def is_scrape_detailed() -> bool:
+    """Whether the scrape being answered may see series labelled with model ids.
+
+    Those ids are what /api/health and /api/models keep behind the token, so a scrape gets them on
+    the same terms as health's model list. prometheus_client also reads the gauges once when they
+    are registered, outside any request; that read gets the counters alone.
+    """
+    return has_request_context() and is_request_authorized()
+
+
 def read_scrape_pools() -> dict[str, Any]:
     """The pool status behind /metrics, with every model's pool only for a scrape health would show it to.
 
-    The per-model gauges are built from the `models` map and labelled with each model's id, which
-    /api/health and /api/models keep behind the token, so a scrape gets them on the same terms as
-    health's model list. prometheus_client also reads the gauges once when they are registered,
-    outside any request; that read gets the counters alone.
+    The per-model gauges are built from the `models` map and labelled with each model's id; see
+    is_scrape_detailed for who gets them.
     """
-    return model_pool.get_pool_status(detailed=has_request_context() and is_request_authorized())
+    return model_pool.get_pool_status(detailed=is_scrape_detailed())
 
 
 metrics.LIVE_STATE.update(
+    detailed=is_scrape_detailed,
     pools=read_scrape_pools,
     sessions=lambda: live.ACTIVE_SESSIONS,
     url_sessions=lambda: url_source.URL_SESSIONS,
@@ -245,7 +254,7 @@ def check_transcriber(spec: dict[str, Any], silence: np.ndarray) -> str:
     """Run one loaded model once, with an instance borrowed from and returned to its own pool."""
     transcriber = backends.transcriber_for_backend(spec["backend"])
     return check_model(
-        partial(model_pool.acquire_model, model_id=spec["id"]),
+        partial(model_pool.acquire_model, model_id=spec["id"], observe=False),
         partial(model_pool.release_model, model_id=spec["id"]),
         lambda model: transcriber.get_stt_segments(stream.encode_wav(silence), model=model, language=None),
     )
@@ -302,8 +311,9 @@ def health():
 def prometheus_metrics():
     """Prometheus metrics. Open like /api/health, and like it not proxied by stt_www: scrape :STT_PORT.
 
-    Also like health, the per-model gauges only carry the loaded models for a scrape that passes
-    the token check, or when auth is off; see read_scrape_pools.
+    Also like health, the per-model gauges only carry the loaded models, and the per-model latency
+    series only appear, for a scrape that passes the token check, or when auth is off; see
+    is_scrape_detailed.
     """
     body, content_type = metrics.render()
     return body, 200, {"Content-Type": content_type}
@@ -342,7 +352,8 @@ def transcribe_text(wav_bio, model, language, spec) -> tuple[str, str | None]:
     subtitle credit such as "to be continued...". Either way one decode by the spec's backend
     gives the text, the segments and the language the model reports.
     """
-    result = backends.transcriber_for_backend(spec["backend"]).get_stt_result(wav_bio, model=model, language=language)
+    with metrics.measure_inference(spec["id"], spec["backend"]):
+        result = backends.transcriber_for_backend(spec["backend"]).get_stt_result(wav_bio, model=model, language=language)
     if not config.SPEECH_GATE:
         return result["text"], result["language"]
     kept = speech_gate.gate_wav(wav_bio, result["segments"], get_request_id())
@@ -496,7 +507,8 @@ def run_transcription(wav_bio, language, spec):
     model = model_pool.acquire_request_model(model_id=spec["id"])
     try:
         wav_bio.seek(0)
-        return backends.transcriber_for_backend(spec["backend"]).get_stt_segments(wav_bio, model=model, language=language)
+        with metrics.measure_inference(spec["id"], spec["backend"]):
+            return backends.transcriber_for_backend(spec["backend"]).get_stt_segments(wav_bio, model=model, language=language)
     finally:
         model_pool.release_model(model, model_id=spec["id"])
 

@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Prometheus metrics for GET /metrics: requests, errors, pools, live sessions, dropped text.
+"""Prometheus metrics for GET /metrics: requests, errors, pools, per-model latency, live sessions, dropped text.
 
 Counters are process-local. Under gunicorn every worker keeps its own and a scrape reaches one of
 them, which is fine for the default single-process deployment and says so in the README.
 """
 
 import logging
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
-from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, Counter, Histogram, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, CollectorRegistry, Counter, Histogram, generate_latest
 from prometheus_client.core import GaugeMetricFamily
 from prometheus_client.registry import Collector
 
@@ -29,8 +32,43 @@ DROPPED_SEGMENTS = Counter("stt_speech_gate_dropped_total", "Transcribed segment
 SKIPPED_SECONDS = Counter("stt_stream_skipped_seconds_total", "Queued live audio shed by a session that fell behind")
 JOBS = Counter("stt_jobs_total", "Background jobs by the status they reached", ["status"])
 
-# Filled in by the modules that own the numbers, so this one imports none of them.
-LIVE_STATE: dict[str, Any] = {"pools": lambda: {}, "sessions": lambda: 0, "url_sessions": lambda: 0}
+# Series labelled with a model id live in a registry of their own: the ids name the deployment's
+# models, so render() adds this registry only to a scrape that LIVE_STATE["detailed"] lets see them.
+MODEL_REGISTRY = CollectorRegistry()
+
+# Fine at the short end, where a 1-3 s phrase is decoded in 0.08-0.5 s, and up to the default
+# STT_QUEUE_TIMEOUT. A wait that ran out always overshoots its timeout slightly, so it lands in the
+# next bucket up - +Inf for the default 120 s; stt_model_wait_timeouts_total is what counts those.
+MODEL_SECONDS_BUCKETS = (0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.75, 1, 2.5, 5, 10, 30, 60, 120)
+INFERENCE_SECONDS = Histogram(
+    "stt_model_inference_seconds",
+    "Time one model call took to transcribe its audio",
+    ["model", "backend"],
+    buckets=MODEL_SECONDS_BUCKETS,
+    registry=MODEL_REGISTRY,
+)
+WAIT_SECONDS = Histogram(
+    "stt_model_wait_seconds",
+    "Time spent waiting for a free instance of a model, whether one came or not",
+    ["model"],
+    buckets=MODEL_SECONDS_BUCKETS,
+    registry=MODEL_REGISTRY,
+)
+WAIT_TIMEOUTS = Counter(
+    "stt_model_wait_timeouts_total",
+    "Waits for a free instance of a model that gave up",
+    ["model"],
+    registry=MODEL_REGISTRY,
+)
+
+# Filled in by the modules that own the numbers, so this one imports none of them. `detailed` says
+# whether the scrape being answered may see series labelled with model ids.
+LIVE_STATE: dict[str, Any] = {
+    "pools": lambda: {},
+    "sessions": lambda: 0,
+    "url_sessions": lambda: 0,
+    "detailed": lambda: False,
+}
 
 # The labelled per-model gauges, by the key of each model's entry in the pool status they report.
 MODEL_POOL_GAUGES = {"pool_size": "stt_model_pool_size", "available": "stt_model_pool_available"}
@@ -48,6 +86,21 @@ def observe_request(route: str | None, method: str, status: int, seconds: float)
 def count_error(category: str) -> None:
     """Count one error response by its category, the same string the client receives."""
     ERRORS.labels(category=category).inc()
+
+
+def observe_wait(model_id: str, seconds: float, served: bool) -> None:
+    """Record one wait for an instance of a model, counting it as given up when none came."""
+    WAIT_SECONDS.labels(model=model_id).observe(seconds)
+    if not served:
+        WAIT_TIMEOUTS.labels(model=model_id).inc()
+
+
+@contextmanager
+def measure_inference(model_id: str, backend: str) -> Iterator[None]:
+    """Time the model call made inside the block; a call that raises is not recorded."""
+    start_time = time.monotonic()
+    yield
+    INFERENCE_SECONDS.labels(model=model_id, backend=backend).observe(time.monotonic() - start_time)
 
 
 def collect_model_pools(models: dict[str, Any]) -> list:
@@ -107,8 +160,16 @@ def register_live_gauges() -> None:
 
 
 def render() -> tuple[bytes, str]:
-    """The current metrics in the Prometheus text format, with its content type."""
-    return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
+    """The current metrics in the Prometheus text format, with its content type.
+
+    The per-model latency series follow the rule of the per-model gauges: a scrape that may not
+    see model ids gets none of them, not even their HELP lines, rather than a total under some
+    placeholder label - stt_request_seconds already gives it latency by route.
+    """
+    body = generate_latest(REGISTRY)
+    if LIVE_STATE["detailed"]():
+        body += generate_latest(MODEL_REGISTRY)
+    return body, CONTENT_TYPE_LATEST
 
 
 def main():
