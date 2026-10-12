@@ -10,7 +10,7 @@ import traceback
 from typing import Any
 
 # Local imports
-from libs import backends, config, diarize, registry
+from libs import backends, config, diarize, metrics, registry
 
 logger = logging.getLogger(__name__)
 
@@ -133,14 +133,22 @@ def acquire_model(*, model_id: str, timeout: float = MODEL_ACQUIRE_TIMEOUT) -> A
     """Take an instance of one model out of its pool; raises queue.Empty when none frees up in time.
 
     While it blocks the caller is counted under that pool's kind, so background work borrowing the
-    same model steps aside for it.
+    same model steps aside for it. Every borrow of a transcription model comes through here - a
+    request, a live phrase, a job's piece, the deep health check - so this is where the wait is
+    timed, and where one that ran out is counted, for /metrics.
     """
     kind = build_waiting_kind(model_id)
     count_waiting(kind, 1)
+    start_time = time.monotonic()
     try:
-        return get_model_pool(model_id).get(timeout=timeout)
+        model = get_model_pool(model_id).get(timeout=timeout)
+    except queue.Empty:
+        metrics.observe_wait(model_id, time.monotonic() - start_time, served=False)
+        raise
     finally:
         count_waiting(kind, -1)
+    metrics.observe_wait(model_id, time.monotonic() - start_time, served=True)
+    return model
 
 
 def acquire_request_model(*, model_id: str) -> Any:

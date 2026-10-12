@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 # Local imports
-from libs import align, backends, config, diarize, model_pool, speech_gate
+from libs import align, backends, config, diarize, metrics, model_pool, speech_gate
 
 logger = logging.getLogger(__name__)
 
@@ -264,7 +264,9 @@ def transcribe_piece(
     model = model_pool.acquire_model(model_id=spec["id"])
     try:
         transcriber = backends.transcriber_for_backend(spec["backend"])
-        segments = transcriber.get_stt_segments(encode_wav(samples), model=model, language=language)
+        wav_bio = encode_wav(samples)
+        with metrics.measure_inference(spec["id"], spec["backend"]):
+            segments = transcriber.get_stt_segments(wav_bio, model=model, language=language)
     finally:
         model_pool.release_model(model, model_id=spec["id"])
     timed = []
