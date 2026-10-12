@@ -396,20 +396,25 @@ def split_at_handover(session: dict[str, Any]) -> None:
     leave less, so in a lively dialog a phrase could run for several turns and arrive seconds late.
     Runs after catch_up, when the diarizer is as current as the audio allows: as soon as a phrase
     is open and the diarizer has a new step of audio, and after IDLE_SECONDS with nothing to do.
+    Every handover the frames already cover is cut in one call - after a burst of several seconds
+    there can be more than one - and each cut moves the phrase start forward, so the loop ends.
     """
     segmenter = session["segmenter"]
     diarization = session["diarization"]
     if diarization is None or not segmenter["in_speech"]:
         return
-    start = segmenter["speech_start"] / stream.SAMPLE_RATE
     end = diarization["frames"] * diarize.STREAM_FRAME_SECONDS
-    handover = diarize.find_handover(diarization, start, end)
-    if handover is None:
-        return
-    utterance = stream.cut_utterance(segmenter, int(handover * stream.SAMPLE_RATE))
-    if utterance:
-        session["pending"].append(utterance)
-        session["wake"].set()
+    while segmenter["in_speech"]:
+        speech_start = segmenter["speech_start"]
+        handover = diarize.find_handover(diarization, speech_start / stream.SAMPLE_RATE, end)
+        if handover is None:
+            return
+        utterance = stream.cut_utterance(segmenter, int(handover * stream.SAMPLE_RATE))
+        if utterance:
+            session["pending"].append(utterance)
+            session["wake"].set()
+        if segmenter["speech_start"] == speech_start:
+            return
 
 
 async def catch_up(session: dict[str, Any]) -> None:
