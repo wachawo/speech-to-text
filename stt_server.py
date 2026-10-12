@@ -254,7 +254,7 @@ def check_transcriber(spec: dict[str, Any], silence: np.ndarray) -> str:
     """Run one loaded model once, with an instance borrowed from and returned to its own pool."""
     transcriber = backends.transcriber_for_backend(spec["backend"])
     return check_model(
-        partial(model_pool.acquire_model, model_id=spec["id"]),
+        partial(model_pool.acquire_model, model_id=spec["id"], observe=False),
         partial(model_pool.release_model, model_id=spec["id"]),
         lambda model: transcriber.get_stt_segments(stream.encode_wav(silence), model=model, language=None),
     )

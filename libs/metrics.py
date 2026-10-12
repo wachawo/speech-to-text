@@ -37,7 +37,8 @@ JOBS = Counter("stt_jobs_total", "Background jobs by the status they reached", [
 MODEL_REGISTRY = CollectorRegistry()
 
 # Fine at the short end, where a 1-3 s phrase is decoded in 0.08-0.5 s, and up to the default
-# STT_QUEUE_TIMEOUT, so a wait that ran out still lands below +Inf.
+# STT_QUEUE_TIMEOUT. A wait that ran out always overshoots its timeout slightly, so it lands in the
+# next bucket up - +Inf for the default 120 s; stt_model_wait_timeouts_total is what counts those.
 MODEL_SECONDS_BUCKETS = (0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.75, 1, 2.5, 5, 10, 30, 60, 120)
 INFERENCE_SECONDS = Histogram(
     "stt_model_inference_seconds",

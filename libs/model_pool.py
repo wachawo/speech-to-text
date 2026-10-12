@@ -129,13 +129,14 @@ def count_waiting(kind: str, change: int) -> None:
         WAITING[kind] = WAITING.get(kind, 0) + change
 
 
-def acquire_model(*, model_id: str, timeout: float = MODEL_ACQUIRE_TIMEOUT) -> Any:
+def acquire_model(*, model_id: str, timeout: float = MODEL_ACQUIRE_TIMEOUT, observe: bool = True) -> Any:
     """Take an instance of one model out of its pool; raises queue.Empty when none frees up in time.
 
     While it blocks the caller is counted under that pool's kind, so background work borrowing the
     same model steps aside for it. Every borrow of a transcription model comes through here - a
     request, a live phrase, a job's piece, the deep health check - so this is where the wait is
-    timed, and where one that ran out is counted, for /metrics.
+    timed, and where one that ran out is counted, for /metrics. The deep health check passes
+    `observe=False`: its probe is no client, and a busy model it reports is no client refused.
     """
     kind = build_waiting_kind(model_id)
     count_waiting(kind, 1)
@@ -143,11 +144,13 @@ def acquire_model(*, model_id: str, timeout: float = MODEL_ACQUIRE_TIMEOUT) -> A
     try:
         model = get_model_pool(model_id).get(timeout=timeout)
     except queue.Empty:
-        metrics.observe_wait(model_id, time.monotonic() - start_time, served=False)
+        if observe:
+            metrics.observe_wait(model_id, time.monotonic() - start_time, served=False)
         raise
     finally:
         count_waiting(kind, -1)
-    metrics.observe_wait(model_id, time.monotonic() - start_time, served=True)
+    if observe:
+        metrics.observe_wait(model_id, time.monotonic() - start_time, served=True)
     return model
 
 
