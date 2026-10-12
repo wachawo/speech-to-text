@@ -105,6 +105,9 @@ CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if 
 
 # Gunicorn worker processes (used only when the service is started through gu.py).
 GUNICORN_WORKERS = int(os.getenv("GUNICORN_WORKERS", "4"))
+# "sync" serves the HTTP API only. "uvicorn_worker.UvicornWorker" with `stt_server:asgi_app` also
+# serves the /api/stream websocket, which a WSGI worker cannot hold open.
+GUNICORN_WORKER_CLASS = os.getenv("GUNICORN_WORKER_CLASS", "sync")
 
 # Whisper backend
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small.en").lower()
@@ -113,7 +116,7 @@ WHISPER_DOWNLOAD_ROOT = os.getenv("WHISPER_DOWNLOAD_ROOT", "models")
 COMPUTE_TYPE = os.getenv("COMPUTE_TYPE", "auto").lower()
 
 # Which backend transcribes when STT_MODELS is empty. With STT_MODELS set it is ignored.
-STT_BACKEND = os.getenv("STT_BACKEND", "whisper")
+STT_BACKEND = os.getenv("STT_BACKEND", "whisper").strip().lower()
 
 # Parakeet, the optional second transcription backend. It detects the language itself and
 # takes no language argument, which GET /api/models reports as accepts_language false.
@@ -136,6 +139,16 @@ DIARIZE_DOWNLOAD_ROOT = os.getenv("DIARIZE_DOWNLOAD_ROOT", "models")
 # Frames whose activity probability clears this are counted as speech. 0.5 is the default
 # baked into the processor's extract_speaker_dict.
 DIARIZE_THRESHOLD = float(os.getenv("DIARIZE_THRESHOLD", "0.5"))
+
+# Speech gate: a voice detector drops transcribed segments nobody spoke - Whisper's credit-line
+# hallucinations on tone, music, noise and silence. On by default; off is the old behaviour.
+SPEECH_GATE = os.getenv("SPEECH_GATE", "true").lower() in TRUE_VALUES
+
+# Background jobs for long recordings (POST /api/jobs). The directory holds each job's upload, its
+# record and its result; in Docker it is under the bind-mounted recs/.
+JOBS_DIR = os.getenv("JOBS_DIR", "recs/jobs")
+JOB_MAX_CONTENT_LENGTH_MB = int(os.getenv("JOB_MAX_CONTENT_LENGTH_MB", "1024"))
+JOB_RETENTION_HOURS = float(os.getenv("JOB_RETENTION_HOURS", "24"))
 
 # CLI client
 STT_URL = os.getenv("STT_URL", "http://localhost:5099")

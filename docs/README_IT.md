@@ -57,7 +57,7 @@ docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
 ```
 
-La build GPU richiede `nvidia-container-toolkit` sull'host. La prima esecuzione scarica il modello Whisper in `./models`.
+La build GPU richiede `nvidia-container-toolkit` sull'host. La prima esecuzione scarica il modello Whisper in `./models`. L'esercizio su un server - aggiornamenti, rollback, certificati, dipendenze - è descritto in [docs/DEPLOY.md](DEPLOY.md).
 
 ### Interfaccia web
 
@@ -68,7 +68,7 @@ La build GPU richiede `nvidia-container-toolkit` sull'host. La prima esecuzione 
 | http       | `8080`            | `STT_WWW_PORT`     |
 | https      | `8443`            | `STT_WWW_TLS_PORT` |
 
-Apri `http://<host>:8080`. **TRANSCRIBE** ha due sorgenti. **FILE** carica un file audio. **DEVICE** trascrive in tempo reale da un ingresso audio: un microfono o delle cuffie con microfono, una sorgente `Monitor of ...` su Linux che porta tutto ciò che viene riprodotto da altoparlanti o cuffie, oppure `Tab or screen audio` per ciò che viene riprodotto in una scheda del browser, o nell'intero sistema dove il sistema operativo lo consente. In entrambi i casi il risultato compare sotto il modulo come testo semplice oppure, con la diarizzazione abilitata, come un blocco per frase con il suo parlante e il suo tempo, ogni parlante nel proprio colore e contrassegnate le frasi in cui due persone hanno parlato insieme; una frase in tempo reale compare circa un secondo dopo che il parlante fa una pausa. Il risultato può essere copiato o scaricato come TXT o JSON. Con più modelli caricati (`STT_MODELS`), un selettore del modello accanto a modalità e lingua sceglie il modello per entrambe le sorgenti, alimentato da `GET /api/models`, e l'elenco delle lingue segue il modello scelto. **MODELS** mostra ciò che riporta `GET /api/models`. Quando `STT_TOKENS` è impostato, l'interfaccia chiede un token una sola volta e lo conserva nel browser.
+Apri `http://<host>:8080`. **TRANSCRIBE** ha tre sorgenti. **FILE** carica un file audio. **DEVICE** trascrive in tempo reale da un ingresso audio: un microfono o delle cuffie con microfono, una sorgente `Monitor of ...` su Linux che porta tutto ciò che viene riprodotto da altoparlanti o cuffie, oppure, nei browser Chromium, `Tab or screen audio` per ciò che viene riprodotto in una scheda del browser, o nell'intero sistema dove il sistema operativo lo consente. **STREAM** accetta l'indirizzo di uno stream o di un file remoto - radio via internet, HLS, RTMP, RTSP, SRT - e il server lo legge da sé. In ogni caso il risultato compare sotto il modulo come testo semplice oppure, con la diarizzazione abilitata, come un blocco per frase con il suo parlante e il suo tempo, ogni parlante nel proprio colore e contrassegnate le frasi in cui due persone hanno parlato insieme; una frase in tempo reale compare circa un secondo dopo che il parlante fa una pausa. Il risultato può essere copiato o scaricato come TXT o JSON, e ogni sorgente conserva il suo ultimo risultato mentre guardi un'altra schermata. FILE ha anche una modalità **Turns**, `POST /api/diarize` da solo: chi ha parlato e quando, disegnato come una timeline con una corsia per parlante e contrassegnati i tratti in cui due persone parlano insieme. Con più modelli caricati (`STT_MODELS`), un selettore del modello accanto a modalità e lingua sceglie il modello per tutte e tre le sorgenti, FILE, DEVICE e STREAM, alimentato da `GET /api/models`, e l'elenco delle lingue segue il modello scelto; Turns non trascrive nulla e non invia alcun modello. **MODELS** mostra ciò che riporta `GET /api/models`. Quando `STT_TOKENS` è impostato, l'interfaccia chiede un token una sola volta e lo conserva nel browser.
 
 I browser concedono i dispositivi audio solo a una pagina sicura, quindi attraverso la rete DEVICE funziona tramite la porta https (e su `http://localhost`). La porta https usa un certificato autofirmato che il container crea in `./data/certs` al primo avvio; mettici un vero `stt.crt` e un vero `stt.key` per sostituirlo. L'interfaccia non ha fase di build né CDN: Vue 2 e le sue librerie sono incluse in `www/vendor`, così funziona anche su una macchina senza accesso a internet.
 
@@ -96,6 +96,10 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 ```
 
 Quando `STT_TOKENS` è impostato, `default_model` e `models` compaiono solo nella risposta a una richiesta con un token valido: come `GET /api/models`, descrivono la configurazione del server. Un healthcheck senza token riceve comunque `status`, `pool_size`, `available` e `diarize`.
+
+`GET /api/health?deep=1` fa inoltre passare un secondo di silenzio attraverso ogni modello caricato, uno alla volta, e riporta ciascuno come `ok`, `busy` (nessuna istanza si è liberata entro cinque secondi) o `failed`: ogni modello di trascrizione con il suo id in `deep.models`, `deep.transcriber` come il peggiore di essi e `deep.diarizer` quando la diarizzazione è abilitata. Risponde `503` se qualcuno è fallito. Costa lavoro di GPU, quindi finché `STT_TOKENS` è impostato richiede un token; il controllo semplice resta aperto per i controlli di integrità dei container.
+
+`GET /metrics` espone metriche Prometheus: richieste per rotta e stato, la loro durata, risposte di errore per categoria, dimensioni dei pool e istanze libere, sessioni in tempo reale attive e avviate, segmenti scartati dal rilevatore di voce e audio in tempo reale abbandonato da una sessione rimasta indietro. I gauge `stt_pool_*` senza etichette descrivono il modello predefinito e il diarizzatore; `stt_model_pool_size` e `stt_model_pool_available` riportano ogni modello caricato, con le etichette `model` e `backend`. Come health non richiede token, e `stt_www` non lo inoltra: interroga direttamente `STT_PORT`. Sotto gunicorn ogni worker conta per sé.
 
 `POST /api/stt` accetta un campo `multipart/form-data` chiamato `file`, oppure un body `audio/*` grezzo. Un `model` facoltativo (query string o campo del modulo) sceglie uno dei modelli caricati: il suo id, un alias (`large-v3-turbo`, `parakeet-tdt-0.6b-v3`), la forma `backend:model` o il solo nome di un backend, che indica il modello predefinito se appartiene a quel backend e altrimenti il primo modello di quel backend. Senza `model` risponde il modello predefinito. Un `language` facoltativo (query string o campo del modulo) sostituisce il valore predefinito del server per quella richiesta; `auto` attiva il rilevamento automatico. In caso di successo restituisce il testo, i secondi trascorsi, il modello che ha trascritto e la lingua: il codice che Whisper ha rilevato o usato (sempre `en` per un modello solo inglese), oppure `null` per Parakeet, che non lo riporta.
 
@@ -146,7 +150,7 @@ curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
 }
 ```
 
-`id` è ciò che una richiesta passa come `model`, ed esattamente una riga ha `default: true`: il suo id è `default_model` e il suo backend è il `default` di primo livello. `pool_size` e `available` descrivono il pool di quel modello. `status` è `loaded` quando esistono istanze del modello, libere o occupate, `installed` quando i pesi sono sul disco ma non è ancora stato caricato nulla, e `absent` altrimenti. Un backend configurato ma non installato risponde `absent` e nient'altro; il motivo finisce nel log. `accepts_language` dice se `?language=` ha un significato per quel backend. Il diarizzatore riporta `null` invece di un elenco di lingue vuoto, perché non produce testo in nessuna lingua.
+`id` è ciò che una richiesta passa come `model`, ed esattamente una riga ha `default: true`: il suo id è `default_model` e il suo backend è il `default` di primo livello. `pool_size` e `available` descrivono il pool di quel modello. `status` è `loaded` quando delle istanze sono state caricate nel suo pool, libere o occupate, `installed` quando i pesi sono sul disco ma non è ancora stato caricato nulla, e `absent` altrimenti. Un backend configurato ma non installato risponde `absent` e nient'altro; il motivo finisce nel log. `accepts_language` dice se `?language=` ha un significato per quel backend. Il diarizzatore riporta `null` invece di un elenco di lingue vuoto, perché non produce testo in nessuna lingua.
 
 Il client a riga di comando legge lo stesso endpoint:
 
@@ -193,12 +197,26 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `overlap` contrassegna una frase durante la quale stava parlando anche qualcun altro. NVIDIA afferma esplicitamente che abbinare un modello convenzionale a parlante singolo alla diarizzazione non equivale a un modello costruito per il parlato sovrapposto: un intervallo temporale estratto contiene comunque ogni voce che vi si sovrappone, quindi quelle frasi possono fondersi tra loro oppure selezionare le parole del parlante sbagliato. Considera un segmento contrassegnato con `overlap` come il punto in cui la trascrizione è meno affidabile.
 
+**Le registrazioni lunghe passano da un job.** `POST /api/jobs` accetta le stesse forme di corpo di `/api/stt`, fino a `JOB_MAX_CONTENT_LENGTH_MB` (1 GB), più un `mode`: `text` (il predefinito), `speakers` (il risultato di `/api/transcript`) o `turns` (il risultato di `/api/diarize`). Risponde subito `202` con l'id del job e una `Location` da interrogare:
+
+```bash
+curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
+curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+```
+
+```json
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+```
+
+`status` passa per `queued` (con la sua `position`), `running`, poi `done` con il `result`, oppure `failed` con una categoria `error`. `GET /api/jobs` li elenca e `DELETE /api/jobs/<id>` ne rimuove uno che non è in esecuzione. Un job elabora il file a pezzi di circa un minuto, tagliati sulle pause, e restituisce il modello tra un pezzo e l'altro, così le richieste brevi continuano a ricevere risposta mentre è in corso: una registrazione di 30 minuti ha richiesto 107 s sulla GPU del deploy, e le richieste di telefonate inviate nel frattempo hanno richiesto al massimo 10 s. La diarizzazione percorre l'intero file nella modalità streaming del modello, così un parlante mantiene lo stesso numero dal primo all'ultimo minuto. I job sono file sotto `JOBS_DIR`, quindi sopravvivono a un riavvio, e quelli terminati vengono rimossi dopo `JOB_RETENTION_HOURS`. Un job non accetta `model`: viene eseguito sul modello predefinito, e la sua `language` viene verificata rispetto a quello.
+
 `/api/stream` è un WebSocket per la **trascrizione in tempo reale**: l'audio entra man mano che viene registrato, e ogni frase torna circa un secondo dopo che il parlante fa una pausa. I messaggi di testo JSON trasportano il controllo, i messaggi binari trasportano l'audio:
 
 1. Il client invia `{"type": "start", "model": "turbo", "language": "ru", "diarize": true, "token": "<token>"}`. Tutti i campi tranne `type` sono opzionali. `model` sceglie uno dei modelli caricati come fa `model` su `/api/stt`, e la lingua viene verificata rispetto a quel modello; senza di esso serve il modello predefinito e la lingua viene verificata soltanto per capire se è una lingua, come sempre, quindi un codice che il modello predefinito non conosce fallisce quando si trascrive una frase. `token` è il modo in cui un browser si autentica, dato che non può impostare header su un WebSocket; gli altri client possono invece inviare `Authorization: Bearer <token>` durante l'handshake.
 2. Il server risponde `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "model": "turbo", "language": "ru", "diarize": true, "source": "client"}`.
-3. Il client invia PCM grezzo - 16 bit con segno, little-endian, mono, 16 kHz - come messaggi binari di qualsiasi dimensione, e `{"type": "stop"}` quando ha finito.
-4. Il server invia un `segment` per ogni frase, `progress` circa una volta al secondo e `done` prima di chiudere:
+3. Il client invia PCM grezzo - 16 bit con segno, little-endian, mono, 16 kHz - come messaggi binari di qualsiasi dimensione, al ritmo con cui viene registrato, e `{"type": "stop"}` quando ha finito. Un file inviato più velocemente del tempo reale resta indietro per scelta progettuale e perde frasi (vedi `skipped` più sotto); un file va in un job.
+4. Il server invia un `segment` per ogni frase, `progress` circa una volta al secondo, `skipped` con i secondi di audio scartati se la sessione accumula più di due minuti di ritardo, e `done` prima di chiudere:
 
 ```json
 { "type": "segment", "id": 3, "start": 6.88, "end": 8.2, "text": "This is the second speaker.", "speaker": 1, "overlap": false }
@@ -206,13 +224,17 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 { "type": "done", "segments": 10, "seconds": 21.87, "elapsed": 22.08 }
 ```
 
-L'audio può anche arrivare da altrove. Con `"source": "url", "url": "https://..."` nel messaggio di avvio il client non invia alcun audio: il server legge lo stream a quell'indirizzo tramite ffmpeg, al ritmo proprio della sorgente, finché non termina o il client invia `stop`. Funzionano radio via internet, HLS, RTMP, RTSP e SRT; lo schema deve essere `http`, `https`, `rtmp`, `rtmps`, `rtsp` o `srt`, e ffmpeg è limitato ai soli protocolli di rete, così un URL o una playlist non possono fargli leggere un file locale. Resta il fatto che il server va a leggere un indirizzo scelto da un client, compresi indirizzi della sua stessa rete: imposta `STT_TOKENS` su qualsiasi server raggiungibile da altri.
+L'audio può anche arrivare da altrove. Con `"source": "url", "url": "https://..."` nel messaggio di avvio il client non invia alcun audio: il server legge lo stream a quell'indirizzo tramite ffmpeg finché non termina o il client invia `stop`. Funzionano radio via internet, HLS, RTMP, RTSP e SRT; lo schema deve essere `http`, `https`, `rtmp`, `rtmps`, `rtsp` o `srt`. Ciò che una sorgente dal vivo ha già accumulato viene preso subito, e il resto al ritmo proprio della sorgente, così un file remoto arriva come arriverebbe una trasmissione.
 
-Un errore è un singolo `{"type": "error", "error": "<category>", "request_id": "..."}` seguito da una chiusura, con le categorie di errore HTTP più `Invalid start message`, `Invalid audio frame`, `Invalid stream URL` e `Stream source failed`.
+Poiché così il server va a leggere un indirizzo scelto da un client, la funzione è delimitata. ffmpeg può usare solo protocolli di rete, quindi né un URL né una playlist possono fargli leggere un file locale, e nulla può metterlo in ascolto: le modalità SRT `listener` e `rendezvous` e qualsiasi parametro `listen` vengono rifiutati. Un indirizzo che è il server stesso o che vi si risolve (loopback), un indirizzo link-local come il servizio di metadati cloud a `169.254.169.254`, oppure `0.0.0.0` viene rifiutato con `Invalid stream URL`; il controllo avviene all'avvio della sessione, e ffmpeg segue comunque redirect e playlist. Una pagina di un altro sito non può avviarne una (`Forbidden`): i browser non applicano CORS ai WebSocket, quindi il socket verifica che l'origine della pagina sia questo host o compaia in `CORS_ORIGINS`. Al massimo quattro sorgenti URL girano contemporaneamente in ciascun processo del server (`Service Unavailable` oltre questo limite), quindi gunicorn con più worker ne consente altrettante per worker, e il log registra ogni indirizzo senza credenziali né query string. Può comunque raggiungere host sulla rete del server stesso, ed è proprio questo lo scopo per una telecamera e il motivo per impostare `STT_TOKENS` su un server raggiungibile da altri.
 
-Una frase termina a una pausa di 0,6 s, oppure nel suo punto più silenzioso una volta superati i 15 s, e viene trascritta da sola con un modello preso in prestito dallo stesso pool degli upload, così un pool occupato ritarda le frasi in tempo reale invece di farle fallire. Con `diarize`, il diarizzatore funziona in modalità streaming e porta con sé una cache dei parlanti da un blocco all'altro, così un parlante mantiene lo stesso numero per tutta la sessione. Il socket esiste solo quando il server gira sotto uvicorn (`python3 stt_server.py`, il predefinito in Docker): il server di debug di Flask e i worker sync di gunicorn non parlano WebSocket.
+Un errore è un singolo `{"type": "error", "error": "<category>", "request_id": "..."}` seguito da una chiusura, con le categorie di errore HTTP più `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed` e `Forbidden`.
 
-Gli upload sono limitati a `MAX_CONTENT_LENGTH_MB` (10 MB per impostazione predefinita); un corpo più grande restituisce `413`.
+Una frase termina a una pausa di 0,6 s, dove il diarizzatore sente un parlante passare la parola a un altro (con `diarize`, perché le persone che si rispondono lasciano spesso meno di 0,6 s), oppure nel suo punto più silenzioso una volta superati i 15 s, e viene trascritta da sola con un modello preso in prestito dallo stesso pool degli upload, così un pool occupato ritarda le frasi in tempo reale invece di farle fallire. Con `diarize`, il diarizzatore funziona in modalità streaming e porta con sé una cache dei parlanti da un blocco all'altro, così un parlante mantiene lo stesso numero per tutta la sessione. Il socket esiste quando il server gira sotto uvicorn - `python3 stt_server.py`, il predefinito in Docker, oppure gunicorn con `GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker` che serve `stt_server:asgi_app` - e non con il server di debug di Flask né con i worker sync predefiniti di gunicorn, che non parlano WebSocket.
+
+**Viene restituito solo il testo parlato.** Dove non c'è parlato - un bip, musica, rumore, il tono di libero, persino silenzio digitale - Whisper risponde con i titoli di coda dei video sottotitolati da cui ha imparato (un credito russo "sottotitoli a cura di DimaTorzok", "continua...", "Grazie per la visione."), e lo fa con piena sicurezza: sul corpus di test il suo stesso `no_speech_prob` era 0,00 anche sul silenzio. Per questo ogni endpoint fa passare sull'audio un rilevatore di voce, Silero VAD, e scarta un segmento trascritto che cade per lo più fuori dal parlato rilevato, oltre a qualsiasi segmento che sia un'intera riga di titoli dei sottotitoli. Su un corpus di nove registrazioni senza parlato questo ha eliminato ogni riga del genere mantenendo ogni frase delle registrazioni con parlato. Una registrazione in cui non si dice nulla ora risulta come testo vuoto. Nello stream in tempo reale una frase senza parlato rilevato non viene nemmeno inviata al modello. Il rilevatore gira sulla CPU e aggiunge circa un secondo ogni tre minuti di audio. `SPEECH_GATE=false` ripristina il comportamento precedente.
+
+Gli upload sono limitati a `MAX_CONTENT_LENGTH_MB` (10 MB per il server da solo, 100 MB nella configurazione Docker); un corpo più grande restituisce `413`.
 
 Gli errori sono uniformi: `error` riporta una categoria generica e `request_id` correla la risposta con il log del server, dove viene registrata l'eccezione completa.
 
@@ -255,6 +277,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | dimensione massima dell'upload in MB; un corpo più grande restituisce `413` |
 | `CORS_ORIGINS`          | `*`                     | origini CORS consentite: `*` o un elenco separato da virgole |
 | `GUNICORN_WORKERS`      | `4`                     | processi worker (solo gunicorn)                    |
+| `GUNICORN_WORKER_CLASS` | `sync`                  | `uvicorn_worker.UvicornWorker` aggiunge `/api/stream` (solo gunicorn) |
 | `LOG_LEVEL`             | `INFO`                  | livello di logging                                 |
 | `LOG_ACCESS`            | `false`                 | registra le righe di access di uvicorn             |
 | `WHISPER_MODEL`         | `small.en`              | nome del modello Whisper (es. `small.en`, `turbo`) quando `STT_MODELS` è vuoto |
@@ -271,6 +294,12 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `DIARIZE_POOL_SIZE`     | `1`                     | istanze di diarizzazione precaricate               |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | directory della cache del modello di diarizzazione |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | probabilità di attività del parlante contata come voce |
+| `JOBS_DIR`              | `recs/jobs`             | dove i job tengono upload, record e risultato       |
+| `JOB_MAX_CONTENT_LENGTH_MB` | `1024`              | dimensione massima dell'upload di un job in MB      |
+| `JOB_RETENTION_HOURS`   | `24`                    | ore dopo le quali i job terminati vengono rimossi   |
+| `SPEECH_GATE`           | `true`                  | scarta il testo trascritto che nessuno ha pronunciato (rilevatore di voce) |
+| `STT_UID`, `STT_GID`    | (`stt` dell'immagine, 1001) | utente dell'host proprietario di `models/`, `logs/`, `recs/` (Docker) |
+| `HF_HUB_OFFLINE`        | `0`                     | `1` una volta messi in cache i modelli: nessuna richiesta all'hub all'avvio |
 | `STT_WWW_PORT`          | `8080`                  | porta http dell'interfaccia web (compose)           |
 | `STT_WWW_TLS_PORT`      | `8443`                  | porta https dell'interfaccia web (compose)          |
 | `STT_URL`               | `http://localhost:5099` | client: URL base del server                        |
@@ -294,6 +323,11 @@ speech-to-text/
 │   ├── align.py         # joins transcription segments to speaker turns
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
+│   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
+│   ├── speech_gate.py   # voice detector that drops text nobody spoke
+│   ├── metrics.py       # Prometheus metrics for GET /metrics
+│   ├── jobs.py          # background jobs: stored on disk, claimed with a lock, run by a worker thread
+│   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
@@ -304,7 +338,8 @@ speech-to-text/
 ├── Dockerfile-www       # web UI image (nginx)
 ├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS
 ├── www/                 # web UI: Vue 2 without a build step, libraries vendored
-├── docs/                # README translations
+├── constraints.txt      # every dependency version the tested image resolved
+├── docs/                # DEPLOY.md and the README translations
 └── tests/               # pytest tests, no model downloads and no GPU
 ```
 

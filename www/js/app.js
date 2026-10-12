@@ -151,6 +151,45 @@ const fmtStamp = function (value) {
 };
 Vue.prototype.$fmtStamp = fmtStamp;
 
+/* A running clock in whole seconds: 75 -> "1:15", 4000 -> "1:06:40". The
+   live sessions' clock and the timeline's axis. Minutes carry no leading
+   zero until there are hours, so a short session reads as a stopwatch. */
+Vue.prototype.$fmtClock = function (value) {
+  var whole = Math.max(0, Math.floor(Number(value) || 0));
+  var hours = Math.floor(whole / 3600);
+  var minutes = Math.floor((whole % 3600) / 60);
+  var rest = whole % 60;
+  var tail = (rest < 10 ? '0' : '') + rest;
+  if (!hours) return minutes + ':' + tail;
+  return hours + ':' + (minutes < 10 ? '0' : '') + minutes + ':' + tail;
+};
+
+/* Speakers, the same way on every surface that names one - the transcript
+   blocks, the turns timeline and list, TXT. The server numbers them from
+   zero in the order they first speak; people count from one. A segment no
+   turn covered has no speaker: null here, '' as a label. */
+const SPEAKER_INKS = 8;
+
+const speakerIndex = function (speaker) {
+  if (speaker === null || speaker === undefined || speaker === '') return null;
+  var number = Number(speaker);
+  return isFinite(number) && number >= 0 ? Math.floor(number) : null;
+};
+
+Vue.prototype.$speakerLabel = function (speaker) {
+  var index = speakerIndex(speaker);
+  return index === null ? '' : 'Speaker ' + (index + 1);
+};
+
+/* The ink follows the number, and the number is arrival order, so the first
+   voice in a recording is always the first colour (css/main.css,
+   --stt-speaker-1..8). A ninth starts the colours over; the name still tells
+   them apart. */
+Vue.prototype.$speakerClass = function (speaker) {
+  var index = speakerIndex(speaker);
+  return index === null ? 'stt-speaker-none' : 'stt-speaker-' + ((index % SPEAKER_INKS) + 1);
+};
+
 /* English names for the language codes the backends report.
 
    The server sends codes only - GET /api/models lists each backend's own
@@ -297,17 +336,17 @@ applyTheme(startingTheme);
    text is hand-editable.
 
    An empty string means "not chosen": for the model, the server's default
-   model; for the mode, the screen picks Speakers
-   when the server can diarize and Text when it cannot; for the language, it is
-   the server's own default, so a browser that never chose follows the
-   deployment rather than a value baked into this file; for the source, FILE;
-   for the device, the browser's default input.
+   model; for the mode, the screen picks Speakers when the server can diarize
+   and Text when it cannot; for the language, it is the server's own default,
+   so a browser that never chose follows the deployment rather than a value
+   baked into this file; for the source, FILE; for the device, the browser's
+   default input; for the stream address, nothing.
 
    A group is written whole, so a screen saving one field starts from the
    stored group and changes only its own - see $savePrefs. */
 const PREFS_PREFIX = 'stt.';
 const PREFS = {
-  transcribe: { model: '', mode: '', language: '', source: '', device: '' },
+  transcribe: { model: '', mode: '', language: '', source: '', device: '', url: '' },
 };
 
 const validatePrefs = function (name, value) {
@@ -405,6 +444,30 @@ const state = {
   // The transcribe screen's remembered model, mode and language, already validated.
   // Replaced whole by $savePrefs.
   transcribe: readPrefs('transcribe'),
+  // The last result of each source, kept here rather than on the screen so
+  // it outlives a visit to another screen: the screen is rebuilt on the way
+  // back, and a transcript is not something to lose to a look at MODELS. A
+  // result lands here even when it arrives after the screen was left - an
+  // upload that finished meanwhile. Replaced whole by keep_transcript; a live
+  // session's record is then added to in place, which is why it is kept by
+  // reference. Memory only: a reload starts empty.
+  transcripts: { file: null, device: null, stream: null },
+  // The file chosen on the FILE source, for the same reason. A File, which
+  // Vue leaves unobserved.
+  chosenFile: null,
+  // The FILE upload in flight, {serial, caption, started}, or null. Here
+  // rather than on the source because leaving the screen does not stop the
+  // request: the FILE source rebuilt on the way back reads it to show the
+  // upload still running, with its seconds counted from the start, and to
+  // keep TRANSCRIBE off instead of sending the same file a second time.
+  // Replaced whole by start_upload and finish_upload.
+  upload: null,
+  // Why the last FILE upload failed, or ''. Kept beside `upload` for the
+  // same reason: the source that sent the request may be gone when the
+  // failure comes, and the one on the screen then must still say it, not
+  // just drop the running upload. Set by finish_upload, cleared by
+  // keep_upload_error when the operator dismisses it or presses TRANSCRIBE.
+  uploadError: '',
 };
 
 /* A GET /api/models answer into the catalog. Its own action because two
@@ -441,11 +504,57 @@ const fetch_models = function (context, options) {
   });
 };
 
+/* A source's result: {source: 'file' | 'device' | 'stream', result}. */
+const keep_transcript = function (context, payload) {
+  var kept = Object.assign({}, context.state.transcripts);
+  kept[payload.source] = payload.result;
+  context.state.transcripts = kept;
+};
+
+const choose_file = function (context, file) {
+  context.state.chosenFile = file || null;
+};
+
+/* The FILE upload, from TRANSCRIBE to its answer. Numbered off a counter,
+   like the toasts, so the answer can say which upload it belongs to: only
+   the latest one's is kept. An older request answering last would otherwise
+   replace the newer result with its own. The upload is written synchronously,
+   so the caller reads its number off the store straight after dispatching. */
+var uploadSerial = 0;
+
+/* An upload starting: `caption` is what the wait strip says before the
+   seconds. */
+const start_upload = function (context, caption) {
+  uploadSerial += 1;
+  context.state.upload = { serial: uploadSerial, caption: caption, started: Date.now() };
+};
+
+/* An upload answered: {serial, result, error}, the result null and the
+   error the sentence for the error bar when the request failed. An answer
+   from an upload that is no longer the latest is dropped, and leaves the
+   latest one running. */
+const finish_upload = function (context, payload) {
+  if (payload.serial !== uploadSerial) return;
+  context.state.upload = null;
+  if (payload.error) context.state.uploadError = payload.error;
+  if (payload.result) context.dispatch('keep_transcript', { source: 'file', result: payload.result });
+};
+
+/* The FILE error bar's text: '' when it is dismissed or a new upload starts. */
+const keep_upload_error = function (context, text) {
+  context.state.uploadError = text || '';
+};
+
 const actions = {
   push_toast,
   dismiss_toast,
   file_models,
   fetch_models,
+  keep_transcript,
+  choose_file,
+  start_upload,
+  finish_upload,
+  keep_upload_error,
 };
 
 const store = new Vuex.Store({ state, actions });

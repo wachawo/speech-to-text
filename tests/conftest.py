@@ -44,28 +44,30 @@ def read_stub_model_name(model):
     return model.get("stub_model") or "" if isinstance(model, dict) else ""
 
 
-def fake_get_stt_result(bio, model=None, device=None, language=None):
-    """Stand in for stt.get_stt_result(): fixed text, and the language Whisper would report.
-
-    An English-only checkpoint reports `en` whatever it was told; otherwise autodetect reports
-    `en` and an explicit code is reported back as given.
-    """
-    if read_stub_model_name(model).endswith(".en") or language in (None, "auto"):
-        return {"text": "stub transcription", "language": "en"}
-    return {"text": "stub transcription", "language": language}
-
-
-def fake_get_stt_bio(bio, model=None, device=None, language=None):
-    """Stand in for stt.get_stt_bio(), which is get_stt_result() without the language."""
-    return fake_get_stt_result(bio, model=model, device=device, language=language)["text"]
-
-
 def fake_get_stt_segments(bio, model=None, device=None, language=None):
     """Stand in for stt.get_stt_segments() with two phrases straddling the stub speaker turns."""
     return [
         {"start": 0.0, "end": 1.1, "text": " first phrase"},
         {"start": 1.3, "end": 2.4, "text": " second phrase"},
     ]
+
+
+def fake_get_stt_result(bio, model=None, device=None, language=None):
+    """Stand in for stt.get_stt_result(): fixed text, the stub phrases, and the language Whisper would report.
+
+    An English-only checkpoint reports `en` whatever it was told; otherwise autodetect reports
+    `en` and an explicit code is reported back as given. The segments are what the speech gate
+    filters on /api/stt.
+    """
+    segments = fake_get_stt_segments(bio, model=model, device=device, language=language)
+    if read_stub_model_name(model).endswith(".en") or language in (None, "auto"):
+        return {"text": "stub transcription", "language": "en", "segments": segments}
+    return {"text": "stub transcription", "language": language, "segments": segments}
+
+
+def fake_get_stt_bio(bio, model=None, device=None, language=None):
+    """Stand in for stt.get_stt_bio(), which is get_stt_result() without the language."""
+    return fake_get_stt_result(bio, model=model, device=device, language=language)["text"]
 
 
 def fake_resolve_whisper_languages(model_name):
@@ -194,39 +196,63 @@ def fake_describe_parakeet(model_name=None):
     }
 
 
-def fake_get_parakeet_result(bio, model=None, device=None, language=None):
-    """Stand in for parakeet.get_stt_result(): its own text, so a test can tell who transcribed."""
-    return {"text": "stub parakeet transcription", "language": None}
+def fake_parakeet_get_stt_segments(bio, model=None, device=None, language=None):
+    """Stand in for parakeet.get_stt_segments(): the Whisper stub's timing, but its own words."""
+    return [
+        {"start": 0.0, "end": 1.1, "text": " parakeet first"},
+        {"start": 1.3, "end": 2.4, "text": " parakeet second"},
+    ]
 
 
-def fake_get_parakeet_bio(bio, model=None, device=None, language=None):
-    """Stand in for parakeet.get_stt_bio(), which is get_stt_result() without the language."""
-    return fake_get_parakeet_result(bio, model=model, device=device, language=language)["text"]
+def fake_parakeet_get_stt_result(bio, model=None, device=None, language=None):
+    """Stand in for parakeet.get_stt_result(): its own text and words, and no language, as the model reports none."""
+    segments = fake_parakeet_get_stt_segments(bio, model=model, device=device, language=language)
+    return {"text": "parakeet transcription", "language": None, "segments": segments}
+
+
+def fake_parakeet_get_stt_bio(bio, model=None, device=None, language=None):
+    """Stand in for parakeet.get_stt_bio() with a transcription the Whisper stub never gives."""
+    return fake_parakeet_get_stt_result(bio, model=model, device=device, language=language)["text"]
 
 
 # No normalize_language_code on purpose, exactly like the real module: Parakeet has no language
 # table, and the server tells the two kinds of backend apart by that absence.
 fake_parakeet = types.ModuleType("libs.parakeet")
 fake_parakeet.get_model = fake_get_model
-fake_parakeet.get_stt_result = fake_get_parakeet_result
-fake_parakeet.get_stt_bio = fake_get_parakeet_bio
-fake_parakeet.get_stt_segments = fake_get_stt_segments
+fake_parakeet.get_stt_result = fake_parakeet_get_stt_result
+fake_parakeet.get_stt_bio = fake_parakeet_get_stt_bio
+fake_parakeet.get_stt_segments = fake_parakeet_get_stt_segments
 fake_parakeet.describe_backend = fake_describe_parakeet
 fake_parakeet.resolve_languages = fake_resolve_parakeet_languages
 fake_parakeet.list_aliases = fake_list_parakeet_aliases
 fake_parakeet.list_known_models = fake_list_known_parakeet_models
+fake_parakeet.WORD_SEGMENTS = True
 sys.modules["libs.parakeet"] = fake_parakeet
 libs.parakeet = fake_parakeet
+
+
+def fake_find_handover(state, start, end):
+    """Stand in for diarize.find_handover(): no speaker change unless a test says otherwise."""
+    return None
+
+
+def fake_trim_activity(state, keep_from):
+    """Stand in for diarize.trim_activity(): the fake diarizer keeps no activity to drop."""
+    return None
+
 
 fake_diarize = types.ModuleType("libs.diarize")
 fake_diarize.get_diarizer = fake_get_diarizer
 fake_diarize.diarize_wav = fake_diarize_wav
 fake_diarize.describe_backend = fake_describe_diarizer
+fake_diarize.find_handover = fake_find_handover
+fake_diarize.trim_activity = fake_trim_activity
+fake_diarize.STREAM_FRAME_SECONDS = 0.01
 sys.modules["libs.diarize"] = fake_diarize
 libs.diarize = fake_diarize
 
 import stt_server  # noqa: E402  (must follow the backend stubs)
-from libs import config, model_pool  # noqa: E402  (must follow the backend stubs)
+from libs import config, model_pool, speech_gate  # noqa: E402  (must follow the backend stubs)
 from tests.helpers import make_model_sentinel  # noqa: E402  (imports libs.model_pool, so it follows too)
 
 
@@ -238,20 +264,38 @@ def build_pool(model_id, count):
     return pool
 
 
+@pytest.fixture(autouse=True)
+def speech_gate_off(monkeypatch):
+    """Run every test with the speech gate off unless the test switches it on.
+
+    CI installs no silero-vad, and a detector that cannot be loaded stays off for the process; the
+    gate's own tests replace the detector and switch the gate on themselves.
+    """
+    monkeypatch.setattr(config, "SPEECH_GATE", False)
+    monkeypatch.setattr(speech_gate, "VAD_BROKEN", False)
+
+
 @pytest.fixture
-def client(monkeypatch):
-    """Flask test client for a single-model deployment: one pooled instance of the Whisper stub."""
+def legacy_pool(monkeypatch):
+    """A single-model deployment, the Whisper stub with one pooled instance; returns that model's queue."""
     monkeypatch.setattr(config, "STT_MODELS", ())
     monkeypatch.setattr(config, "STT_DEFAULT_MODEL", "")
     monkeypatch.setattr(config, "STT_BACKEND", "whisper")
     monkeypatch.setattr(config, "WHISPER_MODEL", LEGACY_WHISPER_MODEL)
     monkeypatch.setattr(config, "PARAKEET_MODEL", LEGACY_PARAKEET_MODEL)
     monkeypatch.setattr(config, "MODEL_POOL_SIZE", 1)
-    monkeypatch.setattr(model_pool, "MODEL_POOLS", {LEGACY_WHISPER_MODEL: build_pool(LEGACY_WHISPER_MODEL, 1)})
+    pool = build_pool(LEGACY_WHISPER_MODEL, 1)
+    monkeypatch.setattr(model_pool, "MODEL_POOLS", {LEGACY_WHISPER_MODEL: pool})
     monkeypatch.setattr(model_pool, "MODELS_LOADED", {})
     # Pinned rather than inherited: a machine with DIARIZE_ENABLED set in its environment would
     # otherwise turn the disabled-build test into a real pool wait.
     monkeypatch.setattr(config, "DIARIZE_ENABLED", False)
+    return pool
+
+
+@pytest.fixture
+def client(legacy_pool):
+    """Flask test client for a single-model deployment: one pooled instance of the Whisper stub."""
     return stt_server.app.test_client()
 
 

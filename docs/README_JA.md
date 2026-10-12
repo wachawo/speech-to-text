@@ -57,7 +57,7 @@ docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
 ```
 
-GPU ビルドにはホスト上に `nvidia-container-toolkit` が必要です。初回実行時に Whisper モデルが `./models` にダウンロードされます。
+GPU ビルドにはホスト上に `nvidia-container-toolkit` が必要です。初回実行時に Whisper モデルが `./models` にダウンロードされます。サーバーでの運用（更新、ロールバック、証明書、依存関係）については [docs/DEPLOY.md](DEPLOY.md) を参照してください。
 
 ### Web UI
 
@@ -68,7 +68,7 @@ GPU ビルドにはホスト上に `nvidia-container-toolkit` が必要です。
 | http     | `8080`           | `STT_WWW_PORT`     |
 | https    | `8443`           | `STT_WWW_TLS_PORT` |
 
-`http://<host>:8080` を開きます。**TRANSCRIBE** には 2 つのソースがあります。**FILE** は音声ファイルをアップロードします。**DEVICE** は音声入力からリアルタイムで文字起こしします。入力には、マイクやヘッドセット、スピーカーやヘッドホンで再生されるものをすべて運ぶ Linux の `Monitor of ...` ソース、あるいはブラウザのタブで再生されるもの（OS が許す場合はシステム全体）を対象とする `Tab or screen audio` を使えます。どちらの場合も、結果はフォームの下にプレーンテキストとして表示されます。ダイアライゼーションが有効なら、フレーズごとに話者と時刻を付けたブロックとして表示され、話者ごとに色が分かれ、2 人が同時に話したフレーズには印が付きます。リアルタイムのフレーズは、話者が言葉を切ってから約 1 秒後に表示されます。結果はコピーすることも、TXT または JSON としてダウンロードすることもできます。複数のモデルを読み込んでいる場合（`STT_MODELS`）、モードと言語の横にあるモデル選択で、どちらのソースでも使うモデルを選べます。選択肢は `GET /api/models` から取得され、言語の一覧は選んだモデルに従います。**MODELS** は `GET /api/models` が報告する内容を表示します。`STT_TOKENS` が設定されている場合、UI は一度だけトークンを尋ね、ブラウザに保存します。
+`http://<host>:8080` を開きます。**TRANSCRIBE** には 3 つのソースがあります。**FILE** は音声ファイルをアップロードします。**DEVICE** は音声入力からリアルタイムで文字起こしします。入力には、マイクやヘッドセット、スピーカーやヘッドホンで再生されるものをすべて運ぶ Linux の `Monitor of ...` ソース、あるいは Chromium 系ブラウザでは、ブラウザのタブで再生されるもの（OS が許す場合はシステム全体）を対象とする `Tab or screen audio` を使えます。**STREAM** はストリームまたはリモートファイルのアドレス（インターネットラジオ、HLS、RTMP、RTSP、SRT）を受け取り、サーバー自身がそれを読み込みます。いずれの場合も、結果はフォームの下にプレーンテキストとして表示されます。ダイアライゼーションが有効なら、フレーズごとに話者と時刻を付けたブロックとして表示され、話者ごとに色が分かれ、2 人が同時に話したフレーズには印が付きます。リアルタイムのフレーズは、話者が言葉を切ってから約 1 秒後に表示されます。結果はコピーすることも、TXT または JSON としてダウンロードすることもでき、各ソースは別の画面を見ている間も直前の結果を保持します。FILE には **Turns** モードもあります。これは `POST /api/diarize` 単体の機能で、誰がいつ話したかを話者ごとのレーンを持つタイムラインとして描き、2 人が同時に話している区間には印を付けます。複数のモデルを読み込んでいる場合（`STT_MODELS`）、モードと言語の横にあるモデル選択で、FILE、DEVICE、STREAM のすべてのソースで使うモデルを選べます。選択肢は `GET /api/models` から取得され、言語の一覧は選んだモデルに従います。Turns は文字起こしを行わないため、モデルを送りません。**MODELS** は `GET /api/models` が報告する内容を表示します。`STT_TOKENS` が設定されている場合、UI は一度だけトークンを尋ね、ブラウザに保存します。
 
 ブラウザは安全なページにしか音声デバイスを渡さないため、ネットワーク越しでは DEVICE は https リスナー経由で動作します（`http://localhost` でも動作します）。https リスナーは、コンテナが初回起動時に `./data/certs` に作成する自己署名証明書を使います。置き換えるには、本物の `stt.crt` と `stt.key` をそこに置いてください。UI にはビルド工程も CDN もありません。Vue 2 とそのライブラリは `www/vendor` に同梱されているため、インターネットに接続できないマシンでも動作します。
 
@@ -96,6 +96,10 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 ```
 
 `STT_TOKENS` が設定されている場合、`default_model` と `models` は有効なトークンを持つリクエストへの応答にのみ含まれます。`GET /api/models` と同様に、これらはサーバーの構成を示すからです。トークンのないヘルスチェックも引き続き `status`、`pool_size`、`available`、`diarize` を受け取ります。
+
+`GET /api/health?deep=1` はさらに、読み込まれているすべてのモデルに 1 つずつ 1 秒間の無音を通し、それぞれを `ok`、`busy`（5 秒以内にインスタンスが空かなかった）、`failed` のいずれかとして報告します。文字起こしモデルはそれぞれ id ごとに `deep.models` に、`deep.transcriber` はその中で最も悪い結果として報告され、ダイアライゼーションが有効なら `deep.diarizer` も報告されます。1 つでも失敗すれば `503` を返します。GPU の処理を消費するため、`STT_TOKENS` が設定されている間はトークンが必要です。通常のチェックはコンテナのヘルスチェック用に開いたままです。
+
+`GET /metrics` は Prometheus のメトリクスを提供します。ルートとステータスごとのリクエスト数、その所要時間、カテゴリ別のエラーレスポンス、プールのサイズと空きインスタンス数、実行中および開始されたライブセッション、音声検出器が取り除いたセグメント、遅れたセッションが切り捨てたライブ音声です。ラベルのない `stt_pool_*` ゲージはデフォルトモデルとダイアライザーを表し、`stt_model_pool_size` と `stt_model_pool_available` は読み込まれた各モデルを `model` と `backend` のラベル付きで示します。ヘルスチェックと同じくトークンは不要で、`stt_www` はこれをプロキシしません。`STT_PORT` を直接スクレイプしてください。gunicorn では、各ワーカーがそれぞれ独自に集計します。
 
 `POST /api/stt` は `file` という名前の `multipart/form-data` フィールド、または生の `audio/*` ボディを受け付けます。任意の `model`（クエリ文字列またはフォームフィールド）で、読み込まれたモデルの 1 つを選べます。指定できるのは id、エイリアス（`large-v3-turbo`、`parakeet-tdt-0.6b-v3`）、`backend:model` 形式、またはバックエンド名だけで、バックエンド名はデフォルトモデルがそのバックエンドに属していればデフォルトモデルを、そうでなければそのバックエンドの最初のモデルを意味します。`model` がなければデフォルトモデルが応答します。任意の `language`（クエリ文字列またはフォームフィールド）は、そのリクエストに限りサーバーのデフォルトを上書きし、`auto` で自動検出します。成功するとテキスト、経過秒数、文字起こししたモデル、言語を返します。言語は Whisper が検出または使用したコード（英語専用モデルでは常に `en`）で、Parakeet は言語を報告しないため `null` です。
 
@@ -146,7 +150,7 @@ curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
 }
 ```
 
-`id` はリクエストが `model` として渡す値で、`default: true` を持つ行はちょうど 1 つです。その id が `default_model`、そのバックエンドが最上位の `default` です。`pool_size` と `available` はそのモデルのプールを表します。`status` は、モデルのインスタンスが空きでも処理中でも存在すれば `loaded`、重みはディスクにあるがまだ何も読み込まれていなければ `installed`、それ以外は `absent` です。設定済みだがインストールされていないバックエンドは `absent` とだけ返し、理由はログに出力されます。`accepts_language` は、そのバックエンドにとって `?language=` に意味があるかどうかを示します。ダイアライザーはどの言語のテキストも生成しないため、空のリストではなく `null` の言語を返します。
+`id` はリクエストが `model` として渡す値で、`default: true` を持つ行はちょうど 1 つです。その id が `default_model`、そのバックエンドが最上位の `default` です。`pool_size` と `available` はそのモデルのプールを表します。`status` は、インスタンスがそのモデルのプールに読み込まれていれば、空いていても使用中でも `loaded`、重みはディスクにあるがまだ何も読み込まれていなければ `installed`、それ以外は `absent` です。設定済みだがインストールされていないバックエンドは `absent` とだけ返し、理由はログに出力されます。`accepts_language` は、そのバックエンドにとって `?language=` に意味があるかどうかを示します。ダイアライザーはどの言語のテキストも生成しないため、空のリストではなく `null` の言語を返します。
 
 CLI クライアントは同じエンドポイントを読み取ります。
 
@@ -193,12 +197,26 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `overlap` は、そのフレーズの最中に別の人も話していたことを示します。NVIDIA は、従来の単一話者モデルをダイアライゼーションと組み合わせても、重なり合う発話のために作られたモデルと同等にはならないと明言しています。切り出した時間範囲には、そこに重なるすべての声が依然として含まれているため、そうしたフレーズは混ざり合ったり、別の話者の言葉を拾ってしまったりすることがあります。`overlap` が付いたセグメントは、文字起こしが最も信用できない箇所として扱ってください。
 
+**長い録音はジョブで処理します。** `POST /api/jobs` は `/api/stt` と同じ形式のボディを `JOB_MAX_CONTENT_LENGTH_MB`（1 GB）まで受け付け、さらに `mode` を取ります。`text`（デフォルト）、`speakers`（`/api/transcript` の結果）、`turns`（`/api/diarize` の結果）のいずれかです。応答はすぐに `202` で返り、ジョブの id とポーリング先の `Location` が付きます。
+
+```bash
+curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
+curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+```
+
+```json
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+```
+
+`status` は `queued`（`position` 付き）、`running` と進み、最後は `result` 付きの `done` か、`error` カテゴリ付きの `failed` になります。`GET /api/jobs` はジョブの一覧を返し、`DELETE /api/jobs/<id>` は実行中でないジョブを削除します。ジョブはファイルをポーズで区切った約 1 分ずつの断片に分けて処理し、断片の合間にモデルを返すため、実行中も短いリクエストには応答し続けます。デプロイ先の GPU では 30 分の録音に 107 秒かかり、その間に送られた通話のリクエストは最悪でも 10 秒でした。ダイアライゼーションはモデルのストリーミングモードでファイル全体を通して実行されるため、話者は最初の 1 分から最後の 1 分まで同じ番号を保ちます。ジョブは `JOBS_DIR` 配下のファイルなので再起動後も残り、完了したものは `JOB_RETENTION_HOURS` を過ぎると削除されます。ジョブは `model` を取らず、デフォルトモデルで実行され、その `language` もデフォルトモデルに対して検証されます。
+
 `/api/stream` は**リアルタイム文字起こし**のための WebSocket です。音声は録音されるそばから送られ、各フレーズは話者が言葉を切ってから約 1 秒後に返ってきます。JSON のテキストメッセージが制御を、バイナリメッセージが音声を運びます。
 
 1. クライアントは `{"type": "start", "model": "turbo", "language": "ru", "diarize": true, "token": "<token>"}` を送ります。`type` 以外のフィールドはすべて省略可能です。`model` は `/api/stt` の `model` と同じように読み込み済みのモデルを 1 つ選び、言語はそのモデルに対して検証されます。省略するとデフォルトのモデルが使われ、言語はこれまでどおり言語であるかどうかだけが検査されます。そのため、デフォルトのモデルが知らないコードは、フレーズを文字起こしする時点で失敗します。`token` はブラウザが認証するための手段です。ブラウザは WebSocket にヘッダーを設定できないためです。それ以外のクライアントは、代わりにハンドシェイク時に `Authorization: Bearer <token>` を送っても構いません。
 2. サーバーは `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "model": "turbo", "language": "ru", "diarize": true, "source": "client"}` と応答します。
-3. クライアントは生の PCM（符号付き 16 ビット、リトルエンディアン、モノラル、16 kHz）を任意のサイズのバイナリメッセージとして送り、終わったら `{"type": "stop"}` を送ります。
-4. サーバーはフレーズごとに `segment` を、約 1 秒ごとに `progress` を送り、閉じる前に `done` を送ります。
+3. クライアントは生の PCM（符号付き 16 ビット、リトルエンディアン、モノラル、16 kHz）を任意のサイズのバイナリメッセージとして録音と同じペースで送り、終わったら `{"type": "stop"}` を送ります。実時間より速く送られたファイルは設計上遅れていき、フレーズを失います（後述の `skipped` を参照）。ファイルはジョブで処理してください。
+4. サーバーはフレーズごとに `segment` を、約 1 秒ごとに `progress` を送ります。セッションが 2 分以上遅れた場合は、破棄した音声の秒数を付けた `skipped` を送ります。閉じる前には `done` を送ります。
 
 ```json
 { "type": "segment", "id": 3, "start": 6.88, "end": 8.2, "text": "This is the second speaker.", "speaker": 1, "overlap": false }
@@ -206,13 +224,17 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 { "type": "done", "segments": 10, "seconds": 21.87, "elapsed": 22.08 }
 ```
 
-音声は別の場所から取ることもできます。開始メッセージに `"source": "url", "url": "https://..."` を含めると、クライアントは音声をまったく送りません。サーバーがそのアドレスのストリームを ffmpeg でソース自身のペースで読み込み、ストリームが終わるかクライアントが `stop` を送るまで続けます。インターネットラジオ、HLS、RTMP、RTSP、SRT が使えます。スキームは `http`、`https`、`rtmp`、`rtmps`、`rtsp`、`srt` のいずれかである必要があり、ffmpeg はネットワークプロトコルだけに制限されているため、URL やプレイリストを使ってローカルファイルを読ませることはできません。それでも、クライアントが選んだアドレス（サーバー自身のネットワーク上のアドレスも含む）をサーバーに取得させることに変わりはありません。他者が到達できるサーバーでは必ず `STT_TOKENS` を設定してください。
+音声は別の場所から取ることもできます。開始メッセージに `"source": "url", "url": "https://..."` を含めると、クライアントは音声をまったく送りません。サーバーがそのアドレスのストリームを ffmpeg で読み込み、ストリームが終わるかクライアントが `stop` を送るまで続けます。インターネットラジオ、HLS、RTMP、RTSP、SRT が使えます。スキームは `http`、`https`、`rtmp`、`rtmps`、`rtsp`、`srt` のいずれかである必要があります。ライブソースにすでに溜まっている分は一度に取り込み、残りはソース自身のペースで読み込むため、リモートファイルも放送と同じように届きます。
 
-失敗は 1 つの `{"type": "error", "error": "<category>", "request_id": "..."}` として届き、その後に接続が閉じられます。カテゴリは HTTP のエラーカテゴリに加えて、`Invalid start message`、`Invalid audio frame`、`Invalid stream URL`、`Stream source failed` があります。
+これはクライアントが選んだアドレスをサーバーに取得させる仕組みなので、制限が設けられています。ffmpeg はネットワークプロトコルしか使えないため、URL でもプレイリストでもローカルファイルを読ませることはできず、接続を待ち受けさせることも一切できません。SRT の `listener` モードと `rendezvous` モード、および `listen` パラメーターはすべて拒否されます。サーバー自身（ループバック）、クラウドのメタデータサービス `169.254.169.254` のようなリンクローカルアドレス、または `0.0.0.0` であるアドレスや、それらに名前解決されるアドレスは `Invalid stream URL` として拒否されます。この確認はセッション開始時に行われ、ffmpeg はその後もリダイレクトやプレイリストをたどります。別のサイトのページからは開始できません（`Forbidden`）。ブラウザは WebSocket に CORS を適用しないため、ソケット側でページのオリジンがこのホストであるか、`CORS_ORIGINS` に列挙されているかを確認します。同時に動かせる URL ソースはサーバーのプロセスごとに最大 4 つで（それを超えると `Service Unavailable`）、複数のワーカーを持つ gunicorn ではワーカーごとにその数まで動きます。ログには各アドレスが認証情報とクエリを除いた形で記録されます。サーバー自身のネットワーク上のホストには引き続き到達できます。カメラを使う場合はまさにそれが目的であり、他者が到達できるサーバーで `STT_TOKENS` を設定すべき理由でもあります。
 
-フレーズは 0.6 秒のポーズで区切られるか、15 秒を超えた場合は最も静かな箇所で区切られます。各フレーズはアップロードと同じプールから借りたモデルで個別に文字起こしされるため、プールが混んでいてもリアルタイムのフレーズは失敗せず、遅れるだけです。`diarize` を指定すると、ダイアライザーはストリーミングモードで動作し、チャンクからチャンクへ話者キャッシュを引き継ぐため、セッション全体を通じて同じ話者は同じ番号を保ちます。このソケットは、サーバーが uvicorn で動いている場合（`python3 stt_server.py`、Docker のデフォルト）にのみ存在します。Flask のデバッグサーバーと gunicorn の sync ワーカーは WebSocket を扱えません。
+失敗は 1 つの `{"type": "error", "error": "<category>", "request_id": "..."}` として届き、その後に接続が閉じられます。カテゴリは HTTP のエラーカテゴリに加えて、`Invalid start message`、`Invalid audio frame`、`Invalid stream URL`、`Stream source failed`、`Forbidden` があります。
 
-アップロードは `MAX_CONTENT_LENGTH_MB`（デフォルトで 10 MB）に制限されており、それより大きいボディは `413` を返します。
+フレーズは 0.6 秒のポーズで区切られるか、ダイアライザーがある話者から別の話者への交代を聞き取った箇所で区切られるか（`diarize` 指定時。互いに応答し合う人どうしの間は 0.6 秒に満たないことが多いため）、15 秒を超えた場合は最も静かな箇所で区切られます。各フレーズはアップロードと同じプールから借りたモデルで個別に文字起こしされるため、プールが混んでいてもリアルタイムのフレーズは失敗せず、遅れるだけです。`diarize` を指定すると、ダイアライザーはストリーミングモードで動作し、チャンクからチャンクへ話者キャッシュを引き継ぐため、セッション全体を通じて同じ話者は同じ番号を保ちます。このソケットが存在するのは、サーバーが uvicorn で動いている場合です。つまり `python3 stt_server.py`（Docker のデフォルト）か、`GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker` で `stt_server:asgi_app` を配信する gunicorn です。Flask のデバッグサーバーや gunicorn のデフォルトの sync ワーカーは WebSocket を扱えないため、そこには存在しません。
+
+**返されるのは実際に話されたテキストだけです。** 発話がない箇所（トーン、音楽、ノイズ、呼び出し音、さらにはデジタル無音）では、Whisper は学習元となった字幕付き動画のクレジットで答えてしまいます（ロシア語の "字幕制作: DimaTorzok" というクレジット、"つづく..."、"ご視聴ありがとうございました。"）。しかも完全な自信を持ってそうします。テストコーパスでは、無音に対してさえ Whisper 自身の `no_speech_prob` は 0.00 でした。そのため、すべてのエンドポイントは音声に対して音声検出器 Silero VAD を実行し、検出された発話の外側に大部分がある文字起こしセグメントと、字幕クレジットの 1 行そのものであるセグメントを取り除きます。発話を含まない 9 件の録音からなるコーパスでは、これによりそうした行がすべて取り除かれ、発話を含む録音のフレーズは 1 つも失われませんでした。何も話されていない録音は、今では空のテキストになります。ライブストリームでは、発話が検出されなかったフレーズはモデルに送られることすらありません。検出器は CPU 上で動作し、音声 3 分あたり約 1 秒の処理時間が加わります。`SPEECH_GATE=false` で以前の動作に戻せます。
+
+アップロードは `MAX_CONTENT_LENGTH_MB`（サーバー単体では 10 MB、Docker 構成では 100 MB）に制限されており、それより大きいボディは `413` を返します。
 
 エラーは統一されています。`error` は一般的なカテゴリを伝え、`request_id` はレスポンスとサーバーログを関連付けます。完全な例外はサーバーログに記録されます。
 
@@ -255,6 +277,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | アップロードの最大サイズ（MB）。これを超えるボディは `413` を返す |
 | `CORS_ORIGINS`          | `*`                     | 許可する CORS オリジン: `*` またはカンマ区切りのリスト   |
 | `GUNICORN_WORKERS`      | `4`                     | ワーカープロセスの数（gunicorn のみ）                 |
+| `GUNICORN_WORKER_CLASS` | `sync`                  | `uvicorn_worker.UvicornWorker` で `/api/stream` が加わる（gunicorn のみ） |
 | `LOG_LEVEL`             | `INFO`                  | ログレベル                                          |
 | `LOG_ACCESS`            | `false`                 | uvicorn のアクセスログを記録する                      |
 | `WHISPER_MODEL`         | `small.en`              | Whisper モデル名（例: `small.en`、`turbo`）（`STT_MODELS` が空の場合） |
@@ -271,6 +294,12 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `DIARIZE_POOL_SIZE`     | `1`                     | 事前に読み込むダイアライザーインスタンスの数          |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | ダイアライゼーションモデルのキャッシュディレクトリ    |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | 発話とみなす話者アクティビティの確率                  |
+| `JOBS_DIR`              | `recs/jobs`             | ジョブがアップロード、記録、結果を置く場所          |
+| `JOB_MAX_CONTENT_LENGTH_MB` | `1024`              | ジョブのアップロードの最大サイズ（MB）              |
+| `JOB_RETENTION_HOURS`   | `24`                    | 完了したジョブを削除するまでの時間数                |
+| `SPEECH_GATE`           | `true`                  | 誰も話していない文字起こしテキストを除去（音声検出器） |
+| `STT_UID`, `STT_GID`    | （イメージの `stt`、1001） | `models/`、`logs/`、`recs/` を所有するホストユーザー（Docker） |
+| `HF_HUB_OFFLINE`        | `0`                     | モデルのキャッシュ後は `1`: 起動時に hub へリクエストしない |
 | `STT_WWW_PORT`          | `8080`                  | Web UI の http ポート（compose）                    |
 | `STT_WWW_TLS_PORT`      | `8443`                  | Web UI の https ポート（compose）                   |
 | `STT_URL`               | `http://localhost:5099` | クライアント: サーバーのベース URL                    |
@@ -294,6 +323,11 @@ speech-to-text/
 │   ├── align.py         # joins transcription segments to speaker turns
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
+│   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
+│   ├── speech_gate.py   # voice detector that drops text nobody spoke
+│   ├── metrics.py       # Prometheus metrics for GET /metrics
+│   ├── jobs.py          # background jobs: stored on disk, claimed with a lock, run by a worker thread
+│   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
@@ -304,7 +338,8 @@ speech-to-text/
 ├── Dockerfile-www       # web UI image (nginx)
 ├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS
 ├── www/                 # web UI: Vue 2 without a build step, libraries vendored
-├── docs/                # README translations
+├── constraints.txt      # every dependency version the tested image resolved
+├── docs/                # DEPLOY.md and the README translations
 └── tests/               # pytest tests, no model downloads and no GPU
 ```
 

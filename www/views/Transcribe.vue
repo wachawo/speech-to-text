@@ -1,13 +1,17 @@
 <template>
-  <div class="stt-page">
+  <div class="stt-page" :class="{ 'stt-dragging': dragging }">
 
     <!-- Where the sound comes from. Links rather than buttons, carrying the
          source in the address: a reload, a bookmark or a link sent to someone
-         opens the same source. -->
+         opens the same source. While a source is working the others are
+         plain text: switching would destroy the upload or the session in
+         progress. The title is on the item, because a disabled link takes no
+         pointer and would never show one. -->
     <ul class="nav nav-tabs stt-subtabs">
-      <li class="nav-item" v-for="entry in sources" :key="entry.value">
-        <router-link class="nav-link" :class="{ active: source === entry.value }" :title="entry.title"
+      <li class="nav-item" v-for="entry in sources" :key="entry.value" :title="tabTitle(entry)">
+        <router-link v-if="!tabLocked(entry)" class="nav-link" :class="{ active: source === entry.value }"
                      :to="{ path: $route.path, query: { source: entry.value } }">{{ entry.label }}</router-link>
+        <span v-else class="nav-link disabled" aria-disabled="true">{{ entry.label }}</span>
       </li>
     </ul>
 
@@ -15,17 +19,18 @@
          itself. Model, mode and language are this screen's and are the same
          for every source, so they are written once here and placed by the
          source in its row; the source says when they must be off (`busy`). -->
-    <component :is="sourceComponent" :model="requestModel" :mode="requestMode" :language="requestLanguage"
-               :compact="!!result" @result="showResult">
+    <component :is="sourceComponent" ref="source" :model="requestModel" :mode="requestMode" :language="requestLanguage"
+               :compact="!!result" :held="catalogPending" @busy="sourceBusy = $event">
       <template #options="{ busy }">
         <!-- The model, among the ones the server loaded at startup. The empty
              choice sends none, so the server's default serves. A server with
              one model, or one from before per-request models that lists no
-             selectable row, gets no select at all and looks as it always did. -->
+             selectable row, gets no select at all and looks as it always did.
+             Turns transcribes nothing, so it takes no model. -->
         <div style="margin-right: 0.25rem" v-if="hasModelChoice">
-          <div class="input-group input-group-sm" title="The model that transcribes, among the ones the server loaded">
+          <div class="input-group input-group-sm" :title="modelTitle">
             <select class="form-select form-select-sm" style="width: 220px" aria-label="Model"
-                    v-model="modelChoice" :disabled="busy">
+                    v-model="modelChoice" :disabled="busy || catalogPending || !modelUsed">
               <option value="" title="Sends no model; the server uses its default">{{ defaultModelLabel }}</option>
               <option v-for="row in selectableRows" :key="row.id" :value="row.id" :title="row.backend + ' ' + row.id">
                 {{ row.id }}
@@ -40,7 +45,7 @@
         <div style="margin-right: 0.25rem">
           <div class="input-group input-group-sm" :title="modeTitle">
             <select class="form-select form-select-sm" style="width: 110px" aria-label="Mode"
-                    v-model="form.mode" :disabled="busy || modes.length < 2" @change="rememberForm">
+                    v-model="form.mode" :disabled="busy || catalogPending || modes.length < 2" @change="rememberMode">
               <option v-for="mode in modes" :key="mode.value" :value="mode.value" :title="mode.title">
                 {{ mode.label }}
               </option>
@@ -54,7 +59,7 @@
         <div style="margin-right: 0.25rem">
           <div class="input-group input-group-sm" :title="languageTitle">
             <select class="form-select form-select-sm" style="width: 180px" aria-label="Language"
-                    v-model="languageChoice" :disabled="busy || !acceptsLanguage">
+                    v-model="languageChoice" :disabled="busy || catalogPending || !languageUsed">
               <option value="" :title="acceptsLanguage ? 'Sends no language; the server uses its own default' : null">
                 {{ defaultLanguageLabel }}
               </option>
@@ -70,11 +75,12 @@
       </template>
     </component>
 
-    <!-- This screen's own messages: the catalogue, when it could not be read. -->
-    <stt-alerts :wait="wait" :error.sync="error"></stt-alerts>
+    <!-- This screen's own messages: the catalogue, when it could not be read,
+         and a file dropped on a source that takes none. -->
+    <stt-alerts :wait="wait" :error.sync="error" :warning.sync="warning"></stt-alerts>
 
-    <!-- The result, whatever source produced it: the component draws the
-         blocks and owns COPY / TXT / JSON. -->
+    <!-- The open source's last result: the component draws it and owns
+         COPY / TXT / JSON. -->
     <stt-transcript v-if="result" :result="result"></stt-transcript>
 
   </div>
@@ -84,25 +90,52 @@
 /* The transcribe screen: sound in, a transcript out.
 
    The screen is the frame the sources share: the FILE / DEVICE switch, the
-   model, the mode and the language, and the transcript under them. Each source is its
-   own component with its own form, its own request and its own messages, and
-   hands its result up as a `result` event:
+   model, the mode and the language, and the transcript under them. Each
+   source is its own component with its own form, its own request and its own
+   messages, and keeps its result in the store (keep_transcript):
 
    - FILE (views/FileSource.vue): a file, chosen or dropped, sent whole.
    - DEVICE (views/DeviceSource.vue): an input captured live and streamed.
+   - STREAM (views/StreamSource.vue): an address the server reads itself.
 
-   The result stays on the screen until the next one replaces it, from either
-   source: the line above it names what it came from.
+   Each source has its own last result, and the screen shows the open one's:
+   switching to DEVICE and back to FILE finds FILE's transcript where it was,
+   and so does a visit to MODELS, since the store outlives the screen. A live
+   session still ends when the screen is left.
+
+   The screen also owns the window's drag and drop, for every source: a file
+   dropped on a page that does not catch it is opened by the browser in the
+   page's place, which on a live source would end the session and lose the
+   transcript. FILE takes the file; the others refuse it and say where it
+   goes.
 */
 
 var SOURCES = [
   { value: 'file', label: 'FILE', title: 'Transcribe an audio file', component: 'stt-file-source' },
   { value: 'device', label: 'DEVICE', title: 'Transcribe live from a microphone, a headset, or the sound of a tab', component: 'stt-device-source' },
+  { value: 'stream', label: 'STREAM', title: 'Transcribe live from an address the server reads: radio, HLS, RTMP, RTSP or SRT', component: 'stt-stream-source' },
 ];
 
+/* What a locked sub-tab says: which work is in the way. */
+var BUSY_TITLES = {
+  file: 'Wait for the file to finish transcribing first',
+  device: 'Stop the live session first',
+  stream: 'Stop the live session first',
+};
+
+/* Whether a drag carries files rather than text or a link from the page. */
+var carriesFiles = function (event) {
+  var types = event && event.dataTransfer && event.dataTransfer.types;
+  return !!types && Array.prototype.indexOf.call(types, 'Files') !== -1;
+};
+
+/* The modes. Speakers and Turns need the diarizer loaded; Turns is FILE's
+   alone - /api/diarize takes a whole file, and a live session has no
+   diarize-only form. */
 var MODES = [
-  { value: 'speakers', label: 'Speakers', title: 'Who said what: the recording split by speaker, then transcribed' },
+  { value: 'speakers', label: 'Speakers', title: 'Who said what: the recording split by speaker, then transcribed', diarizer: true },
   { value: 'text', label: 'Text', title: 'The words alone, with no speakers' },
+  { value: 'turns', label: 'Turns', title: 'Who spoke when: speaker turns on a timeline, with no text', diarizer: true, fileOnly: true },
 ];
 
 var sourceEntry = function (value) {
@@ -115,6 +148,7 @@ module.exports = {
   components: {
     'stt-file-source': httpVueLoader('/views/FileSource.vue'),
     'stt-device-source': httpVueLoader('/views/DeviceSource.vue'),
+    'stt-stream-source': httpVueLoader('/views/StreamSource.vue'),
   },
 
   data: function () {
@@ -122,25 +156,66 @@ module.exports = {
     return {
       wait: [],
       error: '',
+      warning: '',
       sources: SOURCES,
+      // Whether the source on the screen is working - an upload in flight, a
+      // live session from `opening` until idle again. Reported by the source.
+      sourceBusy: false,
+      // A file is being dragged over the window, and FILE would take it.
+      dragging: false,
       source: sourceEntry(prefs.source) ? prefs.source : 'file',
       form: { model: prefs.model, mode: prefs.mode, language: prefs.language },
-      // The last answer and what it was an answer to: {mode, name, language,
-      // data}, plus {live, listening, seconds, messages, stem} from a live
-      // session. `data` is the server's JSON as sent.
-      result: null,
     };
   },
 
   created: function () {
     this.applySource();
     this.settleForm();
+    // Kept off `data`: nothing renders from it.
+    this.dragDepth = 0;
     // The guard asked already; it only failed to get an answer if the server
     // was down, and then this screen asks again and says why in its bar.
     if (!this.catalog.loaded) this.fetchCatalog();
   },
 
+  /* On the window rather than on the drop zone: a file let go a few pixels
+     off any target would otherwise be opened by the browser in place of this
+     page. The listeners live exactly as long as the screen. */
+  mounted: function () {
+    window.addEventListener('dragenter', this.handleDragEnter);
+    window.addEventListener('dragover', this.handleDragOver);
+    window.addEventListener('dragleave', this.handleDragLeave);
+    window.addEventListener('drop', this.handleDrop);
+  },
+
+  beforeDestroy: function () {
+    window.removeEventListener('dragenter', this.handleDragEnter);
+    window.removeEventListener('dragover', this.handleDragOver);
+    window.removeEventListener('dragleave', this.handleDragLeave);
+    window.removeEventListener('drop', this.handleDrop);
+  },
+
   computed: {
+    /* The open source's last result, from the store: {mode, name, model,
+       language, data}, plus {live, listening, finishing, seconds, skipped,
+       messages, stem} from a live session. `data` is the server's JSON as
+       sent. */
+    result: function () {
+      return this.$store.state.transcripts[this.source] || null;
+    },
+
+    /* The catalogue is being read. Until it answers, the selects cannot show
+       what the server offers - a remembered Speakers would read as Text - so
+       they, and every source's start button, wait for it. */
+    catalogPending: function () {
+      return this.wait.indexOf('catalogue') !== -1;
+    },
+
+    /* FILE would take a file dropped now. */
+    fileWelcome: function () {
+      return this.source === 'file' && !this.sourceBusy;
+    },
+
     sourceComponent: function () {
       return sourceEntry(this.source).component;
     },
@@ -170,9 +245,11 @@ module.exports = {
 
     /* The row of the model this screen transcribes with: the chosen one while
        the server still lists it, the default otherwise. Its languages and
-       whether it takes one at all drive the language select. */
+       whether it takes one at all drive the language select. Read from the
+       choice, not from what is sent: Turns sends no model, and picking it
+       must not swap the language list under the select. */
     backendRow: function () {
-      var wanted = this.requestModel;
+      var wanted = this.chosenModel;
       return this.selectableRows.filter(function (row) { return row.id === wanted; })[0] || this.defaultRow;
     },
 
@@ -181,22 +258,44 @@ module.exports = {
       return this.selectableRows.length > 1;
     },
 
+    /* The remembered model while the server lists it and there is a choice,
+       '' (the server's default) otherwise - so a server with one model gets
+       the requests it always got. */
+    chosenModel: function () {
+      var wanted = this.form.model;
+      var listed = this.selectableRows.some(function (row) { return row.id === wanted; });
+      return wanted && listed && this.hasModelChoice ? wanted : '';
+    },
+
+    /* Whether the request names a model: not for Turns, which transcribes
+       nothing. */
+    modelUsed: function () {
+      return this.requestMode !== 'turns';
+    },
+
+    modelTitle: function () {
+      if (!this.modelUsed) return 'Who spoke when transcribes nothing, so it takes no model';
+      return 'The model that transcribes, among the ones the server loaded';
+    },
+
     defaultModelLabel: function () {
       var id = this.catalog.defaultModel || (this.defaultRow && this.defaultRow.id);
       return id ? 'Server default (' + id + ')' : 'Server default';
     },
 
     /* The select's value. A remembered model the server no longer lists shows
-       as the default. Choosing another model keeps the language only when the
-       new model knows it. */
+       as the default. Only the model is remembered on a change; the language
+       on the select is settled again from the remembered one, which stays
+       for a model that knows it. */
     modelChoice: {
       get: function () {
-        return this.requestModel;
+        return this.chosenModel;
       },
       set: function (value) {
         this.form.model = value;
-        if (!this.isOfferedLanguage(this.form.language)) this.form.language = '';
-        this.rememberForm();
+        this.$savePrefs('transcribe', { model: value });
+        var language = this.$store.state.transcribe.language;
+        this.form.language = this.isOfferedLanguage(language) ? language : '';
       },
     },
 
@@ -208,13 +307,17 @@ module.exports = {
 
     modes: function () {
       var available = this.speakersAvailable;
-      return MODES.filter(function (mode) { return available || mode.value !== 'speakers'; });
+      var source = this.source;
+      return MODES.filter(function (mode) {
+        if (mode.diarizer && !available) return false;
+        return !mode.fileOnly || source === 'file';
+      });
     },
 
     modeTitle: function () {
       if (this.speakersAvailable) return 'Mode';
-      if (!this.catalog.loaded) return 'Speakers needs the server catalogue, which has not answered';
-      return 'Speakers needs the diarizer, and this server has not loaded it';
+      if (!this.catalog.loaded) return 'Speakers and Turns need the server catalogue, which has not answered';
+      return 'Speakers and Turns need the diarizer, and this server has not loaded it';
     },
 
     /* Unknown counts as yes: before the catalogue answers, the select offers
@@ -229,7 +332,14 @@ module.exports = {
       return codes.sort();
     },
 
+    /* Whether the request will carry the language: not for a backend that
+       detects it itself, and not for Turns, which transcribes nothing. */
+    languageUsed: function () {
+      return this.acceptsLanguage && this.requestMode !== 'turns';
+    },
+
     languageTitle: function () {
+      if (this.requestMode === 'turns') return 'Who spoke when takes no language';
       if (this.acceptsLanguage) return 'Language of the recording';
       return 'The ' + this.backendRow.backend + ' backend detects the language itself';
     },
@@ -248,31 +358,37 @@ module.exports = {
       },
       set: function (value) {
         this.form.language = value;
-        this.rememberForm();
+        this.$savePrefs('transcribe', { language: value });
       },
     },
 
-    /* What a source sends, reconciled with what the server offers. A
-       remembered model is sent only while there is a choice, so a server
-       with one model gets the requests it always got. */
+    /* What a source sends, reconciled with what the server offers and what
+       the open source can do. */
     requestModel: function () {
-      var wanted = this.form.model;
-      var listed = this.selectableRows.some(function (row) { return row.id === wanted; });
-      return wanted && listed && this.hasModelChoice ? wanted : '';
+      return this.modelUsed ? this.chosenModel : '';
     },
     requestMode: function () {
-      return this.form.mode === 'speakers' && this.speakersAvailable ? 'speakers' : 'text';
+      var wanted = this.form.mode;
+      var offered = this.modes.some(function (mode) { return mode.value === wanted; });
+      return offered ? wanted : 'text';
     },
     requestLanguage: function () {
-      return this.acceptsLanguage ? this.form.language : '';
+      return this.languageUsed ? this.form.language : '';
     },
   },
 
   watch: {
     /* A catalogue that answers after the screen opened - the guard's first
        request failed, or RELOAD on the models screen - may add or take away
-       Speakers, a model and change the language list. */
+       Speakers or a model, and change the language list. */
     catalog: function () {
+      this.settleForm();
+    },
+
+    /* Another source offers other modes: Turns is FILE's alone. The
+       remembered mode is put back on the select as far as the new source
+       allows, and comes back when FILE does. */
+    source: function () {
       this.settleForm();
     },
 
@@ -290,24 +406,81 @@ module.exports = {
     /* The source named in the address, remembered for the next visit. An
        address that names none - the header's TRANSCRIBE tab, a bookmark from
        before there were sources - opens the remembered one and is rewritten to
-       say so, so the address always names the source on the screen. */
+       say so, so the address always names the source on the screen.
+
+       While the source on the screen is working, the address is put back
+       instead: the locked sub-tabs stop a click, and this stops Back and a
+       typed address from doing what the click could not. */
     applySource: function () {
       var wanted = this.$route.query.source;
+      if (this.sourceBusy && wanted !== this.source) {
+        this.rewriteSource(this.source);
+        return;
+      }
       if (!sourceEntry(wanted)) {
         var remembered = this.$store.state.transcribe.source;
         var fallback = sourceEntry(remembered) ? remembered : 'file';
         this.source = fallback;
-        var query = Object.assign({}, this.$route.query, { source: fallback });
-        var leaving = this.$router.replace({ path: this.$route.path, query: query });
-        if (leaving && leaving.catch) leaving.catch(function () {});
+        this.rewriteSource(fallback);
         return;
       }
       this.source = wanted;
       if (this.$store.state.transcribe.source !== wanted) this.$savePrefs('transcribe', { source: wanted });
     },
 
-    showResult: function (result) {
-      this.result = result;
+    rewriteSource: function (value) {
+      var query = Object.assign({}, this.$route.query, { source: value });
+      var leaving = this.$router.replace({ path: this.$route.path, query: query });
+      if (leaving && leaving.catch) leaving.catch(function () {});
+    },
+
+    tabLocked: function (entry) {
+      return this.sourceBusy && entry.value !== this.source;
+    },
+
+    tabTitle: function (entry) {
+      return this.tabLocked(entry) ? BUSY_TITLES[this.source] : entry.title;
+    },
+
+    /* Drag and drop. A depth count, because the window sees a dragenter and a
+       dragleave for every element the pointer crosses, and the highlight must
+       not flicker off on each of them. Only drags carrying files are
+       touched; text dragged within the page behaves as it always did.
+
+       Every file drag is caught, so the browser never opens the file. FILE
+       accepts it unless an upload is running; any other source refuses it -
+       the pointer says so - and the warning says where it goes, once per
+       drag, as the file comes over the page. */
+    handleDragEnter: function (event) {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      this.dragDepth += 1;
+      this.dragging = this.fileWelcome;
+      if (this.dragDepth !== 1) return;
+      if (this.source !== 'file') this.warning = 'Files are transcribed on the FILE tab - open it and drop the file there';
+      else if (this.sourceBusy) this.warning = 'Wait for the file being transcribed to finish';
+    },
+
+    handleDragOver: function (event) {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = this.fileWelcome ? 'copy' : 'none';
+    },
+
+    handleDragLeave: function (event) {
+      if (!carriesFiles(event)) return;
+      this.dragDepth = Math.max(0, this.dragDepth - 1);
+      if (this.dragDepth === 0) this.dragging = false;
+    },
+
+    handleDrop: function (event) {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      this.dragDepth = 0;
+      this.dragging = false;
+      if (!this.fileWelcome || !this.$refs.source || !this.$refs.source.dropFiles) return;
+      this.warning = '';
+      this.$refs.source.dropFiles(event.dataTransfer.files);
     },
 
     /* Form */
@@ -334,9 +507,12 @@ module.exports = {
     },
 
     /* The operator's choice, remembered for the next visit. Written on a
-       change the operator made, never on one settleForm made. */
-    rememberForm: function () {
-      this.$savePrefs('transcribe', { model: this.form.model, mode: this.form.mode, language: this.form.language });
+       change the operator made, never on one settleForm made - and only the
+       field that changed: a DEVICE that could not offer Turns and showed
+       Speakers instead must not overwrite a remembered Turns when only the
+       language was touched. */
+    rememberMode: function () {
+      this.$savePrefs('transcribe', { mode: this.form.mode });
     },
 
     fetchCatalog: function () {

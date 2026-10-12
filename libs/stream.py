@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 # Local imports
-from libs import align, backends, diarize, model_pool
+from libs import align, backends, config, diarize, model_pool, speech_gate
 
 logger = logging.getLogger(__name__)
 
@@ -132,10 +132,15 @@ def close_utterance(segmenter: dict[str, Any], end: int) -> dict[str, int] | Non
     return utterance if enough else None
 
 
+def count_voiced_samples(frame_levels: list[tuple[int, float, bool]]) -> int:
+    """Samples in the voiced frames only: a fragment carried past a cut keeps its quiet frames uncounted."""
+    return sum(FRAME_SAMPLES for unused_start, unused_level, voiced in frame_levels if voiced)
+
+
 def find_quiet_cut(segmenter: dict[str, Any], frame_end: int) -> int:
     """Where to cut an utterance that has run too long: the quietest frame of its last few seconds."""
     earliest = frame_end - int(CUT_SEARCH_SECONDS * SAMPLE_RATE)
-    candidates = [(level, start) for start, level in segmenter["frame_levels"] if start >= earliest]
+    candidates = [(level, start) for start, level, unused_voiced in segmenter["frame_levels"] if start >= earliest]
     if not candidates:
         return frame_end
     level, start = min(candidates)
@@ -163,10 +168,10 @@ def advance_segmenter(segmenter: dict[str, Any], buffer: dict[str, Any], final: 
                 segmenter["speech_start"] = max(segmenter["cut_floor"], frame_start - int(PRE_ROLL_SECONDS * SAMPLE_RATE))
                 segmenter["last_voiced_end"] = frame_end
                 segmenter["voiced_samples"] = FRAME_SAMPLES
-                segmenter["frame_levels"] = [(frame_start, level)]
+                segmenter["frame_levels"] = [(frame_start, level, True)]
             continue
 
-        segmenter["frame_levels"].append((frame_start, level))
+        segmenter["frame_levels"].append((frame_start, level, voiced))
         if voiced:
             segmenter["last_voiced_end"] = frame_end
             segmenter["voiced_samples"] += FRAME_SAMPLES
@@ -177,7 +182,10 @@ def advance_segmenter(segmenter: dict[str, Any], buffer: dict[str, Any], final: 
                 closed.append(utterance)
         elif frame_end - segmenter["speech_start"] >= MAX_UTTERANCE_SECONDS * SAMPLE_RATE:
             cut = find_quiet_cut(segmenter, frame_end)
-            carried_levels = [(start, level) for start, level in segmenter["frame_levels"] if start >= cut]
+            carried_levels = [frame for frame in segmenter["frame_levels"] if frame[0] >= cut]
+            voiced_after = count_voiced_samples(carried_levels)
+            # The head is judged on its own voice: frames past the cut belong to the next utterance.
+            segmenter["voiced_samples"] -= voiced_after
             utterance = close_utterance(segmenter, cut)
             if utterance:
                 closed.append(utterance)
@@ -185,7 +193,7 @@ def advance_segmenter(segmenter: dict[str, Any], buffer: dict[str, Any], final: 
             segmenter["in_speech"] = True
             segmenter["speech_start"] = cut
             segmenter["last_voiced_end"] = frame_end
-            segmenter["voiced_samples"] = frame_end - cut
+            segmenter["voiced_samples"] = voiced_after
             segmenter["frame_levels"] = carried_levels
 
     if final and segmenter["in_speech"]:
@@ -193,6 +201,28 @@ def advance_segmenter(segmenter: dict[str, Any], buffer: dict[str, Any], final: 
         if utterance:
             closed.append(utterance)
     return closed
+
+
+def cut_utterance(segmenter: dict[str, Any], at: int) -> dict[str, int] | None:
+    """Close the utterance in progress at sample `at` and go on with a new one from there.
+
+    For a cut the pause detector cannot see, such as a speaker change without a pause. Nothing
+    happens unless an utterance is open and `at` falls inside it. Returns the closed utterance,
+    or None when there was nothing to cut or it held too little speech.
+    """
+    if not segmenter["in_speech"] or not segmenter["speech_start"] < at < segmenter["position"]:
+        return None
+    carried_levels = [frame for frame in segmenter["frame_levels"] if frame[0] >= at]
+    voiced_after = count_voiced_samples(carried_levels)
+    # The head is judged on its own voice: frames past the cut belong to the next utterance.
+    segmenter["voiced_samples"] -= voiced_after
+    utterance = close_utterance(segmenter, at)
+    segmenter["in_speech"] = True
+    segmenter["speech_start"] = at
+    segmenter["last_voiced_end"] = max(segmenter["last_voiced_end"], at)
+    segmenter["voiced_samples"] = voiced_after
+    segmenter["frame_levels"] = carried_levels
+    return utterance
 
 
 def encode_wav(samples: np.ndarray) -> io.BytesIO:
@@ -207,18 +237,30 @@ def encode_wav(samples: np.ndarray) -> io.BytesIO:
     return bio
 
 
-def transcribe_utterance(
-    buffer: dict[str, Any], utterance: dict[str, int], language: str | None, spec: dict[str, Any]
+def transcribe_piece(
+    samples: np.ndarray,
+    offset: float,
+    language: str | None,
+    spec: dict[str, Any],
+    ranges: list[tuple[float, float]] | None,
+    request_id: str,
 ) -> list[dict[str, Any]]:
-    """Transcribe one utterance with a pooled instance of the session's model; segments in stream time.
+    """Transcribe one piece of audio with a pooled model; segments come back shifted by `offset` seconds.
 
-    The model is borrowed for this utterance only and returned at once: the pool is shared with
-    every upload, and a session that held a model for its whole length would starve them all.
-    `spec` is the model the start message chose (libs/registry.py), and the instance goes back
-    to that model's own pool. Raises queue.Empty when no instance frees up in time.
+    The one way a piece of audio is transcribed, for a live utterance and for a piece of a
+    background job alike. `spec` is the model to use (libs/registry.py): an instance of it is
+    borrowed from that model's own pool for this piece only, run through that model's backend,
+    and returned to the same pool in `finally`. `ranges` are the piece's speech ranges from zero,
+    or None without a detector; segments mostly outside them are dropped. Raises queue.Empty when
+    no instance frees up in time.
+
+    The text stays exactly as the transcriber emitted it, leading space included: joined with
+    nothing, those spaces are what makes a readable transcript - Whisper's segments and Parakeet's
+    words each start with one, and a language written without spaces has none that a join could
+    put back. A caller that shows a segment on its own strips it there. Only a segment with no
+    text at all is dropped.
     """
-    samples = read_samples(buffer, utterance["start"], utterance["end"])
-    offset = utterance["start"] / SAMPLE_RATE
+    length = samples.size / SAMPLE_RATE
     model = model_pool.acquire_model(model_id=spec["id"])
     try:
         transcriber = backends.transcriber_for_backend(spec["backend"])
@@ -226,26 +268,66 @@ def transcribe_utterance(
     finally:
         model_pool.release_model(model, model_id=spec["id"])
     timed = []
-    for segment in segments:
-        text = segment["text"].strip()
-        if not text:
+    for segment in speech_gate.keep_spoken(segments, ranges, request_id, length):
+        if not segment["text"].strip():
             continue
-        # Clamped to the utterance: whisper pads to 30 s and can place a segment end past the audio.
-        end = min(float(segment["end"]), samples.size / SAMPLE_RATE)
-        timed.append({"start": round(offset + float(segment["start"]), 2), "end": round(offset + end, 2), "text": text})
+        # Clamped to the piece: whisper pads to 30 s and can place segment times past the audio.
+        # A segment that starts there was made up in the padding, not heard, and is dropped.
+        start = float(segment["start"])
+        if start >= length:
+            continue
+        end = min(float(segment["end"]), length)
+        timed.append({"start": round(offset + start, 2), "end": round(offset + end, 2), "text": segment["text"]})
     return timed
 
 
-def attribute_live_segments(segments: list[dict[str, Any]], turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Give each segment a speaker and an overlap flag from the turns diarized so far.
+def transcribe_utterance(
+    buffer: dict[str, Any], utterance: dict[str, int], language: str | None, spec: dict[str, Any], request_id: str = "-"
+) -> list[dict[str, Any]]:
+    """Transcribe one utterance with a pooled instance of the session's model; segments in stream time.
 
-    Segments are not merged into runs here, unlike the upload path: a live segment has already
-    been sent by the time the next one exists.
+    The model is borrowed for this utterance only and returned at once: the pool is shared with
+    every upload, and a session that held a model for its whole length would starve them all.
+    `spec` is the model the start message chose (libs/registry.py), and the instance goes back
+    to that model's own pool. With the speech gate on, an utterance with no detected speech in it
+    is not transcribed at all - the pause detector cuts on loudness, so a tone or a jingle reaches
+    here, and Whisper would answer it with a subtitle credit - and the segments of the rest are
+    vetted against the same speech ranges. Raises queue.Empty when no instance frees up in time.
     """
+    samples = read_samples(buffer, utterance["start"], utterance["end"])
+    ranges = None
+    if config.SPEECH_GATE:
+        ranges = speech_gate.find_speech(samples.astype(np.float32) / 32768.0, request_id)
+        if ranges is not None and speech_gate.spoken_seconds(ranges) < MIN_VOICED_SECONDS:
+            return []
+    segments = transcribe_piece(
+        samples, utterance["start"] / SAMPLE_RATE, language, spec=spec, ranges=ranges, request_id=request_id
+    )
+    # A live segment is shown on its own, so it goes out without the transcriber's leading space.
+    return [{**segment, "text": segment["text"].strip()} for segment in segments]
+
+
+def attribute_live_segments(
+    segments: list[dict[str, Any]], turns: list[dict[str, Any]], spec: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Give the segments of one utterance a speaker and an overlap flag from the turns diarized so far.
+
+    Whisper's segments are phrases and go out one by one, not merged into runs as on the upload
+    path: a live segment has already been sent by the time the next utterance exists. A backend
+    whose segments are words (WORD_SEGMENTS) would send every word as a line of its own, so its
+    words are joined into phrases here, within this one utterance, by the upload path's own join:
+    a new phrase starts wherever the attributed speaker changes or another speaker held a turn in
+    between, and a phrase is marked `overlap` when any of its words was. With no turns, as without
+    diarization, all the words of the utterance make one phrase. `spec` is the session's model, and
+    its backend decides: a Parakeet session joins its words under a Whisper default, and a Whisper
+    session keeps its phrases under a Parakeet one.
+    """
+    if getattr(backends.transcriber_for_backend(spec["backend"]), "WORD_SEGMENTS", False):
+        return align.attribute_segments(segments, turns)
     attributed = []
     for segment in segments:
         speaker = align.assign_speaker(segment, turns)
-        attributed.append({**segment, "speaker": speaker, "overlap": align.is_overlapped(segment, speaker, turns)})
+        attributed.append({**segment, "speaker": speaker, "overlap": align.is_overlapped(segment, turns)})
     return attributed
 
 

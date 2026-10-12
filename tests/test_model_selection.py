@@ -78,7 +78,7 @@ def test_an_empty_query_yields_to_the_form_then_to_the_default(multi_client):
 def test_parakeet_is_routed_to_its_own_module(multi_client):
     """The bare backend name selects Parakeet, whose stub answers with its own text and no language."""
     body = post_wav(multi_client, "?model=parakeet").get_json()
-    assert body["text"] == "stub parakeet transcription"
+    assert body["text"] == "parakeet transcription"
     assert body["model"] == "nvidia/parakeet-tdt-0.6b-v3"
     assert body["language"] is None
 

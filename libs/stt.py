@@ -165,28 +165,25 @@ def describe_backend(model_name: str | None = None) -> dict:
     }
 
 
-def get_stt_result(
+def decode_buffer(
     bio: io.BytesIO,
     model: whisper.Whisper | None = None,
     device: str | None = None,
     language: str | None = None,
 ) -> dict:
-    """Transcribe a WAV buffer and return `{"text", "language"}`.
+    """Run the one decode every public function here shares and return whisper's raw result.
 
-    A 16 kHz mono buffer (what the server always sends) skips the resampling
-    step. Without an explicit `model` one is loaded on the spot, which is slow -
-    the server passes an instance borrowed from the pool. Decoding is seeded and
-    greedy so the same audio always produces the same text.
-
-    `language` is the code whisper detected or was told. An English-only checkpoint always
-    decodes English, even when it was handed another code, so it honestly reports `en`.
+    Seeded and greedy, so the same audio always produces the same output. Kept in one place so
+    /api/stt and /api/transcript cannot drift apart: an edit to these settings changes both or
+    neither. Without an explicit `model` one is loaded on the spot, which is slow - the server
+    passes an instance borrowed from the pool.
     """
     if model is None:
         model = get_model(device=device)
     data = read_waveform(bio)
     torch.manual_seed(0)
     np.random.seed(0)
-    result = model.transcribe(
+    return model.transcribe(
         audio=data,
         language=normalize_language(language),
         task="transcribe",
@@ -195,10 +192,46 @@ def get_stt_result(
         best_of=1,
         condition_on_previous_text=False,
     )
+
+
+def build_segments(result: dict) -> list[dict]:
+    """The segments of a decode, with their times and their text exactly as whisper emitted it.
+
+    float() rather than the raw values: whisper hands back numpy scalars, which the JSON encoder
+    refuses.
+    """
+    return [
+        {"start": float(segment["start"]), "end": float(segment["end"]), "text": segment["text"]}
+        for segment in result["segments"]
+    ]
+
+
+def get_stt_result(
+    bio: io.BytesIO,
+    model: whisper.Whisper | None = None,
+    device: str | None = None,
+    language: str | None = None,
+) -> dict:
+    """Transcribe a WAV buffer and return `{"text", "language", "segments"}` from one decode.
+
+    A 16 kHz mono buffer (what the server always sends) skips the resampling
+    step. Without an explicit `model` one is loaded on the spot, which is slow -
+    the server passes an instance borrowed from the pool. Decoding is seeded and
+    greedy so the same audio always produces the same text.
+
+    `language` is the code whisper detected or was told. An English-only checkpoint always
+    decodes English, even when it was handed another code, so it honestly reports `en`.
+    `segments` are what get_stt_segments returns, so a caller that needs the text, the language
+    and the segments runs the model once.
+    """
+    if model is None:
+        model = get_model(device=device)
+    result = decode_buffer(bio, model=model, device=device, language=language)
     text = result["text"].strip()
     detected = result.get("language") if model.is_multilingual else "en"
-    logger.debug("Transcribed %d chars (language %s)", len(text), detected)
-    return {"text": text, "language": detected}
+    segments = build_segments(result)
+    logger.debug("Transcribed %d chars in %d segments (language %s)", len(text), len(segments), detected)
+    return {"text": text, "language": detected, "segments": segments}
 
 
 def get_stt_bio(
@@ -225,28 +258,7 @@ def get_stt_segments(
     the text, so it can change the transcription the rest of this module fixes on purpose.
     Segment times come free and change nothing.
     """
-    if model is None:
-        model = get_model(device=device)
-    data = read_waveform(bio)
-    torch.manual_seed(0)
-    np.random.seed(0)
-    result = model.transcribe(
-        audio=data,
-        language=normalize_language(language),
-        task="transcribe",
-        temperature=0.0,
-        beam_size=1,
-        best_of=1,
-        condition_on_previous_text=False,
-    )
-    # float() rather than the raw values: whisper hands back numpy scalars, which the JSON
-    # encoder refuses.
-    segments = [
-        {"start": float(segment["start"]), "end": float(segment["end"]), "text": segment["text"]}
-        for segment in result["segments"]
-    ]
-    logger.debug("Transcribed %d segments", len(segments))
-    return segments
+    return get_stt_result(bio, model=model, device=device, language=language)["segments"]
 
 
 def get_stt_filename(

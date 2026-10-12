@@ -96,10 +96,10 @@ server {
 
         # The upload goes straight through instead of being spooled to disk
         # first. The cap here is only a backstop: stt_server enforces its own
-        # MAX_CONTENT_LENGTH_MB and answers 413 with the limit in the body,
-        # which the UI shows, so this one is set well above it.
+        # MAX_CONTENT_LENGTH_MB (and /api/jobs its own, 1 GB by default) and answers 413 with
+        # the limit in the body, which the UI shows, so this one is set above both.
         proxy_request_buffering off;
-        client_max_body_size    512m;
+        client_max_body_size    1100m;
 
         # stt_server answers JSON, so nginx does the same when stt_server is not
         # there to answer at all - every cold start, since it loads its models

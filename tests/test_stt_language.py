@@ -8,7 +8,7 @@ import re
 import pytest
 
 from libs import config, model_pool
-from tests.helpers import make_model_sentinel, make_wav
+from tests.helpers import make_model_sentinel, make_wav, use_legacy_model
 
 REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
@@ -113,14 +113,6 @@ def test_a_typo_is_still_refused(client):
 def post_language(client, query):
     """POST a short WAV to /api/stt with the given query string."""
     return client.post(f"/api/stt?{query}", data=make_wav(), content_type="audio/wav")
-
-
-def use_legacy_model(monkeypatch, backend, model_id):
-    """Switch the single-model deployment to another backend or checkpoint, with a pool to match."""
-    monkeypatch.setattr(config, "STT_BACKEND", backend)
-    monkeypatch.setattr(config, "WHISPER_MODEL" if backend == "whisper" else "PARAKEET_MODEL", model_id)
-    pool = model_pool.get_model_pool(model_id)
-    pool.put(make_model_sentinel(model_id))
 
 
 def test_an_explicit_english_only_model_refuses_another_language(multi_client):

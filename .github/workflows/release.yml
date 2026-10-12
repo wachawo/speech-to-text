@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   release:
@@ -41,3 +42,29 @@ jobs:
           files: |
             dist/*.whl
             dist/*.tar.gz
+
+  # The CPU server and the web UI images, published to GHCR under the release version and
+  # `latest`. The GPU image is built on the host that runs it (docs/DEPLOY.md): CUDA wheels
+  # for every architecture would not fit on a hosted runner.
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Log in to GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+      - name: Build and push
+        env:
+          TAG: ${{ github.ref_name }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          owner="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          for image in cpu www; do
+            name="ghcr.io/$owner/speech-to-text-$image"
+            dockerfile="Dockerfile-$image"
+            docker build -f "$dockerfile" -t "$name:$TAG" -t "$name:latest" .
+            docker push "$name:$TAG"
+            docker push "$name:latest"
+          done

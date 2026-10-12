@@ -26,6 +26,14 @@ MAX_SPEAKERS = 8
 # The model emits one decision per spectrogram frame, one frame every 10 ms (the model card).
 STREAM_FRAME_SECONDS = 0.01
 
+# A live phrase is split where the speaker changes when the new speaker has talked this long and
+# the one before has stopped: shorter is a backchannel ("mm", "yes") or diarizer jitter.
+HANDOVER_SECONDS = 0.4
+
+# A turn of another speaker this close to the start of the phrase is the phrase's own opening, not
+# a handover inside it.
+HANDOVER_MIN_OFFSET = 0.5
+
 
 def resolve_device(device: str | None = None) -> str:
     """Resolve "auto" to cuda/cpu and reject a device this machine cannot serve.
@@ -152,7 +160,9 @@ def new_stream_state() -> dict:
     chunk, which is what keeps speaker 0 the same person ten minutes in. `frame` is the next
     spectrogram frame to emit and `next_start` the first sample its chunk reads, which is how far
     back a caller trimming its buffer may go. `activity` holds the per-frame speaker decisions so
-    far, one bool array of shape `(frames, 8)` per chunk, at one frame every 10 ms.
+    far, one bool array of shape `(frames, 8)` per chunk, at one frame every 10 ms; `frames` counts
+    every frame ever emitted, so after trim_activity has dropped chunks from the front, the first
+    one kept starts at frame `frames` minus the frames still held.
     """
     return {"cache": None, "first": True, "frame": 0, "next_start": 0, "activity": [], "frames": 0, "finished": False}
 
@@ -212,12 +222,12 @@ def stream_turns(state: dict, start: float, end: float) -> list[dict]:
     them for a whole file, but only over the window asked for: a session can run for hours, and
     attributing one phrase needs only the frames around it.
     """
-    first = max(0, int(start / STREAM_FRAME_SECONDS))
+    position = state["frames"] - sum(chunk.shape[0] for chunk in state["activity"])
+    first = max(position, int(start / STREAM_FRAME_SECONDS))
     last = min(state["frames"], int(end / STREAM_FRAME_SECONDS) + 1)
     if last <= first:
         return []
     parts = []
-    position = 0
     for chunk in state["activity"]:
         chunk_end = position + chunk.shape[0]
         if chunk_end > first and position < last:
@@ -240,6 +250,63 @@ def stream_turns(state: dict, start: float, end: float) -> list[dict]:
             )
     turns.sort(key=lambda turn: (turn["start"], turn["speaker"]))
     return turns
+
+
+def trim_activity(state: dict, keep_from: float) -> None:
+    """Drop the whole chunks of activity that end before `keep_from` seconds of the stream.
+
+    A live session runs for hours and nobody asks about its first minute again: without this the
+    activity, and every stream_turns walk over it, would grow for as long as the session lasts.
+    Frame numbers stay absolute, so turns read afterwards keep their stream times.
+    """
+    keep_frame = int(keep_from / STREAM_FRAME_SECONDS)
+    position = state["frames"] - sum(chunk.shape[0] for chunk in state["activity"])
+    while state["activity"] and position + state["activity"][0].shape[0] <= keep_frame:
+        position += state["activity"][0].shape[0]
+        state["activity"].pop(0)
+
+
+def find_handover(state: dict, start: float, end: float) -> float | None:
+    """Where, in [start, end] seconds of the stream, one speaker hands over to another; None if nowhere.
+
+    The phrase's speaker is the one who talks most in its first HANDOVER_MIN_OFFSET, and the one
+    whose turn begins first when nobody talks there. Not simply the first turn: a phrase opened by
+    a cut here starts where the new speaker does, yet the previous speaker's last frame can still
+    fall inside it - stream_turns rounds the first frame down (1.15 s reads from frame 114), and the
+    voice may trail past the cut. That turn then begins first, or ties and wins on the lower label,
+    and the phrase would go back to whoever just stopped. The cut left the previous speaker under
+    HANDOVER_SECONDS / 4 of the new speaker's first HANDOVER_SECONDS, and the rest of the opening
+    adds at most HANDOVER_MIN_OFFSET - HANDOVER_SECONDS, so the new speaker's HANDOVER_SECONDS is
+    the larger share while HANDOVER_SECONDS <= HANDOVER_MIN_OFFSET < 1.75 * HANDOVER_SECONDS.
+    A handover is the first turn of anybody else that
+    starts at least HANDOVER_MIN_OFFSET into the window, has lasted HANDOVER_SECONDS, and during
+    which the phrase's speaker is silent - two people talking at once is overlap, which stays one
+    phrase and is marked as such.
+    """
+    turns = stream_turns(state, start, end)
+    if not turns:
+        return None
+    opening_end = start + HANDOVER_MIN_OFFSET
+    opening: dict[int, float] = {}
+    for turn in turns:
+        share = max(0.0, min(turn["end"], opening_end) - max(turn["start"], start))
+        opening[turn["speaker"]] = opening.get(turn["speaker"], 0.0) + share
+    # Turns are sorted by start, and max() keeps the first of equals: silence falls to the first turn.
+    speaker = max(opening, key=opening.__getitem__)
+    for turn in turns:
+        if turn["speaker"] == speaker or turn["start"] < start + HANDOVER_MIN_OFFSET:
+            continue
+        if turn["end"] - turn["start"] < HANDOVER_SECONDS:
+            continue
+        window_start, window_end = turn["start"], turn["start"] + HANDOVER_SECONDS
+        overlap = sum(
+            max(0.0, min(other["end"], window_end) - max(other["start"], window_start))
+            for other in turns
+            if other["speaker"] == speaker
+        )
+        if overlap < HANDOVER_SECONDS / 4:
+            return turn["start"]
+    return None
 
 
 def main():

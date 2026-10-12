@@ -171,32 +171,43 @@ def test_an_unknown_model_is_one_error_and_a_close(multi_client):
     assert events[1] == {"type": "websocket.close", "code": live.CLOSE_UNSUPPORTED}
 
 
-def test_a_session_on_a_named_model(multi_client, stt_module, monkeypatch):
-    """`ready` names the model, every phrase is transcribed by it, and its pool is whole afterwards."""
+@pytest.mark.parametrize(
+    ("requested", "model_id", "backend", "words", "texts", "pool_size"),
+    [
+        ("tiny.en", "tiny.en", "whisper", [" hello"], ["hello"], 2),
+        # Parakeet's segments are words, joined into one phrase by the session's model even under a
+        # Whisper default.
+        ("parakeet", "nvidia/parakeet-tdt-0.6b-v3", "parakeet", [" hello", " world"], ["hello world"], 1),
+    ],
+)
+def test_a_session_on_a_named_model(
+    multi_client, stt_module, parakeet_module, monkeypatch, requested, model_id, backend, words, texts, pool_size
+):
+    """`ready` names the model, every phrase is transcribed and joined by it, and its pool is whole afterwards."""
     used = []
 
     def record_segments(bio, model=None, device=None, language=None):
         """Remember which instance transcribed the phrase."""
         used.append(model)
-        return [{"start": 0.0, "end": 0.8, "text": " hello"}]
+        return [{"start": 0.4 * index, "end": 0.4 * (index + 1), "text": word} for index, word in enumerate(words)]
 
-    monkeypatch.setattr(stt_module, "get_stt_segments", record_segments)
+    monkeypatch.setattr(parakeet_module if backend == "parakeet" else stt_module, "get_stt_segments", record_segments)
     events = run_stream(
         [
             {"type": "websocket.connect"},
-            start_message(model="tiny.en", language="en"),
+            start_message(model=requested, language="en"),
             speech_frames(1.0),
             {"type": "websocket.receive", "text": json.dumps({"type": "stop"})},
         ]
     )
     ready = events[0]
-    assert (ready["type"], ready["model"], ready["backend"], ready["language"]) == ("ready", "tiny.en", "whisper", "en")
+    assert (ready["type"], ready["model"], ready["backend"], ready["language"]) == ("ready", model_id, backend, "en")
     segments = [event for event in events if event.get("type") == "segment"]
-    assert [segment["text"] for segment in segments] == ["hello"]
-    assert used == [{"stub_model": "tiny.en"}]
+    assert [segment["text"] for segment in segments] == texts
+    assert used == [{"stub_model": model_id}]
     assert events[-2]["type"] == "done"
     assert events[-1] == {"type": "websocket.close", "code": live.CLOSE_NORMAL}
-    assert model_pool.MODEL_POOLS["tiny.en"].qsize() == 2
+    assert model_pool.MODEL_POOLS[model_id].qsize() == pool_size
     assert get_default_pool().qsize() == 1
 
 

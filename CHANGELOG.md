@@ -39,23 +39,73 @@
   pool size, available) join the top-level `pool_size` and `available`, which now describe
   the default model and are unchanged for a single-model deployment. With `STT_TOKENS`
   set, the model list is only included for a request carrying a valid token: it is
-  configuration, like `/api/models`, and health itself stays open.
+  configuration, like `/api/models`, and health itself stays open. `?deep=1` checks every
+  loaded model, one at a time: each is reported by its id under `deep.models`, and
+  `deep.transcriber` is the worst of them.
+- **`GET /metrics` reports every model's pool.** `stt_model_pool_size` and
+  `stt_model_pool_available`, labelled `model` and `backend`, carry each loaded model; the
+  unlabelled `stt_pool_*` gauges keep describing the default model and the diarizer, so
+  existing dashboards keep working.
 - **A model select in the web UI.** With several models loaded, TRANSCRIBE offers the
-  selectable rows of `GET /api/models` beside the mode and the language, for the FILE and
-  DEVICE sources alike: FILE sends it as the `model` form field, DEVICE in the stream's
-  start message. The language list is the chosen model's own, the choice is remembered in
-  the browser, and the line above a transcript names the model that produced it. The
-  MODELS screen keys its rows by model id, so two Whisper models no longer collide. A
-  server with one model shows no select and gets no `model`, exactly as before.
+  selectable rows of `GET /api/models` beside the mode and the language, for the FILE,
+  DEVICE and STREAM sources alike: FILE sends it as the `model` form field, DEVICE and
+  STREAM in the stream's start message; Turns, which transcribes nothing, sends none. The
+  language list is the chosen model's own, the choice is remembered in the browser, and
+  the line above a transcript names the model that produced it. The MODELS screen keys its
+  rows by model id, so two Whisper models no longer collide. A server with one model shows
+  no select and gets no `model`, exactly as before.
 - **`model` in the `/api/stream` start message.** A live session names one of the loaded
   models the way `/api/stt` does, and every phrase borrows an instance from that model's
   pool; without it the default model serves. The language is checked against the chosen
   model, an unknown or unloaded model is one `error` message (`Invalid model` /
   `Model not loaded`) and a close, and `ready` names the model. `stt_client.py --stream`
   takes `--model`.
+- **Background jobs for long recordings, `/api/jobs`.** Upload up to 1 GB, get an id at once,
+  fetch the result later: plain text, who said what, or who spoke when. The file is worked through
+  in pieces of about a minute cut at pauses, and the model goes back to the pool between them, so
+  short requests keep being answered: a 30-minute recording took 107 s on the deployment GPU
+  while phone-call-sized requests alongside it took 10 s at worst. Speakers keep one number across
+  the whole file. Jobs survive a restart and are removed after `JOB_RETENTION_HOURS`.
+- **`GET /metrics` for Prometheus:** requests by route and status with durations, error
+  responses by category, pool sizes and free instances, live sessions, segments dropped by the
+  speech gate, live audio shed by a session that fell behind.
+- **`GET /api/health?deep=1`** runs one second of silence through every loaded model and answers
+  503 if one fails - the plain check only says the process is up.
+- **The live stream under gunicorn.** `GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker` with
+  `stt_server:asgi_app` serves `/api/stream` from several workers; checked under load on the
+  deployment GPU.
+- **Docker images in CI and on GHCR.** CI builds the CPU and web UI images on every PR; a release
+  tag pushes them to GHCR as `speech-to-text-cpu` and `speech-to-text-www`.
+- **Who spoke when, on its own, in the web UI.** FILE gets a Turns mode that calls
+  `/api/diarize` and draws the result as a timeline: a lane per speaker, a bar per turn, and the
+  stretches where two people talk at once marked. Each source now keeps its last result while
+  another screen is open, and a live session that falls behind shows how much it skipped.
+- **Uploads up to 100 MB in the Docker setup** (`MAX_CONTENT_LENGTH_MB`, now read from `.env`).
+- **`docs/DEPLOY.md`:** first deployment, what to rebuild or restart after an update, rolling
+  back, going offline once the models are cached, the certificate, and what an open server
+  exposes. `make tag-rollback` tags both images before a deploy.
+- **A live session that falls behind catches up.** When its queued phrases hold more than two
+  minutes of audio - a 24/7 source on a slower-than-realtime transcriber - it drops the oldest
+  queued ones and says so in a new `skipped` message, instead of growing its memory and its lag
+  without end.
+- **Only spoken text is returned.** A voice detector (Silero VAD) now vets every transcript:
+  a segment that lies mostly outside detected speech is dropped, and so is a whole-segment
+  subtitle credit line. Before, Whisper answered a tone with a Russian "subtitles by
+  DimaTorzok" credit, noise and even digital silence with "to be continued...", and music with
+  both; on a
+  corpus of nine such recordings every one of them came back as text on every endpoint, and
+  now none does, while every phrase of the speech recordings is kept. Whisper's own
+  `no_speech_prob` was 0.00 even on silence, which is why its confidence is not used. A live
+  phrase with no speech in it is not sent to the model at all. `SPEECH_GATE=false` turns it off.
+- **A live phrase is cut where the speaker changes.** With `diarize`, `/api/stream` no longer
+  waits for a 0.6 s pause that a quick reply does not leave: it closes the phrase where the
+  diarizer hears one speaker hand over to another.
+- **A STREAM source in the web UI.** Beside FILE and DEVICE, STREAM takes the address of a
+  stream or a remote file and has the server read it, so the UI shows every way the service
+  takes audio.
 - **Live transcription in the web UI, and from a URL.** TRANSCRIBE gets a FILE / DEVICE
   switch: DEVICE captures a microphone, a headset, a loopback source or a browser tab's sound
-  and shows each phrase as a block as soon as it is transcribed. Browsers allow audio devices
+  and shows each phrase as soon as it is transcribed, as a block per phrase in Speakers mode. Browsers allow audio devices
   only on a secure page, so over the network this works through the https listener.
   `/api/stream` also takes `"source": "url"`: the server reads internet radio, HLS, RTMP, RTSP
   or SRT itself through ffmpeg, which is held to network protocols so a URL or a playlist
@@ -77,8 +127,7 @@
   from a CDN.
 - **NVIDIA Parakeet as a second transcription backend.** `STT_BACKEND=parakeet` serves
   `nvidia/parakeet-tdt-0.6b-v3`: 25 European languages, self-detected, with native
-  token-level timestamps. Opt-in at build time (`--build-arg PARAKEET=true`) and needs no
-  git pin, unlike the diarizer: `parakeet_tdt` ships in released transformers. It takes no
+  token-level timestamps. Opt-in at build time (`--build-arg PARAKEET=true`). It takes no
   `language` argument at all, and `GET /api/models` reports that rather than leaving a
   caller to discover it. The variant most write-ups name, v2, ships only as a NeMo
   checkpoint and is not installable against this project's pinned CUDA build of PyTorch;
@@ -146,6 +195,71 @@
   linked from the language switcher at the top of each README.
 
 #### Fixed
+- **Background jobs, after a review.** A job whose run takes its process down - out of memory, a
+  crash inside a model - is run at most three times and then fails as `Transcription failed`, instead
+  of being claimed by every worker in turn and taking each one down; waiting for a busy model
+  does not count as a run, while a restart in the middle of a job does: nothing hands a running
+  job back on shutdown. A long recording is no longer read into memory whole and converted to
+  float in one go: the decoded audio is mapped from disk and each stage converts only the window
+  it works on, so an hours-long job no longer costs gigabytes of RAM. A job sent back to the queue
+  because no model came free waits the poll interval before it is claimed again, instead of
+  starting the same work over at once. Deleting a waiting job can no longer race a worker into
+  running it, an upload cut off midway leaves no directory behind, and a failed status write no
+  longer keeps a job locked until the process exits. `POST /api/jobs` answered 500 on Flask 3.0,
+  where a request's size limit cannot be set; Flask 3.1 is now the minimum.
+- **The catalogue, backend selection and the diarization routes.** `GET /api/models` reads every
+  loaded model as `loaded` while a request or a job holds it, instead of flipping to `installed`
+  whenever the only instance was in use. A typo in `STT_BACKEND` is logged once, not on every
+  request, and the value is case-insensitive, so `Parakeet` no longer falls back to Whisper
+  unnoticed. `/api/diarize` with no diarizer loaded answers 503 before reading the upload, as
+  `/api/transcript` already did.
+- **A URL source ending as the client left** is logged as the client leaving, not as an abnormal end.
+- **A stopped live session in the web UI no longer hangs on a dead connection.** After STOP it
+  waited for the server's last phrase with no limit, so a connection that died silently - a laptop
+  that slept, a router that forgot it - left START, the source switch and the downloads locked
+  until the page was reloaded. It now gives up when the server has said nothing for three minutes
+  and says the connection was lost; a server still sending its last phrases is never cut off.
+- **A STREAM address no longer keeps its user name and password in the browser's storage.** The
+  transcript line and the hints show it without them and without its query string, and the full
+  address stays only in the open page. An address that cannot be split safely - a password with a
+  raw `/`, `?` or `#` - is not remembered at all, and one saved by an earlier version keeps its
+  credentials until the next START.
+- **405 names the allowed methods** in an `Allow` header, as RFC 9110 requires.
+- **An SRT listener could still get past the URL check.** ffmpeg reads SRT options from the
+  first `?` anywhere in the address, while the check read urlsplit's query, which stops at `#`, so
+  `srt://0.0.0.0:9000#?mode=listener` passed and made the server listen. Options are now read the
+  way ffmpeg reads them. A live segment that Whisper placed wholly past the end of the audio is
+  dropped instead of coming out with its end before its start. Both found by the new tests for
+  the live stream.
+- **URL sources, after a review.** RTSP works: ffmpeg was given `-rw_timeout`, which the RTSP
+  demuxer does not take, and aborted every RTSP source. A source that keeps ffmpeg complaining
+  no longer freezes the session: its stderr is read as it comes instead of after exit. A live
+  source no longer runs 7-35 s behind: `-re` paced its backlog too, and an initial burst now takes
+  it at once. A malformed address or an ffmpeg that cannot start ends in an `error` and a close
+  instead of a dropped or silent socket, and the string that is checked is the one ffmpeg runs.
+- **A URL source can no longer reach loopback or link-local addresses.** An address that is, or
+  whose name resolves to, a loopback, link-local or unspecified address - `localhost`, `127.1`,
+  `[::ffff:127.0.0.1]`, the cloud metadata service at `169.254.169.254` - is refused as
+  `Invalid stream URL`. Hosts on the local network stay allowed for cameras and encoders, and that
+  includes the server's own LAN or container address. The check runs when the session starts;
+  ffmpeg still follows redirects and playlists. The limit of four URL sources was always per
+  worker process, and the docs now say so, along with the fact that the origin check cannot stop
+  DNS rebinding and only `STT_TOKENS` does.
+- **URL sources are fenced in.** A page on another site cannot start one (`Forbidden`), SRT
+  listener and rendezvous modes and `listen` parameters are refused, at most four run at once,
+  and the log no longer records credentials or query strings.
+- **Live capture in the web UI, after the same review.** Switching source no longer loses a
+  running upload, a file dropped on the live tabs no longer replaces the page, a quick
+  START-STOP-START no longer leaves the microphone on, the remembered device is the one
+  recorded, a device below 16 kHz is resampled instead of sent too fast, and a stopped session
+  says it is finishing rather than "No speech recognised".
+- **An upload in the web UI survives a look at another screen.** Opening MODELS while a file was
+  being transcribed and coming back showed no upload at all and left TRANSCRIBE on, so a second
+  press sent the same file again - twice the GPU work, or a 503 from a one-instance pool. FILE
+  now shows the upload still running, with its seconds counted from the start, and keeps
+  TRANSCRIBE off until it answers; if it fails meanwhile, the error is on FILE's error bar on the
+  way back instead of the upload just vanishing. An answer from an earlier upload no longer
+  replaces the result of a later one.
 - **Gunicorn starts again.** Since the module split, `gu.py` bound the settings module to the
   name `config`, which is also a gunicorn setting; gunicorn read it as one and refused to start
   with `Invalid value for config`. The default `python3 stt_server.py` run was not affected.
@@ -160,18 +274,23 @@
   internal close with a traceback.
 - **A known language outside the model's slice is a 400, not a 500.** `?language=yue` on a
   99-language checkpoint passed the check and raised inside Whisper; it is now
-  `400 Unsupported language` before any audio is decoded, and on `/api/stream` whose start
-  message names the model an `Unsupported language` error before the session starts; a start
-  message without `model` is checked exactly as before. Only a checkpoint whose list is
-  certain refuses it: a file path whose name matches no known checkpoint (a fine-tune at
+  `400 Unsupported language` before any audio is decoded, `POST /api/jobs` refuses it the same
+  way before a job is created, and on `/api/stream` whose start message names the model it is
+  an `Unsupported language` error before the session starts; a start message without `model`
+  is checked exactly as before. Only a checkpoint whose list is certain refuses it: a file
+  path whose name matches no known checkpoint (a fine-tune at
   `/models/my-large-v3-finetune.pt`) still has any known code passed on when the request
   names no model, because its list is only guessed from the name.
-- **A busy model is still `loaded` in the catalogue.** With every instance in flight the
-  pool was empty and the row fell back to `installed`.
 - **The container stops cleanly.** `entrypoint.sh` ran the server under `/bin/sh -c` without
   `exec`, so the shell stayed PID 1, never forwarded SIGTERM, and every stop and redeploy
   waited out Docker's 10 s grace period and then SIGKILLed the server with requests in flight
   (seen on the deployment host as exit 137 on every restart).
+- **A live phrase under Parakeet arrives as one segment, not one per word.** Parakeet returns
+  words, and `/api/stream` sent each as a `segment` of its own, so a five-word phrase showed as
+  five lines in the web UI and in `stt_client.py --stream`. The words of an utterance are now
+  joined the way `/api/transcript` joins them: a new phrase where the speaker changes or another
+  speaker spoke in between, and `overlap` set when any of its words had it. Whisper's live
+  segments are unchanged.
 - **No empty segments in a speaker transcript.** A whitespace-only token became a segment of
   its own, `{"speaker": null, "text": ""}`.
 - **The README no longer promises a 400 for an unknown language under Parakeet.** That holds
@@ -182,6 +301,13 @@
   Found on the deployment host: when the transcriber produced no words for one voice, the
   other voice's two phrases merged into one run that claimed a single person spoke straight
   through the other's turn. A run now continues only if nobody else held a turn in the gap.
+- **A live phrase cut at a speaker change belongs to the speaker who starts it.** The phrase that
+  follows a cut begins where the new speaker does, yet the previous speaker's last 10 ms frame
+  could still fall inside it: the phrase's start was rounded down to a whole frame, or that voice
+  trailed past the cut. Its turn then began first, or tied and won on the lower speaker number, and
+  the phrase was taken for the previous speaker's: the new speaker's turn was read as part of its
+  opening and the next change back as no change at all, so in a quick dialog the phrase ran on
+  until a pause. The phrase's speaker is now whoever talks most in its first half second.
 - **Parakeet's timestamps are joined word by word.** They were grouped into phrases on a
   0.6 s silence, and speakers hand over faster than that, so a phrase could swallow the
   handover and be attributed whole to whoever spoke longer.
@@ -203,25 +329,67 @@
   root-owned, so `whisper.load_model` died with `PermissionError` (same trap
   for `./logs` and `./recs`). A root entrypoint now fixes ownership of the
   mounted dirs and drops privileges via `setpriv` before starting the server.
+- **`overlap` means two voices at once.** It was set whenever another speaker's turn
+  touched a segment, so a phrase spanning an ordinary handover was marked as contested and
+  nearly every segment carried the flag; it is now set only when two different speakers talk
+  at the same moment inside the segment.
+- **Zero-length words are kept and attributed.** Parakeet emits them; the speech gate dropped
+  them and the join left them without a speaker. One is now kept when it falls inside speech
+  and goes to the speaker whose turn contains it.
+- **One detector failure no longer switches the speech gate off.** A failure of the voice
+  detector on one recording disabled the gate until a restart; now only a detector that cannot
+  be loaded does, and any other failure costs just that request its filtering.
+- **A live phrase cut short counts only its voice.** At a cut on a speaker change or on the
+  length limit, quiet frames were counted as voice on both sides of the cut, so a near-silent
+  fragment passed the minimum and was transcribed into a hallucination. Each side is now
+  judged on its own voiced frames.
+- **A long diarized live session stays the same size.** A live or URL session kept every
+  speaker decision since it started; what no phrase can still ask about is now dropped.
 
 #### Changed
 - **`libs.model_pool` keeps one pool per model.** The module attribute `MODEL_POOL` is
   replaced by `MODEL_POOLS`, a dict of queues keyed by model id, and `init_model_pool()`
   no longer takes a `size` argument: each model's size comes from its `STT_MODELS` entry
-  or `STT_POOL_SIZE`. `catalog.describe_transcriber` is replaced by
-  `describe_configured_model` (one loaded model) and `describe_unconfigured_backend` (a
-  transcriber with nothing loaded), and `backends.transcriber()` is gone: every caller
-  resolves `backends.transcriber_for_backend(spec["backend"])` for the model it serves.
-  Code importing `libs` directly needs these new names.
+  or `STT_POOL_SIZE`. `model_ready()` and the integer `MODELS_LOADED` give way to
+  `is_model_loaded(model_id)` and a per-id `MODELS_LOADED`, `WAITING` is kept per pool, and
+  `acquire_model` / `release_model` require `model_id`, so an instance can never land in the
+  default pool by omission. `stream.transcribe_piece`, `stream.transcribe_utterance`,
+  `stream.attribute_live_segments` and `longform.transcribe_long` take the spec of the model
+  they serve. `catalog.describe_transcriber` is replaced by `describe_configured_model` (one
+  loaded model) and `describe_unconfigured_backend` (a transcriber with nothing loaded), and
+  `backends.transcriber()` is gone: every caller resolves
+  `backends.transcriber_for_backend(spec["backend"])` for the model it serves. Code
+  importing `libs` directly needs these new names.
 - **A request that names its model has its `language` checked against that model's own
   list.** An English-only Whisper given `ru`, or Parakeet given a code outside its 25, is
   `400 Unsupported language`. A request without `model` keeps the old leniency: an
   English-only default still quietly transcribes English, and Parakeet still accepts and
   ignores any value.
 - **The transcriber modules take the model to work on.** `get_model` and `describe_backend`
-  accept `model_name`, and both modules gained `get_stt_result`, `list_aliases`,
-  `list_known_models` and (Parakeet) `resolve_languages`; `get_stt_bio` is now a thin
-  wrapper. Parakeet's catalogue row lists its short name as an alias.
+  accept `model_name`, and both modules gained `get_stt_result`, which returns the text, the
+  language and the segments of one decode, `list_aliases`, `list_known_models` and
+  (Parakeet) `resolve_languages`; `get_stt_bio` and `get_stt_segments` are now thin
+  wrappers. Parakeet's catalogue row lists its short name as an alias.
+- **Background jobs run on the default model.** `POST /api/jobs` takes no `model`, and its
+  `language` is checked against the default model. Between pieces a job steps aside only for
+  callers of that model's pool: a request for another model waits on another queue.
+- **transformers comes from PyPI, not from a git commit.** 5.18.0 is the first release that
+  recognises the diarization model, so the `diarize` extra and `requirements-diarize.txt` ask
+  for `transformers>=5.18.0`, the same floor as Parakeet, and the two install together. The GPU
+  image no longer installs git to build it, the `diarize` extra no longer carries a direct
+  reference that PyPI would refuse, and the images hold transformers to 5.18.0 through
+  `constraints.txt` like every other package.
+- **The voice detector takes its lock per 30 s window**, so a long file's detection no longer
+  holds every short request's speech gate for its whole length.
+- **Builds are reproducible.** Every install step runs with `-c constraints.txt`, the versions
+  of the last verified image (`make constraints` refreshes it), and the uv image is pinned; a
+  moving `uv:latest` had thrown away the layer cache and cost a 20-minute rebuild. The GPU image
+  now also refuses a torch without kernels for NVIDIA GB10.
+- **The server can run as the host user.** `STT_UID` / `STT_GID` make `models/`, `logs/` and
+  `recs/` belong to the user who owns the checkout, instead of uid 1001.
+- **An upload that is not audio is logged as one WARNING line**, not an ERROR with a traceback:
+  it is the client's mistake and is answered with 400.
+- **The CPU image is on Python 3.12**, like the GPU image and the project's target.
 - **A model backend that fails to load no longer stops the server.** The failure is
   logged and its pool left empty, so `/api/diarize` answers 503 while `/api/stt` keeps
   serving. Previously the exception surfaced inside the Gunicorn `post_fork` hook and

@@ -1,13 +1,12 @@
 # Speaker diarization backend, installed only when the image is built with
 # --build-arg DIARIZE=true. Mirrors the `diarize` extra in pyproject.toml.
 #
-# transformers comes from a git commit, not from PyPI: nvidia/Nemotron-3-Diarization
-# declares transformers_version 5.18.0.dev0 and the newest release is 5.17.0, which
+# nvidia/Nemotron-3-Diarization declares transformers_version 5.18.0.dev0, and 5.17.0
 # answers AutoConfig with "model type `nemotron3_diarization` but Transformers does not
 # recognize this architecture". The repository ships no custom modeling code either, so
-# trust_remote_code is not a way around it. Move this to a plain version pin once 5.18.0
-# is released.
-transformers @ git+https://github.com/huggingface/transformers@98d39824ed30e684e5122d04a2d9564efffc4965
+# trust_remote_code is not a way around it. 5.18.0 is the first release that carries it;
+# the images hold the exact version through constraints.txt.
+transformers>=5.18.0
 
 # Reading the 16 kHz mono WAV the server hands to the diarizer.
 soundfile>=0.12.1

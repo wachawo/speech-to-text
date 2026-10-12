@@ -57,7 +57,7 @@ docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
 ```
 
-GPU 빌드는 호스트에 `nvidia-container-toolkit`가 필요합니다. 첫 실행 시 Whisper 모델을 `./models`로 내려받습니다.
+GPU 빌드는 호스트에 `nvidia-container-toolkit`가 필요합니다. 첫 실행 시 Whisper 모델을 `./models`로 내려받습니다. 서버에서의 운영(업데이트, 롤백, 인증서, 의존성)은 [docs/DEPLOY.md](DEPLOY.md)에서 다룹니다.
 
 ### 웹 UI
 
@@ -68,7 +68,7 @@ GPU 빌드는 호스트에 `nvidia-container-toolkit`가 필요합니다. 첫 �
 | http   | `8080`    | `STT_WWW_PORT`     |
 | https  | `8443`    | `STT_WWW_TLS_PORT` |
 
-`http://<host>:8080`을 엽니다. **TRANSCRIBE**에는 두 가지 소스가 있습니다. **FILE**은 오디오 파일을 업로드합니다. **DEVICE**는 오디오 입력에서 실시간으로 전사합니다. 입력으로는 마이크나 헤드셋, 스피커나 헤드폰으로 재생되는 모든 소리를 담는 Linux의 `Monitor of ...` 소스, 또는 브라우저 탭에서 재생되는 소리(운영 체제가 허용하면 시스템 전체)를 위한 `Tab or screen audio`를 쓸 수 있습니다. 어느 쪽이든 결과는 폼 아래에 일반 텍스트로 나타나며, 화자 분리가 켜져 있으면 구절마다 화자와 시간이 붙은 블록으로 나타납니다. 화자마다 고유한 색이 붙고, 두 사람이 동시에 말한 구절은 따로 표시됩니다. 실시간 구절은 화자가 말을 멈춘 뒤 약 1초 후에 나타납니다. 결과는 복사하거나 TXT 또는 JSON으로 내려받을 수 있습니다. 여러 모델을 로드한 경우(`STT_MODELS`), 모드와 언어 옆의 모델 선택으로 두 소스 모두에서 사용할 모델을 고릅니다. 목록은 `GET /api/models`에서 가져오며, 언어 목록은 선택한 모델을 따릅니다. **MODELS**는 `GET /api/models`가 알려 주는 내용을 보여 줍니다. `STT_TOKENS`가 설정되어 있으면 UI는 토큰을 한 번만 묻고 브라우저에 보관합니다.
+`http://<host>:8080`을 엽니다. **TRANSCRIBE**에는 세 가지 소스가 있습니다. **FILE**은 오디오 파일을 업로드합니다. **DEVICE**는 오디오 입력에서 실시간으로 전사합니다. 입력으로는 마이크나 헤드셋, 스피커나 헤드폰으로 재생되는 모든 소리를 담는 Linux의 `Monitor of ...` 소스, 또는 Chromium 계열 브라우저에서는 브라우저 탭에서 재생되는 소리(운영 체제가 허용하면 시스템 전체)를 위한 `Tab or screen audio`를 쓸 수 있습니다. **STREAM**은 스트림이나 원격 파일의 주소(인터넷 라디오, HLS, RTMP, RTSP, SRT)를 받아 서버가 직접 읽습니다. 어느 경우든 결과는 폼 아래에 일반 텍스트로 나타나며, 화자 분리가 켜져 있으면 구절마다 화자와 시간이 붙은 블록으로 나타납니다. 화자마다 고유한 색이 붙고, 두 사람이 동시에 말한 구절은 따로 표시됩니다. 실시간 구절은 화자가 말을 멈춘 뒤 약 1초 후에 나타납니다. 결과는 복사하거나 TXT 또는 JSON으로 내려받을 수 있으며, 다른 화면을 보는 동안에도 각 소스는 마지막 결과를 유지합니다. FILE에는 **Turns** 모드도 있는데, 이는 `POST /api/diarize`만 단독으로 쓰는 것으로, 누가 언제 말했는지를 화자마다 레인이 하나씩 있는 타임라인으로 그리고 두 사람이 동시에 말하는 구간을 표시합니다. 여러 모델을 로드한 경우(`STT_MODELS`), 모드와 언어 옆의 모델 선택으로 FILE, DEVICE, STREAM 세 소스 모두에서 사용할 모델을 고릅니다. 목록은 `GET /api/models`에서 가져오며, 언어 목록은 선택한 모델을 따릅니다. Turns는 아무것도 전사하지 않으므로 모델을 보내지 않습니다. **MODELS**는 `GET /api/models`가 알려 주는 내용을 보여 줍니다. `STT_TOKENS`가 설정되어 있으면 UI는 토큰을 한 번만 묻고 브라우저에 보관합니다.
 
 브라우저는 안전한 페이지에만 오디오 장치를 넘겨주므로, 네트워크를 통해서는 DEVICE가 https 리스너를 거쳐 동작합니다(`http://localhost`에서도 동작합니다). https 리스너는 컨테이너가 처음 시작할 때 `./data/certs`에 만드는 자체 서명 인증서를 사용합니다. 이를 교체하려면 실제 `stt.crt`와 `stt.key`를 그곳에 두십시오. UI에는 빌드 단계도 CDN도 없습니다. Vue 2와 그 라이브러리는 `www/vendor`에 함께 들어 있으므로, 인터넷에 연결되지 않은 기기에서도 동작합니다.
 
@@ -96,6 +96,10 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 ```
 
 `STT_TOKENS`가 설정되어 있으면 `default_model`과 `models`는 유효한 토큰이 있는 요청의 응답에만 포함됩니다. `GET /api/models`처럼 서버 구성을 드러내기 때문입니다. 토큰이 없는 헬스체크도 계속 `status`, `pool_size`, `available`, `diarize`를 받습니다.
+
+`GET /api/health?deep=1`은 여기에 더해 로드된 모든 모델에 하나씩 차례로 1초 분량의 무음을 통과시키고, 각 모델을 `ok`, `busy`(5초 안에 비는 인스턴스가 없음), `failed` 중 하나로 보고합니다. 전사 모델은 각각 id별로 `deep.models`에, `deep.transcriber`는 그중 가장 나쁜 결과로 보고되며, 화자 분리가 켜져 있으면 `deep.diarizer`도 보고됩니다. 하나라도 실패하면 `503`을 반환합니다. GPU 작업이 들기 때문에 `STT_TOKENS`가 설정되어 있는 동안에는 토큰이 필요하며, 일반 검사는 컨테이너 헬스체크를 위해 열린 채로 둡니다.
+
+`GET /metrics`는 Prometheus 메트릭을 제공합니다. 경로와 상태별 요청, 그 소요 시간, 범주별 오류 응답, 풀 크기와 빈 인스턴스 수, 실행 중이거나 시작된 실시간 세션, 음성 검출기가 버린 구간, 뒤처진 세션이 흘려 버린 실시간 오디오가 포함됩니다. 레이블이 없는 `stt_pool_*` 게이지는 기본 모델과 화자 분리기를 나타내고, `stt_model_pool_size`와 `stt_model_pool_available`은 로드된 각 모델을 `model`과 `backend` 레이블과 함께 보여 줍니다. 헬스체크와 마찬가지로 토큰이 필요 없으며, `stt_www`는 이를 프록시하지 않으므로 `STT_PORT`를 직접 수집하십시오. gunicorn에서는 워커마다 따로 집계합니다.
 
 `POST /api/stt`는 `file`이라는 이름의 `multipart/form-data` 필드나 원시 `audio/*` 본문을 받습니다. 선택 사항인 `model`(쿼리 문자열 또는 폼 필드)은 로드된 모델 중 하나를 고릅니다. id, 별칭(`large-v3-turbo`, `parakeet-tdt-0.6b-v3`), `backend:model` 형식, 또는 백엔드 이름만 쓸 수 있으며, 백엔드 이름은 기본 모델이 그 백엔드에 속하면 기본 모델을, 아니면 그 백엔드의 첫 번째 모델을 뜻합니다. `model`이 없으면 기본 모델이 응답합니다. 선택 사항인 `language`(쿼리 문자열 또는 폼 필드)는 해당 요청에 한해 서버 기본값을 덮어쓰며, `auto`는 자동 감지합니다. 성공하면 텍스트, 경과 시간(초), 전사한 모델, 언어를 반환합니다. 언어는 Whisper가 감지했거나 사용한 코드(영어 전용 모델은 항상 `en`)이고, 언어를 보고하지 않는 Parakeet은 `null`입니다.
 
@@ -146,7 +150,7 @@ curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
 }
 ```
 
-`id`는 요청이 `model`로 넘기는 값이며, `default: true`인 행은 정확히 하나입니다. 그 id가 `default_model`이고, 그 백엔드가 최상위 `default`입니다. `pool_size`와 `available`은 그 모델의 풀을 나타냅니다. `status`는 모델 인스턴스가 유휴든 사용 중이든 존재하면 `loaded`, 가중치는 디스크에 있지만 아직 아무것도 로드되지 않았으면 `installed`, 그 밖에는 `absent`입니다. 구성되었지만 설치되지 않은 백엔드는 `absent`만 보고하고, 이유는 로그에 남습니다. `accepts_language`는 그 백엔드에서 `?language=`가 의미가 있는지를 알려 줍니다. 화자 분리기는 어떤 언어로도 텍스트를 만들지 않으므로 빈 목록 대신 `null` 언어를 보고합니다.
+`id`는 요청이 `model`로 넘기는 값이며, `default: true`인 행은 정확히 하나입니다. 그 id가 `default_model`이고, 그 백엔드가 최상위 `default`입니다. `pool_size`와 `available`은 그 모델의 풀을 나타냅니다. `status`는 그 모델의 풀에 인스턴스가 로드되어 있으면 유휴든 사용 중이든 `loaded`, 가중치는 디스크에 있지만 아직 아무것도 로드되지 않았으면 `installed`, 그 밖에는 `absent`입니다. 구성되었지만 설치되지 않은 백엔드는 `absent`만 보고하고, 이유는 로그에 남습니다. `accepts_language`는 그 백엔드에서 `?language=`가 의미가 있는지를 알려 줍니다. 화자 분리기는 어떤 언어로도 텍스트를 만들지 않으므로 빈 목록 대신 `null` 언어를 보고합니다.
 
 CLI 클라이언트도 같은 엔드포인트를 읽습니다.
 
@@ -193,12 +197,26 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `overlap`은 다른 사람도 함께 말하고 있던 구절을 표시합니다. NVIDIA는 일반적인 단일 화자 모델을 화자 분리와 짝짓는 것이 겹쳐 말하는 음성을 위해 만들어진 모델과 동등하지 않다고 분명히 밝히고 있습니다. 잘라낸 시간 구간에는 그 구간과 겹치는 모든 목소리가 여전히 들어 있으므로, 그런 구절들은 서로 섞이거나 엉뚱한 화자의 말을 고를 수 있습니다. `overlap`이 표시된 구간은 전사문에서 가장 신뢰하기 어려운 지점으로 다루십시오.
 
+**긴 녹음은 작업으로 처리합니다.** `POST /api/jobs`는 `/api/stt`와 같은 형태의 본문을 `JOB_MAX_CONTENT_LENGTH_MB`(1 GB)까지 받으며, 여기에 `mode`를 더합니다. `text`(기본값), `speakers`(`/api/transcript` 결과), `turns`(`/api/diarize` 결과) 중 하나입니다. 응답은 곧바로 `202`로 오며, 작업 id와 폴링할 `Location`이 함께 옵니다.
+
+```bash
+curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
+curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+```
+
+```json
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+```
+
+`status`는 `queued`(`position` 포함), `running`을 거쳐 `result`가 담긴 `done`이 되거나, `error` 범주가 담긴 `failed`가 됩니다. `GET /api/jobs`는 작업 목록을 보여 주고, `DELETE /api/jobs/<id>`는 실행 중이 아닌 작업을 삭제합니다. 작업은 파일을 멈춤에서 자른 약 1분 길이의 조각으로 나누어 처리하고 조각 사이마다 모델을 돌려주므로, 작업이 도는 동안에도 짧은 요청은 계속 응답을 받습니다. 배포 환경의 GPU에서 30분짜리 녹음은 107초가 걸렸고, 그동안 보낸 전화 통화 요청은 길어야 10초가 걸렸습니다. 화자 분리는 모델의 스트리밍 모드로 파일 전체에 걸쳐 실행되므로, 한 화자는 첫 1분부터 마지막 1분까지 같은 번호를 유지합니다. 작업은 `JOBS_DIR` 아래의 파일이므로 재시작 후에도 남으며, 끝난 작업은 `JOB_RETENTION_HOURS`가 지나면 삭제됩니다. 작업은 `model`을 받지 않습니다. 기본 모델에서 실행되며, `language`도 그 모델을 기준으로 검사됩니다.
+
 `/api/stream`은 **실시간 전사**를 위한 WebSocket입니다. 오디오는 녹음되는 대로 들어가고, 각 구절은 화자가 말을 멈춘 뒤 약 1초 후에 돌아옵니다. JSON 텍스트 메시지는 제어를, 바이너리 메시지는 오디오를 전달합니다.
 
 1. 클라이언트가 `{"type": "start", "model": "turbo", "language": "ru", "diarize": true, "token": "<token>"}`을 보냅니다. `type`을 제외한 모든 필드는 선택 사항입니다. `model`은 `/api/stt`의 `model`과 같은 방식으로 로드된 모델 중 하나를 고르며, 언어는 그 모델을 기준으로 검사됩니다. 생략하면 기본 모델이 사용되고, 언어는 예전처럼 언어인지 여부만 검사합니다. 그래서 기본 모델이 모르는 코드는 구절을 전사할 때 실패합니다. `token`은 브라우저가 인증하는 방법인데, 브라우저는 WebSocket에 헤더를 설정할 수 없기 때문입니다. 다른 클라이언트는 대신 핸드셰이크 때 `Authorization: Bearer <token>`을 보내도 됩니다.
 2. 서버가 `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "model": "turbo", "language": "ru", "diarize": true, "source": "client"}`로 응답합니다.
-3. 클라이언트는 원시 PCM(부호 있는 16비트, 리틀 엔디언, 모노, 16 kHz)을 임의 크기의 바이너리 메시지로 보내고, 끝나면 `{"type": "stop"}`을 보냅니다.
-4. 서버는 구절마다 `segment`를, 약 1초마다 `progress`를 보내고, 닫기 전에 `done`을 보냅니다.
+3. 클라이언트는 원시 PCM(부호 있는 16비트, 리틀 엔디언, 모노, 16 kHz)을 임의 크기의 바이너리 메시지로 녹음되는 속도에 맞춰 보내고, 끝나면 `{"type": "stop"}`을 보냅니다. 실시간보다 빠르게 보낸 파일은 설계상 뒤처지며 구절을 잃습니다(아래의 `skipped` 참고). 파일은 작업으로 보내십시오.
+4. 서버는 구절마다 `segment`를, 약 1초마다 `progress`를 보내고, 세션이 2분 넘게 뒤처지는 일이 생기면 버린 오디오의 초 수와 함께 `skipped`를 보내며, 닫기 전에 `done`을 보냅니다.
 
 ```json
 { "type": "segment", "id": 3, "start": 6.88, "end": 8.2, "text": "This is the second speaker.", "speaker": 1, "overlap": false }
@@ -206,13 +224,17 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 { "type": "done", "segments": 10, "seconds": 21.87, "elapsed": 22.08 }
 ```
 
-오디오는 다른 곳에서 올 수도 있습니다. 시작 메시지에 `"source": "url", "url": "https://..."`를 넣으면 클라이언트는 오디오를 전혀 보내지 않습니다. 서버가 ffmpeg로 그 주소의 스트림을 소스 자체의 속도대로 읽으며, 스트림이 끝나거나 클라이언트가 `stop`을 보낼 때까지 계속합니다. 인터넷 라디오, HLS, RTMP, RTSP, SRT가 동작합니다. 스킴은 `http`, `https`, `rtmp`, `rtmps`, `rtsp`, `srt` 중 하나여야 하며, ffmpeg는 네트워크 프로토콜만 쓰도록 제한되어 있어 URL이나 재생 목록으로 로컬 파일을 읽게 만들 수는 없습니다. 그래도 클라이언트가 고른 주소를 서버가 가져오게 된다는 점은 변하지 않으며, 여기에는 서버 자신의 네트워크에 있는 주소도 포함됩니다. 다른 사람이 접근할 수 있는 서버에는 반드시 `STT_TOKENS`를 설정하십시오.
+오디오는 다른 곳에서 올 수도 있습니다. 시작 메시지에 `"source": "url", "url": "https://..."`를 넣으면 클라이언트는 오디오를 전혀 보내지 않습니다. 서버가 ffmpeg로 그 주소의 스트림을 읽으며, 스트림이 끝나거나 클라이언트가 `stop`을 보낼 때까지 계속합니다. 인터넷 라디오, HLS, RTMP, RTSP, SRT가 동작합니다. 스킴은 `http`, `https`, `rtmp`, `rtmps`, `rtsp`, `srt` 중 하나여야 합니다. 라이브 소스에 이미 쌓여 있는 분량은 한 번에 가져오고 나머지는 소스 자체의 속도대로 읽으므로, 원격 파일도 방송과 같은 방식으로 도착합니다.
 
-실패는 `{"type": "error", "error": "<category>", "request_id": "..."}` 하나로 전달되고 그 뒤에 연결이 닫힙니다. 범주는 HTTP 오류 범주에 `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed`가 더해진 것입니다.
+이 기능은 클라이언트가 고른 주소를 서버가 가져오게 만들기 때문에 제한이 걸려 있습니다. ffmpeg는 네트워크 프로토콜만 쓸 수 있으므로 URL이든 재생 목록이든 로컬 파일을 읽게 만들 수 없고, 어떤 방법으로도 연결을 기다리는 상태로 만들 수 없습니다. SRT의 `listener`와 `rendezvous` 모드, 그리고 모든 `listen` 매개변수는 거부됩니다. 서버 자신(루프백), 클라우드 메타데이터 서비스 `169.254.169.254` 같은 링크 로컬 주소, 또는 `0.0.0.0`이거나 그런 주소로 해석되는 주소는 `Invalid stream URL`로 거부됩니다. 이 검사는 세션을 시작할 때 이루어지며, ffmpeg는 그 뒤에도 리디렉션과 재생 목록을 따라갑니다. 다른 사이트의 페이지는 이를 시작할 수 없습니다(`Forbidden`). 브라우저는 WebSocket에 CORS를 적용하지 않으므로, 소켓이 페이지의 오리진이 이 호스트인지, 또는 `CORS_ORIGINS`에 나열되어 있는지 확인합니다. URL 소스는 서버 프로세스마다 동시에 최대 네 개까지 실행되므로(그 이상은 `Service Unavailable`) 워커가 여러 개인 gunicorn에서는 워커마다 그만큼 실행되며, 로그에는 각 주소가 자격 증명과 쿼리를 뺀 채로 기록됩니다. 그래도 서버 자신의 네트워크에 있는 호스트에는 여전히 닿을 수 있는데, 카메라라면 바로 그것이 목적이고, 다른 사람이 접근할 수 있는 서버에 `STT_TOKENS`를 설정해야 하는 이유이기도 합니다.
 
-구절은 0.6초의 멈춤에서 끝나거나, 15초를 넘기면 가장 조용한 지점에서 끝나며, 업로드와 같은 풀에서 빌린 모델로 따로 전사됩니다. 그래서 풀이 바쁘면 실시간 구절은 실패하지 않고 늦어질 뿐입니다. `diarize`를 쓰면 화자 분리기가 스트리밍 모드로 동작하며 청크에서 청크로 화자 캐시를 이어 가므로, 한 화자는 세션 내내 같은 번호를 유지합니다. 이 소켓은 서버가 uvicorn에서 실행될 때(`python3 stt_server.py`, Docker 기본값)만 존재합니다. Flask 디버그 서버와 gunicorn의 sync 워커는 WebSocket을 지원하지 않습니다.
+실패는 `{"type": "error", "error": "<category>", "request_id": "..."}` 하나로 전달되고 그 뒤에 연결이 닫힙니다. 범주는 HTTP 오류 범주에 `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed`, `Forbidden`이 더해진 것입니다.
 
-업로드는 `MAX_CONTENT_LENGTH_MB`(기본 10 MB)로 제한되며, 더 큰 본문은 `413`을 반환합니다.
+구절은 0.6초의 멈춤에서 끝나거나, 화자 분리기가 한 화자에서 다른 화자로 말이 넘어가는 것을 들은 지점에서 끝나거나(`diarize` 사용 시, 서로 대답을 주고받는 사람들은 흔히 0.6초보다 짧게 쉬기 때문), 15초를 넘기면 가장 조용한 지점에서 끝나며, 업로드와 같은 풀에서 빌린 모델로 따로 전사됩니다. 그래서 풀이 바쁘면 실시간 구절은 실패하지 않고 늦어질 뿐입니다. `diarize`를 쓰면 화자 분리기가 스트리밍 모드로 동작하며 청크에서 청크로 화자 캐시를 이어 가므로, 한 화자는 세션 내내 같은 번호를 유지합니다. 이 소켓은 서버가 uvicorn에서 실행될 때 존재합니다. 곧 `python3 stt_server.py`(Docker 기본값)이거나, `GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker`로 `stt_server:asgi_app`을 제공하는 gunicorn입니다. Flask 디버그 서버나 gunicorn의 기본 sync 워커에서는 존재하지 않는데, 이들은 WebSocket을 지원하지 않기 때문입니다.
+
+**실제로 말한 텍스트만 반환됩니다.** 음성이 없는 곳(신호음, 음악, 잡음, 연결음, 심지어 디지털 무음)에서 Whisper는 자신이 학습한 자막 영상의 크레딧으로 답하며(러시아어 "자막 제작: DimaTorzok" 크레딧, "다음 편에 계속...", "시청해 주셔서 감사합니다."), 그것도 완전한 확신을 가지고 그렇게 합니다. 테스트 코퍼스에서 Whisper 자신의 `no_speech_prob`는 무음에서조차 0.00이었습니다. 그래서 모든 엔드포인트는 오디오에 음성 검출기인 Silero VAD를 돌려, 검출된 음성 밖에 대부분 놓인 전사 구간과, 자막 크레딧 한 줄 전체로 이루어진 구간을 버립니다. 음성이 없는 녹음 아홉 개로 이루어진 코퍼스에서 이 방식은 그런 줄을 모두 없애면서도 음성 녹음의 구절은 하나도 잃지 않았습니다. 아무 말도 없는 녹음은 이제 빈 텍스트가 됩니다. 실시간 스트림에서는 음성이 검출되지 않은 구절은 아예 모델로 보내지지 않습니다. 검출기는 CPU에서 동작하며, 오디오 3분당 약 1초가 더 걸립니다. `SPEECH_GATE=false`로 이전 동작을 되돌릴 수 있습니다.
+
+업로드는 `MAX_CONTENT_LENGTH_MB`(서버만 단독으로 실행하면 10 MB, Docker 구성에서는 100 MB)로 제한되며, 더 큰 본문은 `413`을 반환합니다.
 
 오류는 형식이 일관됩니다. `error`는 일반적인 범주를 담고, `request_id`는 전체 예외가 기록된 서버 로그와 응답을 연결합니다.
 
@@ -255,6 +277,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | 최대 업로드 크기(MB), 더 큰 본문은 `413` 반환      |
 | `CORS_ORIGINS`          | `*`                     | 허용되는 CORS 출처: `*` 또는 쉼표로 구분된 목록    |
 | `GUNICORN_WORKERS`      | `4`                     | 워커 프로세스 수(gunicorn 전용)                    |
+| `GUNICORN_WORKER_CLASS` | `sync`                  | `uvicorn_worker.UvicornWorker`는 `/api/stream`을 추가(gunicorn 전용) |
 | `LOG_LEVEL`             | `INFO`                  | 로깅 레벨                                          |
 | `LOG_ACCESS`            | `false`                 | uvicorn 액세스 로그 기록                           |
 | `WHISPER_MODEL`         | `small.en`              | Whisper 모델 이름(예: `small.en`, `turbo`)(`STT_MODELS`가 비어 있을 때) |
@@ -271,6 +294,12 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `DIARIZE_POOL_SIZE`     | `1`                     | 미리 로드되는 화자 분리기 인스턴스 수              |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | 화자 분리 모델 캐시 디렉터리                       |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | 음성으로 간주하는 화자 활동 확률                   |
+| `JOBS_DIR`              | `recs/jobs`             | 작업이 업로드, 기록, 결과를 보관하는 곳             |
+| `JOB_MAX_CONTENT_LENGTH_MB` | `1024`              | 작업 하나의 최대 업로드 크기(MB)                    |
+| `JOB_RETENTION_HOURS`   | `24`                    | 끝난 작업을 삭제하기까지의 시간 수                  |
+| `SPEECH_GATE`           | `true`                  | 아무도 말하지 않은 전사 텍스트 제거(음성 검출기)    |
+| `STT_UID`, `STT_GID`    | (이미지의 `stt`, 1001)  | `models/`, `logs/`, `recs/`를 소유하는 호스트 사용자(Docker) |
+| `HF_HUB_OFFLINE`        | `0`                     | 모델이 캐시된 뒤 `1`: 시작 시 허브 요청 없음        |
 | `STT_WWW_PORT`          | `8080`                  | 웹 UI http 포트(compose)                            |
 | `STT_WWW_TLS_PORT`      | `8443`                  | 웹 UI https 포트(compose)                           |
 | `STT_URL`               | `http://localhost:5099` | 클라이언트: 서버 기본 URL                          |
@@ -294,6 +323,11 @@ speech-to-text/
 │   ├── align.py         # joins transcription segments to speaker turns
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
+│   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
+│   ├── speech_gate.py   # voice detector that drops text nobody spoke
+│   ├── metrics.py       # Prometheus metrics for GET /metrics
+│   ├── jobs.py          # background jobs: stored on disk, claimed with a lock, run by a worker thread
+│   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
@@ -304,7 +338,8 @@ speech-to-text/
 ├── Dockerfile-www       # web UI image (nginx)
 ├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS
 ├── www/                 # web UI: Vue 2 without a build step, libraries vendored
-├── docs/                # README translations
+├── constraints.txt      # every dependency version the tested image resolved
+├── docs/                # DEPLOY.md and the README translations
 └── tests/               # pytest tests, no model downloads and no GPU
 ```
 

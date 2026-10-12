@@ -57,7 +57,7 @@ docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
 ```
 
-GPU 构建需要主机上安装 `nvidia-container-toolkit`。首次运行会将 Whisper 模型下载到 `./models`。
+GPU 构建需要主机上安装 `nvidia-container-toolkit`。首次运行会将 Whisper 模型下载到 `./models`。在服务器上运行（更新、回滚、证书、依赖）的说明见 [docs/DEPLOY.md](DEPLOY.md)。
 
 ### Web 界面
 
@@ -68,7 +68,7 @@ GPU 构建需要主机上安装 `nvidia-container-toolkit`。首次运行会将 
 | http  | `8080`   | `STT_WWW_PORT`     |
 | https | `8443`   | `STT_WWW_TLS_PORT` |
 
-打开 `http://<host>:8080`。**TRANSCRIBE** 有两种来源。**FILE** 上传一个音频文件。**DEVICE** 从音频输入实时转录：可以是麦克风或耳麦；Linux 上的 `Monitor of ...` 音源，它承载通过扬声器或耳机播放的一切声音；或者 `Tab or screen audio`，用于浏览器标签页中播放的声音，在操作系统允许的情况下也可以是整个系统的声音。无论哪种方式，结果都会显示在表单下方：要么是纯文本，要么在启用说话人分离时按语句分块显示，每块带有说话人和时间，每个说话人使用各自的颜色，两人同时说话的语句会被标记出来；实时语句会在说话人停顿约一秒后出现。结果可以复制，也可以下载为 TXT 或 JSON。加载了多个模型时（`STT_MODELS`），模式和语言旁边的模型选择框为两种来源选择模型，选项来自 `GET /api/models`，语言列表随所选模型变化。**MODELS** 显示 `GET /api/models` 报告的内容。设置了 `STT_TOKENS` 时，界面只会询问一次令牌，并将其保存在浏览器中。
+打开 `http://<host>:8080`。**TRANSCRIBE** 有三种来源。**FILE** 上传一个音频文件。**DEVICE** 从音频输入实时转录：可以是麦克风或耳麦；Linux 上的 `Monitor of ...` 音源，它承载通过扬声器或耳机播放的一切声音；或者在 Chromium 系浏览器中使用 `Tab or screen audio`，用于浏览器标签页中播放的声音，在操作系统允许的情况下也可以是整个系统的声音。**STREAM** 接受一个流或远程文件的地址（网络电台、HLS、RTMP、RTSP、SRT），由服务器自行读取。无论哪种方式，结果都会显示在表单下方：要么是纯文本，要么在启用说话人分离时按语句分块显示，每块带有说话人和时间，每个说话人使用各自的颜色，两人同时说话的语句会被标记出来；实时语句会在说话人停顿约一秒后出现。结果可以复制，也可以下载为 TXT 或 JSON；在你查看其他页面时，每种来源都会保留其最近一次的结果。FILE 还有一个 **Turns** 模式，即单独调用 `POST /api/diarize`：以时间线的形式画出谁在什么时候说话，每个说话人一条轨道，并标出两人同时说话的片段。加载了多个模型时（`STT_MODELS`），模式和语言旁边的模型选择框为 FILE、DEVICE 和 STREAM 这三种来源选择模型，选项来自 `GET /api/models`，语言列表随所选模型变化；Turns 不做任何转录，因此不发送模型。**MODELS** 显示 `GET /api/models` 报告的内容。设置了 `STT_TOKENS` 时，界面只会询问一次令牌，并将其保存在浏览器中。
 
 浏览器只会把音频设备交给安全页面，因此通过网络访问时，DEVICE 需要经由 https 监听端口使用（在 `http://localhost` 上也可以）。https 监听端口使用自签名证书，由容器在首次启动时创建于 `./data/certs`；把真正的 `stt.crt` 和 `stt.key` 放到那里即可替换它。界面没有构建步骤，也不依赖 CDN：Vue 2 及其依赖库已随项目放在 `www/vendor` 下，因此在无法访问互联网的机器上也能工作。
 
@@ -96,6 +96,10 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 ```
 
 设置了 `STT_TOKENS` 时，只有携带有效令牌的请求才会在响应中得到 `default_model` 和 `models`：与 `GET /api/models` 一样，它们会暴露服务器的配置。不带令牌的健康检查仍然会得到 `status`、`pool_size`、`available` 和 `diarize`。
+
+`GET /api/health?deep=1` 还会让一秒钟的静音逐个通过每个已加载的模型，并将每个模型报告为 `ok`、`busy`（五秒内没有实例空闲出来）或 `failed`：每个转录模型按其 id 列在 `deep.models` 中，`deep.transcriber` 是其中最差的结果，启用说话人分离时还有 `deep.diarizer`。只要有一个失败，就返回 `503`。这会消耗 GPU 算力，因此在设置了 `STT_TOKENS` 时需要令牌；普通检查仍然保持开放，供容器健康检查使用。
+
+`GET /metrics` 提供 Prometheus 指标：按路由和状态统计的请求数、请求耗时、按类别统计的错误响应、池大小和空闲实例数、正在运行和已启动的实时会话、被语音检测器丢弃的片段，以及因会话落后而被舍弃的实时音频。不带标签的 `stt_pool_*` 指标描述默认模型和说话人分离器；`stt_model_pool_size` 和 `stt_model_pool_available` 则以 `model` 和 `backend` 为标签，覆盖每个已加载的模型。与健康检查一样，它不需要令牌，而且 `stt_www` 不会代理它：请直接抓取 `STT_PORT`。在 gunicorn 下，每个工作进程各自计数。
 
 `POST /api/stt` 接受名为 `file` 的 `multipart/form-data` 字段，或一个原始的 `audio/*` 请求体。可选的 `model`（查询字符串或表单字段）从已加载的模型中选择一个：可以是它的 id、别名（`large-v3-turbo`、`parakeet-tdt-0.6b-v3`）、`backend:model` 形式，或者只写后端名称；后端名称表示默认模型（如果它属于该后端），否则表示该后端的第一个模型。不带 `model` 时由默认模型处理。可选的 `language`（查询字符串或表单字段）会为该请求覆盖服务器默认值；`auto` 表示自动检测。成功时返回文本、耗时秒数、执行转录的模型以及语言：即 Whisper 检测到或使用的代码（仅英语模型始终为 `en`），Parakeet 不报告语言，因此为 `null`。
 
@@ -146,7 +150,7 @@ curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
 }
 ```
 
-`id` 是请求作为 `model` 传入的值，并且恰好有一行的 `default` 为 `true`：它的 id 就是 `default_model`，它的后端就是顶层的 `default`。`pool_size` 和 `available` 描述该模型的池。当模型的实例存在（无论空闲还是忙碌）时，`status` 为 `loaded`；当权重已在磁盘上但尚未加载任何内容时为 `installed`；其他情况为 `absent`。已配置但未安装的后端只报告 `absent`，原因写入日志。`accepts_language` 表示 `?language=` 对该后端是否有意义。说话人分离器报告的语言为 `null` 而不是空列表，因为它不产生任何语言的文本。
+`id` 是请求作为 `model` 传入的值，并且恰好有一行的 `default` 为 `true`：它的 id 就是 `default_model`，它的后端就是顶层的 `default`。`pool_size` 和 `available` 描述该模型的池。当实例已加载到该模型的池中时（无论空闲还是忙碌），`status` 为 `loaded`；当权重已在磁盘上但尚未加载任何内容时为 `installed`；其他情况为 `absent`。已配置但未安装的后端只报告 `absent`，原因写入日志。`accepts_language` 表示 `?language=` 对该后端是否有意义。说话人分离器报告的语言为 `null` 而不是空列表，因为它不产生任何语言的文本。
 
 命令行客户端读取的是同一个接口：
 
@@ -193,12 +197,26 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `overlap` 标记的是在该语句期间还有其他人同时在说话。NVIDIA 明确指出，将传统的单说话人模型与说话人分离配合使用，并不等同于一个为重叠语音而构建的模型：被截取出来的时间区间里仍然包含所有与之重叠的声音，因此这些语句可能会混在一起，或者选中错误说话人的话语。把标记了 `overlap` 的片段视为转录结果最不可信的地方。
 
+**长录音通过任务处理。** `POST /api/jobs` 接受与 `/api/stt` 相同的请求体形式，上限为 `JOB_MAX_CONTENT_LENGTH_MB`（1 GB），另加一个 `mode`：`text`（默认）、`speakers`（即 `/api/transcript` 的结果）或 `turns`（即 `/api/diarize` 的结果）。它会立即返回 `202`，附带任务的 id 和一个用于轮询的 `Location`：
+
+```bash
+curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
+curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+```
+
+```json
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+```
+
+`status` 依次经历 `queued`（附带其 `position`）、`running`，然后是带有 `result` 的 `done`，或带有 `error` 类别的 `failed`。`GET /api/jobs` 列出所有任务，`DELETE /api/jobs/<id>` 删除一个未在运行的任务。任务把文件在停顿处切成约一分钟一段逐段处理，并在段与段之间归还模型，因此任务运行期间短请求依然能得到响应：在部署所用的 GPU 上，一段 30 分钟的录音耗时 107 秒，其间发送的电话通话请求最多耗时 10 秒。说话人分离以模型的流式模式贯穿整个文件运行，因此同一说话人从第一分钟到最后一分钟都保持同一个编号。任务以文件形式保存在 `JOBS_DIR` 下，因此重启后依然存在，已完成的任务会在 `JOB_RETENTION_HOURS` 之后被删除。任务不接受 `model`：它在默认模型上运行，其 `language` 也按默认模型检查。
+
 `/api/stream` 是一个用于**实时转录**的 WebSocket：音频边录制边送入，每个语句会在说话人停顿约一秒后返回。JSON 文本消息承载控制信息，二进制消息承载音频：
 
 1. 客户端发送 `{"type": "start", "model": "turbo", "language": "ru", "diarize": true, "token": "<token>"}`。除 `type` 外的所有字段都是可选的。`model` 与 `/api/stt` 的 `model` 一样，从已加载的模型中选择一个，语言也按该模型检查；省略时使用默认模型，语言也像以前一样只检查它是否是一种语言，因此默认模型不认识的代码会在转录某个短语时失败。`token` 是浏览器进行身份验证的方式，因为浏览器无法在 WebSocket 上设置请求头；其他客户端也可以改为在握手时发送 `Authorization: Bearer <token>`。
 2. 服务器回应 `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "model": "turbo", "language": "ru", "diarize": true, "source": "client"}`。
-3. 客户端以任意大小的二进制消息发送原始 PCM（有符号 16 位、小端序、单声道、16 kHz），完成后发送 `{"type": "stop"}`。
-4. 服务器为每个语句发送一条 `segment`，大约每秒发送一次 `progress`，并在关闭前发送 `done`：
+3. 客户端按录制的速度，以任意大小的二进制消息发送原始 PCM（有符号 16 位、小端序、单声道、16 kHz），完成后发送 `{"type": "stop"}`。以快于实时的速度发送的文件按设计会逐渐落后并丢失语句（见下文的 `skipped`）；文件应当交给任务处理。
+4. 服务器为每个语句发送一条 `segment`，大约每秒发送一次 `progress`；如果会话一度落后超过两分钟，还会发送 `skipped`，其中给出被丢弃音频的秒数；并在关闭前发送 `done`：
 
 ```json
 { "type": "segment", "id": 3, "start": 6.88, "end": 8.2, "text": "This is the second speaker.", "speaker": 1, "overlap": false }
@@ -206,13 +224,17 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 { "type": "done", "segments": 10, "seconds": 21.87, "elapsed": 22.08 }
 ```
 
-音频也可以来自别处。在开始消息中加入 `"source": "url", "url": "https://..."` 后，客户端完全不发送音频：服务器通过 ffmpeg 按音源自身的节奏读取该地址上的流，直到流结束或客户端发送 `stop`。网络电台、HLS、RTMP、RTSP 和 SRT 都可以使用；协议方案必须是 `http`、`https`、`rtmp`、`rtmps`、`rtsp` 或 `srt`，并且 ffmpeg 被限制为只能使用网络协议，因此 URL 或播放列表无法让它读取本地文件。但这仍然会让服务器去访问由客户端选定的地址，包括服务器自身所在网络中的地址：在任何他人可以访问到的服务器上，都请设置 `STT_TOKENS`。
+音频也可以来自别处。在开始消息中加入 `"source": "url", "url": "https://..."` 后，客户端完全不发送音频：服务器通过 ffmpeg 读取该地址上的流，直到流结束或客户端发送 `stop`。网络电台、HLS、RTMP、RTSP 和 SRT 都可以使用；协议方案必须是 `http`、`https`、`rtmp`、`rtmps`、`rtsp` 或 `srt`。实时音源已经积压的部分会被一次性读取，其余部分则按音源自身的节奏读取，因此远程文件会像广播一样到达。
 
-失败时会发送一条 `{"type": "error", "error": "<category>", "request_id": "..."}`，随后关闭连接；错误类别与 HTTP 接口相同，另外还有 `Invalid start message`、`Invalid audio frame`、`Invalid stream URL` 和 `Stream source failed`。
+由于这会让服务器去访问由客户端选定的地址，因此它受到了限制。ffmpeg 只能使用网络协议，因此 URL 和播放列表都无法让它读取本地文件，也没有任何办法让它进入监听状态：SRT 的 `listener` 和 `rendezvous` 模式以及任何 `listen` 参数都会被拒绝。指向或解析到服务器自身（回环地址）、链路本地地址（例如位于 `169.254.169.254` 的云元数据服务）或 `0.0.0.0` 的地址会以 `Invalid stream URL` 被拒绝；该检查在会话开始时进行，之后 ffmpeg 仍会跟随重定向和播放列表。其他站点上的页面无法启动 URL 音源（`Forbidden`）：浏览器不会对 WebSocket 应用 CORS，因此该套接字会检查页面的来源（origin）是否为本主机，或是否列在 `CORS_ORIGINS` 中。每个服务器进程最多同时运行四个 URL 音源（超出时返回 `Service Unavailable`），因此有多个 worker 的 gunicorn 在每个 worker 中都允许这么多；日志记录每个地址时会去掉其中的凭据和查询字符串。它仍然可以访问服务器自身所在网络中的主机，这对摄像头来说正是用途所在，也是在他人可以访问到的服务器上设置 `STT_TOKENS` 的原因。
 
-一个语句在出现 0.6 秒的停顿时结束，或者在持续超过 15 秒后于其最安静的时刻切分；每个语句单独转录，所用模型从与上传请求相同的池中借用，因此池繁忙时实时语句只会被延迟，而不会失败。启用 `diarize` 时，说话人分离器以流式模式运行，并在各个音频块之间延续说话人缓存，因此同一说话人在整个会话中保持同一个编号。只有当服务器在 uvicorn 下运行时（`python3 stt_server.py`，即 Docker 的默认方式）才存在该套接字：Flask 调试服务器和 gunicorn 的 sync 工作进程都不支持 WebSocket。
+失败时会发送一条 `{"type": "error", "error": "<category>", "request_id": "..."}`，随后关闭连接；错误类别与 HTTP 接口相同，另外还有 `Invalid start message`、`Invalid audio frame`、`Invalid stream URL`、`Stream source failed` 和 `Forbidden`。
 
-上传大小上限为 `MAX_CONTENT_LENGTH_MB`（默认 10 MB）；更大的请求体返回 `413`。
+一个语句在出现 0.6 秒的停顿时结束，或在说话人分离器听到一个说话人把话交给另一个说话人时结束（需启用 `diarize`，因为互相应答的人之间的停顿往往不到 0.6 秒），或者在持续超过 15 秒后于其最安静的时刻切分；每个语句单独转录，所用模型从与上传请求相同的池中借用，因此池繁忙时实时语句只会被延迟，而不会失败。启用 `diarize` 时，说话人分离器以流式模式运行，并在各个音频块之间延续说话人缓存，因此同一说话人在整个会话中保持同一个编号。当服务器在 uvicorn 下运行时，该套接字才存在：包括 `python3 stt_server.py`（即 Docker 的默认方式），以及通过 `GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker` 提供 `stt_server:asgi_app` 的 gunicorn；Flask 调试服务器和 gunicorn 默认的 sync 工作进程下则没有该套接字，因为它们不支持 WebSocket。
+
+**只返回真正说出的文本。** 在没有语音的地方，比如提示音、音乐、噪声、回铃音，甚至数字静音，Whisper 会用它学习过的带字幕视频的片尾署名来作答（一条俄语署名"字幕制作：DimaTorzok"、"未完待续..."、"感谢观看。"），而且十分笃定：在测试语料上，即便是静音，它自己的 `no_speech_prob` 也是 0.00。因此，每个接口都会用语音检测器 Silero VAD 扫描音频，丢弃大部分落在检测到的语音之外的转录片段，以及任何整段都是字幕署名行的片段。在一个由九段无语音录音组成的语料上，这一做法去除了所有此类行，同时保留了语音录音中的每一个语句。没有任何人说话的录音现在会得到空文本。在实时流中，未检测到语音的语句甚至不会被送入模型。检测器在 CPU 上运行，每三分钟音频大约增加一秒。`SPEECH_GATE=false` 可恢复旧的行为。
+
+上传大小上限为 `MAX_CONTENT_LENGTH_MB`（直接运行服务器时为 10 MB，Docker 部署中为 100 MB）；更大的请求体返回 `413`。
 
 错误格式统一：`error` 携带一个通用类别，`request_id` 将响应与服务器日志关联起来，完整的异常信息记录在日志中。
 
@@ -255,6 +277,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | 最大上传大小（MB）；更大的请求体返回 `413`         |
 | `CORS_ORIGINS`          | `*`                     | 允许的 CORS 来源：`*` 或逗号分隔的列表             |
 | `GUNICORN_WORKERS`      | `4`                     | 工作进程数量（仅 gunicorn）                        |
+| `GUNICORN_WORKER_CLASS` | `sync`                  | `uvicorn_worker.UvicornWorker` 会加上 `/api/stream`（仅 gunicorn） |
 | `LOG_LEVEL`             | `INFO`                  | 日志级别                                           |
 | `LOG_ACCESS`            | `false`                 | 记录 uvicorn 访问日志行                            |
 | `WHISPER_MODEL`         | `small.en`              | Whisper 模型名称（例如 `small.en`、`turbo`）（`STT_MODELS` 为空时） |
@@ -271,6 +294,12 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `DIARIZE_POOL_SIZE`     | `1`                     | 预加载的说话人分离实例数量                         |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | 说话人分离模型缓存目录                             |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | 判定为语音的说话人活动概率                         |
+| `JOBS_DIR`              | `recs/jobs`             | 任务存放上传文件、记录和结果的位置                  |
+| `JOB_MAX_CONTENT_LENGTH_MB` | `1024`              | 单个任务的最大上传大小（MB）                        |
+| `JOB_RETENTION_HOURS`   | `24`                    | 已完成的任务在多少小时后被删除                      |
+| `SPEECH_GATE`           | `true`                  | 丢弃无人说出的转录文本（语音检测器）                |
+| `STT_UID`, `STT_GID`    | （镜像中的 `stt`，1001） | 拥有 `models/`、`logs/`、`recs/` 的主机用户（Docker） |
+| `HF_HUB_OFFLINE`        | `0`                     | 模型缓存完成后设为 `1`：启动时不再请求 hub          |
 | `STT_WWW_PORT`          | `8080`                  | Web 界面的 http 端口（compose）                     |
 | `STT_WWW_TLS_PORT`      | `8443`                  | Web 界面的 https 端口（compose）                    |
 | `STT_URL`               | `http://localhost:5099` | 客户端：服务器基础 URL                             |
@@ -294,6 +323,11 @@ speech-to-text/
 │   ├── align.py         # joins transcription segments to speaker turns
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
+│   ├── url_source.py    # URL sources for /api/stream: vetting the address, running ffmpeg
+│   ├── speech_gate.py   # voice detector that drops text nobody spoke
+│   ├── metrics.py       # Prometheus metrics for GET /metrics
+│   ├── jobs.py          # background jobs: stored on disk, claimed with a lock, run by a worker thread
+│   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
 │   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
@@ -304,7 +338,8 @@ speech-to-text/
 ├── Dockerfile-www       # web UI image (nginx)
 ├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS
 ├── www/                 # web UI: Vue 2 without a build step, libraries vendored
-├── docs/                # README translations
+├── constraints.txt      # every dependency version the tested image resolved
+├── docs/                # DEPLOY.md and the README translations
 └── tests/               # pytest tests, no model downloads and no GPU
 ```
 

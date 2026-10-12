@@ -253,6 +253,8 @@ def test_init_refuses_an_invalid_list_before_loading_anything(client, monkeypatc
 
 def test_an_unknown_stt_backend_warns_at_startup_only(client, monkeypatch, caplog):
     """The fallback is announced once by validation, not on every healthcheck that resolves the spec."""
+    # Warned at most once per process, so a value an earlier test already warned about would stay silent.
+    monkeypatch.setattr(backends, "UNKNOWN_BACKENDS_LOGGED", set())
     monkeypatch.setattr(config, "STT_BACKEND", "parrakeet")
     with caplog.at_level(logging.WARNING):
         assert client.get("/api/health").get_json()["default_model"] == "small.en-stub"

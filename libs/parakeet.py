@@ -53,6 +53,10 @@ LANGUAGES = (
 )
 LANGUAGES_BY_MODEL = {"nvidia/parakeet-tdt-0.6b-v3": LANGUAGES}
 
+# get_stt_segments returns words, not phrases (see group_tokens). The live stream reads this to
+# join them into phrases before sending; a backend without the name returns phrases.
+WORD_SEGMENTS = True
+
 
 def resolve_device(device: str | None = None) -> str:
     """Resolve "auto" to cuda/cpu and reject a device this machine cannot serve."""
@@ -189,17 +193,20 @@ def get_stt_result(
     device: str | None = None,
     language: str | None = None,
 ) -> dict:
-    """Transcribe a WAV buffer and return `{"text", "language"}`.
+    """Transcribe a WAV buffer and return `{"text", "language", "segments"}` from one decode.
 
     `language` is accepted and ignored, so this module is interchangeable with libs/stt.py:
     the model detects the language itself and takes no such argument. GET /api/models reports
     `accepts_language: false` so a caller is told rather than left to wonder. The reported
-    language is always None, because the model does not say which one it detected.
+    language is always None, because the model does not say which one it detected. `segments`
+    are the words get_stt_segments returns, from the same decode.
     """
     if language:
         logger.debug("Parakeet detects the language itself; ignoring the requested %s", language)
-    text, unused_timestamps = transcribe_tokens(bio, model=model, device=device)
-    return {"text": text.strip(), "language": None}
+    text, tokens = transcribe_tokens(bio, model=model, device=device)
+    segments = group_tokens(tokens)
+    logger.debug("Transcribed %d words from %d tokens", len(segments), len(tokens))
+    return {"text": text.strip(), "language": None, "segments": segments}
 
 
 def get_stt_bio(
@@ -218,13 +225,8 @@ def get_stt_segments(
     device: str | None = None,
     language: str | None = None,
 ) -> list[dict]:
-    """Transcribe a WAV buffer and return its words with their times, for the speaker join."""
-    if language:
-        logger.debug("Parakeet detects the language itself; ignoring the requested %s", language)
-    unused_text, tokens = transcribe_tokens(bio, model=model, device=device)
-    segments = group_tokens(tokens)
-    logger.debug("Transcribed %d words from %d tokens", len(segments), len(tokens))
-    return segments
+    """Transcribe a WAV buffer and return its words with their times, for the speaker join; see get_stt_result."""
+    return get_stt_result(bio, model=model, device=device, language=language)["segments"]
 
 
 def main():

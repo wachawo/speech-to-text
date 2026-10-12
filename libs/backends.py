@@ -15,7 +15,9 @@ logger = logging.getLogger(__name__)
 # get_stt_bio, get_stt_segments, describe_backend, resolve_languages, list_aliases and
 # list_known_models - so callers resolve the MODULE and then call it by name. A dispatcher that
 # resolved the function instead would silently defeat every test that patches
-# `stt.get_stt_result`.
+# `stt.get_stt_result`. get_stt_result returns {text, language, segments} from one decode, so a
+# caller that needs both the text and the segments never runs the model twice. WORD_SEGMENTS is
+# optional: a module that sets it returns words from get_stt_segments, not phrases.
 TRANSCRIBERS: dict[str, ModuleType] = {"whisper": stt, "parakeet": parakeet}
 
 DEFAULT_TRANSCRIBER = "whisper"
@@ -27,13 +29,20 @@ AUTODETECT = "auto"
 INVALID_LANGUAGE = "Invalid language"
 UNSUPPORTED_LANGUAGE = "Unsupported language"
 
+# Unknown STT_BACKEND values already warned about, so a typo costs one line per process however
+# often the name is resolved. Per-request code does not ask (libs/registry.py resolves the backend
+# silently); this guards any caller that does.
+UNKNOWN_BACKENDS_LOGGED: set[str] = set()
+
 
 def transcriber_name() -> str:
     """The configured backend name, falling back to the default when it names nothing real."""
     name = config.STT_BACKEND
     if name in TRANSCRIBERS:
         return name
-    logger.warning("STT_BACKEND=%s is not a known backend; using %s", name, DEFAULT_TRANSCRIBER)
+    if name not in UNKNOWN_BACKENDS_LOGGED:
+        UNKNOWN_BACKENDS_LOGGED.add(name)
+        logger.warning("STT_BACKEND=%s is not a known backend; using %s", name, DEFAULT_TRANSCRIBER)
     return DEFAULT_TRANSCRIBER
 
 

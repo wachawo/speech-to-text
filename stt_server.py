@@ -5,25 +5,46 @@
 import io
 import logging
 import queue
+import shutil
 import time
 import traceback
 import uuid
+from functools import partial
 from typing import Any, cast
 
+import numpy as np
 from flask import Flask, g, jsonify, request
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Local imports
-from libs import align, audio, backends, catalog, config, diarize, live, logs, model_pool, registry
+from libs import (
+    align,
+    audio,
+    backends,
+    catalog,
+    config,
+    diarize,
+    jobs,
+    live,
+    logs,
+    metrics,
+    model_pool,
+    registry,
+    speech_gate,
+    stream,
+    url_source,
+)
 from libs.auth import is_request_authorized, token_required
 from libs.errors import build_error_response, get_request_id, register_error_handlers
 
 logs.setup_logging()
 logger = logging.getLogger(__name__)
 
-# Path whose access log is demoted to DEBUG so healthchecks do not flood the log.
-QUIET_PATH = "/api/health"
+JOBS_PATH = "/api/jobs"
+
+# Paths whose access log is demoted to DEBUG so healthchecks and scrapes do not flood the log.
+QUIET_PATHS = ("/api/health", "/metrics")
 
 
 def create_app() -> Flask:
@@ -39,19 +60,31 @@ def create_app() -> Flask:
 
 app = create_app()
 
+metrics.LIVE_STATE.update(
+    # Detailed whatever the default: the per-model gauges are built from the `models` map.
+    pools=partial(model_pool.get_pool_status, detailed=True),
+    sessions=lambda: live.ACTIVE_SESSIONS,
+    url_sessions=lambda: url_source.URL_SESSIONS,
+)
+metrics.register_live_gauges()
+
 
 @app.before_request
 def before_request():
     """Tag the request so every log line and every error body can be correlated."""
     g.request_id = uuid.uuid4().hex[:12]
     g.request_start = time.monotonic()
+    # A job exists for recordings too long for a synchronous request, so it takes far larger files.
+    if request.path == JOBS_PATH and request.method == "POST":
+        request.max_content_length = config.JOB_MAX_CONTENT_LENGTH_MB * 1024 * 1024
 
 
 @app.after_request
 def after_request(resp):
     """Log one access line per request with its id, status and duration."""
     elapsed = time.monotonic() - getattr(g, "request_start", time.monotonic())
-    log_request = logger.debug if request.path == QUIET_PATH else logger.info
+    metrics.observe_request(request.url_rule.rule if request.url_rule else None, request.method, resp.status_code, elapsed)
+    log_request = logger.debug if request.path in QUIET_PATHS else logger.info
     log_request(
         "[%s] %s %s: %s (%.2fs)",
         get_request_id(),
@@ -100,41 +133,102 @@ def read_model_argument() -> str | None:
     return model.strip() or None
 
 
-def resolve_request_options() -> tuple[dict[str, Any] | None, str | None, str | None]:
+def resolve_request_options(accept_model: bool = True) -> tuple[dict[str, Any] | None, str | None, Any]:
     """Resolve the request's model and then its language against that model.
 
-    Returns (spec, language, None), or (None, None, error category) for a 400. Both checks run
-    before the audio is decoded and before any instance is borrowed, so a bad request costs
-    nothing. `explicit` is whether the client named a model: one that did gets the language
-    checked against that model's own list, one that did not keeps the lenient behaviour it
-    always had.
+    Returns (spec, language, None) - the language None when the request names none - or
+    (None, None, the 400 to answer). Both checks run before the audio is decoded and before any
+    instance is borrowed, so a bad request costs nothing. A client that named a model gets the
+    language checked against that model's own list; one that did not keeps the lenient
+    behaviour it always had. Without `accept_model` the request's `model` is not read at all
+    and the language is checked against the default model, which is what serves the request.
     """
-    requested_model = read_model_argument()
+    requested_model = read_model_argument() if accept_model else None
     spec, error = registry.resolve_request_model(requested_model)
     if spec is None:
-        return None, None, error
+        return None, None, build_error_response(error or registry.INVALID_MODEL, 400)
     language, error = backends.resolve_language(read_language_argument(), spec, explicit=requested_model is not None)
     if error is not None:
-        return None, None, error
+        return None, None, build_error_response(error, 400)
     return spec, language, None
+
+
+def diarization_refusal():
+    """The 503 for a request that needs the diarizer when there is none, or None when there is one."""
+    if not config.DIARIZE_ENABLED:
+        logger.warning("[%s] %s needs diarization, which is disabled", get_request_id(), request.path)
+        return build_error_response("Diarization disabled", 503)
+    if not model_pool.diarizer_ready():
+        logger.warning("[%s] %s needs diarization, but no diarizer is loaded", get_request_id(), request.path)
+        return build_error_response("Diarization unavailable", 503)
+    return None
 
 
 def convert_upload(bio):
     """Turn an uploaded buffer into a 16 kHz mono WAV, or None when it is not decodable audio.
 
-    Owns the logging of the failure so both routes can treat it as a plain None check.
+    Owns the logging of the failure so both routes can treat it as a plain None check. A WARNING
+    without a traceback: an upload that is not audio is the client's mistake, answered with 400,
+    and a traceback per bad file would bury the server's own errors.
     """
     try:
         return audio.convert_to_wav(bio)
     except Exception as exc:
-        logger.error(
-            "[%s] Audio conversion failed: %s: %s\n%s",
-            get_request_id(),
-            type(exc).__name__,
-            exc,
-            traceback.format_exc(),
-        )
+        logger.warning("[%s] Audio conversion failed: %s: %s", get_request_id(), type(exc).__name__, str(exc)[:300])
         return None
+
+
+# How long the deep health check waits for a free model before reporting it busy rather than broken.
+DEEP_CHECK_TIMEOUT = 5
+
+# Deep check outcomes from best to worst; `transcriber` reports the worst of the loaded models.
+CHECK_SEVERITY = ("ok", "busy", "failed")
+
+
+def check_model(acquire, release, run) -> str:
+    """Borrow one pooled instance, run it once: "ok", "busy" when none frees up, or "failed"."""
+    try:
+        instance = acquire(timeout=DEEP_CHECK_TIMEOUT)
+    except queue.Empty:
+        return "busy"
+    try:
+        run(instance)
+        return "ok"
+    except Exception as exc:
+        logger.error(
+            "[%s] Deep health check failed: %s: %s\n%s", get_request_id(), type(exc).__name__, exc, traceback.format_exc()
+        )
+        return "failed"
+    finally:
+        release(instance)
+
+
+def check_transcriber(spec: dict[str, Any], silence: np.ndarray) -> str:
+    """Run one loaded model once, with an instance borrowed from and returned to its own pool."""
+    transcriber = backends.transcriber_for_backend(spec["backend"])
+    return check_model(
+        partial(model_pool.acquire_model, model_id=spec["id"]),
+        partial(model_pool.release_model, model_id=spec["id"]),
+        lambda model: transcriber.get_stt_segments(stream.encode_wav(silence), model=model, language=None),
+    )
+
+
+def run_deep_check() -> dict[str, Any]:
+    """Push one second of silence through every loaded model, one at a time, the way a request would.
+
+    Each transcription model is reported by its id under `models`, and `transcriber` is the worst
+    of them, so a check that reads only that line still sees one broken model among several.
+    """
+    silence = np.zeros(speech_gate.SAMPLE_RATE, dtype=np.int16)
+    models = {spec["id"]: check_transcriber(spec, silence) for spec in registry.get_model_specs()}
+    results: dict[str, Any] = {"transcriber": max(models.values(), key=CHECK_SEVERITY.index), "models": models}
+    if config.DIARIZE_ENABLED:
+        results["diarizer"] = check_model(
+            model_pool.acquire_diarizer,
+            model_pool.release_diarizer,
+            lambda diarizer: diarize.diarize_wav(stream.encode_wav(silence), diarizer=diarizer),
+        )
+    return results
 
 
 @app.route("/api/health", methods=["GET"])
@@ -145,8 +239,32 @@ def health():
     default model (available=0 means every instance of it is busy). `default_model` and `models`
     (every loaded model's pool by id) name the deployment's configuration, so like /api/models
     they are only included for a caller that passes the token check, or when auth is off.
+
+    `?deep=1` also runs one second of silence through every loaded model, one at a time, and
+    reports each as ok, busy or failed - every transcription model by its id under
+    `deep.models`, `deep.transcriber` the worst of them, `deep.diarizer` when diarization is on -
+    answering 503 if any failed. That costs GPU work, so while STT_TOKENS is set it needs a token
+    like every other route; the plain check stays open for container healthchecks.
     """
-    return jsonify({"status": "ok", **model_pool.get_pool_status(detailed=is_request_authorized())}), 200
+    authorized = is_request_authorized()
+    body = {"status": "ok", **model_pool.get_pool_status(detailed=authorized)}
+    if request.args.get("deep", "").lower() not in config.TRUE_VALUES:
+        return jsonify(body), 200
+    if not authorized:
+        logger.warning("[%s] Unauthorized deep health check", get_request_id())
+        return build_error_response("Unauthorized", 401)
+    body["deep"] = run_deep_check()
+    if "failed" in body["deep"].values():
+        body["status"] = "failed"
+        return jsonify(body), 503
+    return jsonify(body), 200
+
+
+@app.route("/metrics", methods=["GET"])
+def prometheus_metrics():
+    """Prometheus metrics. Open like /api/health, and like it not proxied by stt_www: scrape :STT_PORT."""
+    body, content_type = metrics.render()
+    return body, 200, {"Content-Type": content_type}
 
 
 @app.route("/api/models", methods=["GET"])
@@ -159,9 +277,9 @@ def list_models():
 
     One row per loaded model (a request may name its `id` as `model`), one row for a
     transcriber with nothing loaded, and the diarizer when it is on. `status` is one of
-    `loaded` (instances of it exist, idle or busy), `installed` (the weights are on disk but
-    nothing is loaded yet) or `absent`. A backend that is configured but not installed says
-    `absent` and nothing more; the reason is in the log.
+    `loaded` (instances were loaded into its pool, free or busy), `installed` (the weights are
+    on disk but nothing is loaded yet) or `absent`. A backend that is configured but not
+    installed says `absent` and nothing more; the reason is in the log.
 
     `selectable` says whether a request may name the row as its `model`, `pool_size` and
     `available` are that model's pool, and exactly one row has `default` true: its id is the
@@ -171,6 +289,22 @@ def list_models():
     `accepts_language` says whether `?language=` means anything to that backend at all.
     """
     return jsonify(catalog.list_models()), 200
+
+
+def transcribe_text(wav_bio, model, language, spec) -> tuple[str, str | None]:
+    """The plain transcript and its language; with the speech gate on, built only from segments that were spoken.
+
+    Without the gate the text is exactly what it always was. With it, the text is the joined
+    segment texts - what the transcriber's own text is made of - minus the ones the gate drops, so
+    a recording with speech in it reads the same and one without reads empty instead of a
+    subtitle credit such as "to be continued...". Either way one decode by the spec's backend
+    gives the text, the segments and the language the model reports.
+    """
+    result = backends.transcriber_for_backend(spec["backend"]).get_stt_result(wav_bio, model=model, language=language)
+    if not config.SPEECH_GATE:
+        return result["text"], result["language"]
+    kept = speech_gate.gate_wav(wav_bio, result["segments"], get_request_id())
+    return "".join(segment["text"] for segment in kept).strip(), result["language"]
 
 
 @app.route("/api/stt", methods=["POST"])
@@ -200,9 +334,9 @@ def transcribe():
     bio, filename = upload
     size_kb = len(bio.getvalue()) // 1024
 
-    spec, language, error = resolve_request_options()
+    spec, language, refusal = resolve_request_options()
     if spec is None:
-        return build_error_response(error or "Invalid model", 400)
+        return refusal
 
     wav_bio = convert_upload(bio)
     if wav_bio is None:
@@ -215,8 +349,7 @@ def transcribe():
         return build_error_response("Service Unavailable", 503)
 
     try:
-        result = backends.transcriber_for_backend(spec["backend"]).get_stt_result(wav_bio, model=model, language=language)
-        text = result["text"]
+        text, detected = transcribe_text(wav_bio, model, language, spec)
         elapsed = time.monotonic() - start_time
         logger.info(
             "[%s] STT %s (%dkb) model=%s language=%s - %d chars (%.2fs)",
@@ -224,11 +357,11 @@ def transcribe():
             filename,
             size_kb,
             spec["id"],
-            result["language"],
+            detected,
             len(text),
             elapsed,
         )
-        return jsonify({"text": text, "elapsed": round(elapsed, 3), "model": spec["id"], "language": result["language"]}), 200
+        return jsonify({"text": text, "elapsed": round(elapsed, 3), "model": spec["id"], "language": detected}), 200
     except Exception as exc:
         logger.error(
             "[%s] STT failed: %s: %s\n%s",
@@ -257,9 +390,9 @@ def diarize_speakers():
     Returns::
         {"segments": [{"speaker": 0, "start": 0.51, "end": 12.62}], "speakers": 2, "elapsed": 1.23}
     """
-    if not config.DIARIZE_ENABLED:
-        logger.warning("[%s] Diarization requested while disabled", get_request_id())
-        return build_error_response("Diarization disabled", 503)
+    refusal = diarization_refusal()
+    if refusal is not None:
+        return refusal
 
     start_time = time.monotonic()
 
@@ -272,10 +405,6 @@ def diarize_speakers():
     wav_bio = convert_upload(bio)
     if wav_bio is None:
         return build_error_response("Invalid audio data", 400)
-
-    if not model_pool.diarizer_ready():
-        logger.warning("[%s] Diarization enabled but no diarizer loaded", get_request_id())
-        return build_error_response("Diarization unavailable", 503)
 
     try:
         diarizer = model_pool.acquire_diarizer()
@@ -352,12 +481,9 @@ def transcribe_by_speaker():
     Returns::
         {"segments": [...], "turns": [...], "speakers": 2, "text": "...", "elapsed": 1.23, "model": "turbo"}
     """
-    if not config.DIARIZE_ENABLED:
-        logger.warning("[%s] Speaker transcript requested while diarization is disabled", get_request_id())
-        return build_error_response("Diarization disabled", 503)
-    if not model_pool.diarizer_ready():
-        logger.warning("[%s] Speaker transcript requested but no diarizer loaded", get_request_id())
-        return build_error_response("Diarization unavailable", 503)
+    refusal = diarization_refusal()
+    if refusal is not None:
+        return refusal
 
     start_time = time.monotonic()
 
@@ -367,9 +493,9 @@ def transcribe_by_speaker():
     bio, filename = upload
     size_kb = len(bio.getvalue()) // 1024
 
-    spec, language, error = resolve_request_options()
+    spec, language, refusal = resolve_request_options()
     if spec is None:
-        return build_error_response(error or "Invalid model", 400)
+        return refusal
 
     wav_bio = convert_upload(bio)
     if wav_bio is None:
@@ -393,6 +519,8 @@ def transcribe_by_speaker():
         logger.error("[%s] STT failed: %s: %s\n%s", get_request_id(), type(exc).__name__, exc, traceback.format_exc())
         return build_error_response("Transcription failed", 500)
 
+    if config.SPEECH_GATE:
+        segments = speech_gate.gate_wav(wav_bio, segments, get_request_id())
     attributed = align.attribute_segments(segments, turns)
     elapsed = time.monotonic() - start_time
     speakers = align.count_speakers(attributed)
@@ -421,6 +549,103 @@ def transcribe_by_speaker():
         ),
         200,
     )
+
+
+def job_view(job: dict[str, Any]) -> dict[str, Any]:
+    """What a client sees of a job record, with its place in the queue while it waits."""
+    view = {
+        key: job.get(key)
+        for key in (
+            "id",
+            "status",
+            "mode",
+            "language",
+            "filename",
+            "size",
+            "created",
+            "started",
+            "finished",
+            "seconds",
+            "error",
+        )
+    }
+    view["position"] = jobs.queue_position(job)
+    return view
+
+
+@app.route(JOBS_PATH, methods=["POST"])
+@token_required
+def submit_job():
+    """Accept a recording for background processing and answer at once with the job's id.
+
+    The same body shapes as /api/stt, up to JOB_MAX_CONTENT_LENGTH_MB. `mode` is `text` (the
+    default), `speakers` (the /api/transcript result) or `turns` (the /api/diarize result);
+    `language` as everywhere else. A job takes no `model`: it runs on the default model, so the
+    language is checked against that one. The upload is written to disk as it arrives, never
+    held whole in memory. Returns 202 with the job record and a Location to poll.
+    """
+    mode = (request.args.get("mode") or request.form.get("mode") or "text").strip().lower()
+    if mode not in jobs.MODES:
+        return build_error_response("Invalid mode", 400)
+    if mode != "text":
+        refusal = diarization_refusal()
+        if refusal is not None:
+            return refusal
+    unused_spec, language, refusal = resolve_request_options(accept_model=False)
+    if refusal is not None:
+        return refusal
+    if "file" in request.files:
+        upload = request.files["file"]
+        filename = upload.filename or "upload"
+
+        def save_input(path):
+            """Stream the multipart file to disk."""
+            upload.save(path)
+
+    elif request.content_length:
+        filename = "raw_body"
+
+        def save_input(path):
+            """Stream the raw body to disk."""
+            with open(path, "wb") as handle:
+                shutil.copyfileobj(request.stream, handle)
+
+    else:
+        return build_error_response("No audio data", 400)
+    job = jobs.create_job(save_input, filename, mode, language)
+    return jsonify(job_view(job)), 202, {"Location": f"{JOBS_PATH}/{job['id']}"}
+
+
+@app.route(JOBS_PATH, methods=["GET"])
+@token_required
+def list_jobs():
+    """The jobs on this server, newest first, without their results."""
+    return jsonify({"jobs": [job_view(job) for job in reversed(jobs.all_jobs())]}), 200
+
+
+@app.route(f"{JOBS_PATH}/<job_id>", methods=["GET"])
+@token_required
+def get_job(job_id):
+    """A job's state, and its result once it is done - the same shape as the matching endpoint."""
+    job = jobs.read_job(job_id)
+    if job is None:
+        return build_error_response("Job not found", 404)
+    view = job_view(job)
+    if job["status"] == "done":
+        view["result"] = jobs.read_result(job_id)
+    return jsonify(view), 200
+
+
+@app.route(f"{JOBS_PATH}/<job_id>", methods=["DELETE"])
+@token_required
+def remove_job(job_id):
+    """Delete a job and its files. A job being processed right now cannot be deleted: 409."""
+    outcome = jobs.delete_job(job_id)
+    if outcome == "missing":
+        return build_error_response("Job not found", 404)
+    if outcome == "running":
+        return build_error_response("Job is running", 409)
+    return jsonify({"deleted": job_id}), 200
 
 
 def log_auth_mode() -> None:
@@ -456,6 +681,11 @@ def build_asgi_app(wsgi_app):
     return asgi_app
 
 
+# The ASGI entry point for servers that take an application object rather than run main():
+# `gunicorn --config gu.py stt_server:asgi_app` with GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker.
+asgi_app = build_asgi_app(cast(Any, app.wsgi_app))
+
+
 def run_server() -> None:
     """Serve the app: the Flask dev server in debug mode, uvicorn otherwise.
 
@@ -468,9 +698,8 @@ def run_server() -> None:
 
     import uvicorn
 
-    wsgi_app = cast(Any, app.wsgi_app)
     uvicorn.run(
-        build_asgi_app(wsgi_app),
+        asgi_app,
         host=config.STT_HOST,
         port=config.STT_PORT,
         log_level=config.LOG_LEVEL.lower(),
@@ -483,6 +712,9 @@ def main():
     """Entry point: fill every model's pool, then serve."""
     model_pool.init_model_pool()
     model_pool.init_diarizer_pool()
+    if config.SPEECH_GATE:
+        speech_gate.find_speech(np.zeros(speech_gate.SAMPLE_RATE, dtype=np.float32))
+    jobs.start_worker()
     log_auth_mode()
     run_server()
 

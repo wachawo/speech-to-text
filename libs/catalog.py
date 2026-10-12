@@ -22,6 +22,8 @@ BACKENDS = ("whisper", "parakeet", "diarize")
 def describe_configured_model(spec: dict[str, Any], default_id: str) -> dict[str, Any]:
     """The row of one loaded model, upgraded to "loaded" while any instance of it exists.
 
+    Loaded means instances were loaded into its pool, not that one is free right now: with one
+    instance per pool, a free count would read "installed" whenever a request held the model.
     `model` is set to the canonical id, which for a file path is its basename: where the
     weights live on this host is not something the catalogue hands out.
     """
@@ -58,7 +60,7 @@ def describe_diarizer() -> dict[str, Any] | None:
     row["selectable"] = False
     row["pool_size"] = config.DIARIZE_POOL_SIZE
     row["available"] = model_pool.DIARIZER_POOL.qsize()
-    if not model_pool.DIARIZER_POOL.empty():
+    if model_pool.diarizer_ready():
         row["status"] = "loaded"
     return row
 

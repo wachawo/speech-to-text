@@ -4,6 +4,7 @@
 
 import logging
 import queue
+import threading
 import time
 import traceback
 from typing import Any
@@ -30,6 +31,17 @@ MODEL_POOLS: dict[str, queue.Queue] = {}
 # empty queue and is still loaded, which is what this counter lets the catalogue tell apart.
 MODELS_LOADED: dict[str, int] = {}
 DIARIZER_POOL: queue.Queue = queue.Queue()
+
+# Callers blocked in acquire_*, by pool: "diarizer", and "model:<id>" for each transcription model
+# (build_waiting_kind). A queue.Queue is not fair: a thread that puts an instance back and asks again
+# at once gets it before a waiting thread even wakes up. Background work (a long job) checks the pool
+# it borrows from and steps aside, so a phone call's phrase does not wait behind a whole recording.
+WAITING: dict[str, int] = {"diarizer": 0}
+WAITING_LOCK = threading.Lock()
+
+# How long background work keeps stepping aside before it takes its turn anyway, so a steady stream
+# of requests slows a job down without stopping it.
+YIELD_LIMIT_SECONDS = 60
 
 # How many diarizers actually loaded. Zero with diarization switched on means loading failed,
 # which is not the same as "all of them are busy" and must not cost a request the full timeout.
@@ -96,18 +108,53 @@ def init_diarizer_pool(size: int | None = None) -> None:
     logger.info("Diarizer pool ready: %d instances", DIARIZER_POOL.qsize())
 
 
-def get_model_pool(model_id: str | None = None) -> queue.Queue:
-    """The queue of one model; None means the default model."""
-    model_id = registry.get_default_model_id() if model_id is None else model_id
+def get_model_pool(model_id: str) -> queue.Queue:
+    """The queue of one model, by its canonical id; an id nothing was loaded for gets an empty one.
+
+    The id is required, here and in acquire_model / release_model: a default would let a caller that
+    forgot it borrow from, or hand an instance back to, the default model's pool without a word.
+    """
     return MODEL_POOLS.setdefault(model_id, queue.Queue())
 
 
-def acquire_model(timeout: int = MODEL_ACQUIRE_TIMEOUT, model_id: str | None = None) -> Any:
-    """Take an instance of the given (or default) model; raises queue.Empty when none frees up in time."""
-    return get_model_pool(model_id).get(timeout=timeout)
+def build_waiting_kind(model_id: str) -> str:
+    """The WAITING key of one model's pool. Callers of another model never block on this one."""
+    return f"model:{model_id}"
 
 
-def release_model(model: Any, model_id: str | None = None) -> None:
+def count_waiting(kind: str, change: int) -> None:
+    """Record a caller starting or ending its wait for an instance of this kind."""
+    with WAITING_LOCK:
+        WAITING[kind] = WAITING.get(kind, 0) + change
+
+
+def acquire_model(*, model_id: str, timeout: int = MODEL_ACQUIRE_TIMEOUT) -> Any:
+    """Take an instance of one model out of its pool; raises queue.Empty when none frees up in time.
+
+    While it blocks the caller is counted under that pool's kind, so background work borrowing the
+    same model steps aside for it.
+    """
+    kind = build_waiting_kind(model_id)
+    count_waiting(kind, 1)
+    try:
+        return get_model_pool(model_id).get(timeout=timeout)
+    finally:
+        count_waiting(kind, -1)
+
+
+def yield_to_waiters(kind: str) -> None:
+    """Let callers already waiting for this kind of instance take it before background work asks again.
+
+    Call it right after releasing an instance, with the kind it was borrowed under: "diarizer", or
+    build_waiting_kind(model_id) for a transcription model. Returns once nobody waits, or after
+    YIELD_LIMIT_SECONDS.
+    """
+    deadline = time.monotonic() + YIELD_LIMIT_SECONDS
+    while WAITING.get(kind, 0) > 0 and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+
+def release_model(model: Any, *, model_id: str) -> None:
     """Return an instance to the pool of the model it came from."""
     get_model_pool(model_id).put(model)
 
@@ -138,7 +185,11 @@ def diarizer_ready() -> bool:
 
 def acquire_diarizer(timeout: int = DIARIZER_ACQUIRE_TIMEOUT) -> Any:
     """Take a diarizer out of its pool; raises queue.Empty when none frees up in time."""
-    return DIARIZER_POOL.get(timeout=timeout)
+    count_waiting("diarizer", 1)
+    try:
+        return DIARIZER_POOL.get(timeout=timeout)
+    finally:
+        count_waiting("diarizer", -1)
 
 
 def release_diarizer(diarizer: Any) -> None:

@@ -57,7 +57,7 @@ docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
 ```
 
-Der GPU-Build benötigt `nvidia-container-toolkit` auf dem Host. Beim ersten Lauf wird das Whisper-Modell nach `./models` heruntergeladen.
+Der GPU-Build benötigt `nvidia-container-toolkit` auf dem Host. Beim ersten Lauf wird das Whisper-Modell nach `./models` heruntergeladen. Den Betrieb auf einem Server - Updates, Rollbacks, Zertifikate, Abhängigkeiten - behandelt [docs/DEPLOY.md](DEPLOY.md).
 
 ### Web-Oberfläche
 
@@ -68,7 +68,7 @@ Der GPU-Build benötigt `nvidia-container-toolkit` auf dem Host. Beim ersten Lau
 | http     | `8080`        | `STT_WWW_PORT`     |
 | https    | `8443`        | `STT_WWW_TLS_PORT` |
 
-Öffnen Sie `http://<host>:8080`. **TRANSCRIBE** hat zwei Quellen. **FILE** lädt eine Audiodatei hoch. **DEVICE** transkribiert live von einem Audioeingang: einem Mikrofon oder Headset, einer `Monitor of ...`-Quelle unter Linux, die alles führt, was über Lautsprecher oder Kopfhörer wiedergegeben wird, oder `Tab or screen audio` für das, was in einem Browser-Tab läuft, oder im ganzen System, wo das Betriebssystem es zulässt. In beiden Fällen erscheint das Ergebnis unter dem Formular als schlichter Text oder, bei aktivierter Diarisierung, als ein Block pro Phrase mit Sprecher und Zeit, jeder Sprecher in einer eigenen Farbe und die Phrasen markiert, in denen zwei Personen gleichzeitig gesprochen haben; eine Live-Phrase erscheint etwa eine Sekunde, nachdem der Sprecher eine Pause macht. Das Ergebnis lässt sich kopieren oder als TXT oder JSON herunterladen. Sind mehrere Modelle geladen (`STT_MODELS`), wählt eine Modellauswahl neben Modus und Sprache das Modell für beide Quellen, gespeist aus `GET /api/models`, und die Sprachliste folgt dem gewählten Modell. **MODELS** zeigt, was `GET /api/models` meldet. Wenn `STT_TOKENS` gesetzt ist, fragt die Oberfläche einmal nach einem Token und speichert es im Browser.
+Öffnen Sie `http://<host>:8080`. **TRANSCRIBE** hat drei Quellen. **FILE** lädt eine Audiodatei hoch. **DEVICE** transkribiert live von einem Audioeingang: einem Mikrofon oder Headset, einer `Monitor of ...`-Quelle unter Linux, die alles führt, was über Lautsprecher oder Kopfhörer wiedergegeben wird, oder, in Chromium-Browsern, `Tab or screen audio` für das, was in einem Browser-Tab läuft, oder im ganzen System, wo das Betriebssystem es zulässt. **STREAM** nimmt die Adresse eines Streams oder einer entfernten Datei entgegen - Internetradio, HLS, RTMP, RTSP, SRT - und der Server liest sie selbst. In jedem Fall erscheint das Ergebnis unter dem Formular als schlichter Text oder, bei aktivierter Diarisierung, als ein Block pro Phrase mit Sprecher und Zeit, jeder Sprecher in einer eigenen Farbe und die Phrasen markiert, in denen zwei Personen gleichzeitig gesprochen haben; eine Live-Phrase erscheint etwa eine Sekunde, nachdem der Sprecher eine Pause macht. Das Ergebnis lässt sich kopieren oder als TXT oder JSON herunterladen, und jede Quelle behält ihr letztes Ergebnis, während Sie sich einen anderen Bildschirm ansehen. FILE hat außerdem einen Modus **Turns**, `POST /api/diarize` für sich allein: wer wann gesprochen hat, gezeichnet als Zeitleiste mit einer Spur pro Sprecher, in der die Abschnitte markiert sind, in denen zwei Personen gleichzeitig sprechen. Sind mehrere Modelle geladen (`STT_MODELS`), wählt eine Modellauswahl neben Modus und Sprache das Modell für alle drei Quellen, FILE, DEVICE und STREAM, gespeist aus `GET /api/models`, und die Sprachliste folgt dem gewählten Modell; Turns transkribiert nichts und sendet kein Modell. **MODELS** zeigt, was `GET /api/models` meldet. Wenn `STT_TOKENS` gesetzt ist, fragt die Oberfläche einmal nach einem Token und speichert es im Browser.
 
 Browser geben Audiogeräte nur an eine sichere Seite heraus, daher funktioniert DEVICE über das Netzwerk über den https-Listener (und unter `http://localhost`). Der https-Listener verwendet ein selbstsigniertes Zertifikat, das der Container beim ersten Start in `./data/certs` anlegt; legen Sie dort ein echtes `stt.crt` und `stt.key` ab, um es zu ersetzen. Die Oberfläche hat keinen Build-Schritt und kein CDN: Vue 2 und seine Bibliotheken werden unter `www/vendor` mitgeliefert, sodass sie auch auf einer Maschine ohne Verbindung zum Internet funktioniert.
 
@@ -96,6 +96,10 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 ```
 
 Ist `STT_TOKENS` gesetzt, erscheinen `default_model` und `models` nur in der Antwort auf eine Anfrage mit gültigem Token: Wie `GET /api/models` verraten sie die Konfiguration des Servers. Ein Healthcheck ohne Token erhält weiterhin `status`, `pool_size`, `available` und `diarize`.
+
+`GET /api/health?deep=1` schickt zusätzlich eine Sekunde Stille durch jedes geladene Modell, eines nach dem anderen, und meldet jedes als `ok`, `busy` (innerhalb von fünf Sekunden wurde keine Instanz frei) oder `failed`: jedes Transkriptionsmodell unter seiner ID in `deep.models`, `deep.transcriber` als das schlechteste davon und `deep.diarizer`, wenn die Diarisierung eingeschaltet ist. Ist eines gescheitert, antwortet der Endpunkt mit `503`. Das kostet GPU-Arbeit, daher braucht er ein Token, solange `STT_TOKENS` gesetzt ist; der einfache Check bleibt für Container-Healthchecks offen.
+
+`GET /metrics` liefert Prometheus-Metriken: Anfragen nach Route und Status, ihre Dauer, Fehlerantworten nach Kategorie, Pool-Größen und freie Instanzen, laufende und gestartete Live-Sitzungen, von der Sprachaktivitätserkennung verworfene Segmente und Live-Audio, das eine in Rückstand geratene Sitzung abgeworfen hat. Die Gauges `stt_pool_*` ohne Labels beschreiben das Standardmodell und den Diarisierer; `stt_model_pool_size` und `stt_model_pool_available` führen jedes geladene Modell, mit den Labels `model` und `backend`. Wie der Health-Endpunkt braucht er kein Token, und `stt_www` leitet ihn nicht weiter: Fragen Sie `STT_PORT` direkt ab. Unter gunicorn zählt jeder Worker für sich.
 
 `POST /api/stt` akzeptiert ein `multipart/form-data`-Feld namens `file` oder einen rohen `audio/*`-Body. Ein optionales `model` (Query-String oder Formularfeld) wählt eines der geladenen Modelle: seine ID, einen Alias (`large-v3-turbo`, `parakeet-tdt-0.6b-v3`), die Form `backend:model` oder den bloßen Backend-Namen, der das Standardmodell meint, wenn es zu diesem Backend gehört, und sonst dessen erstes Modell. Ohne `model` antwortet das Standardmodell. Ein optionales `language` (Query-String oder Formularfeld) überschreibt für diese Anfrage die Server-Voreinstellung; `auto` erkennt die Sprache automatisch. Bei Erfolg kommen der Text, die verstrichenen Sekunden, das Modell, das transkribiert hat, und die Sprache zurück: der Code, den Whisper erkannt oder verwendet hat (bei einem rein englischen Modell immer `en`), oder `null` bei Parakeet, das ihn nicht meldet.
 
@@ -146,7 +150,7 @@ curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
 }
 ```
 
-`id` ist das, was eine Anfrage als `model` übergibt, und genau eine Zeile hat `default: true`: Ihre ID ist `default_model`, ihr Backend das oberste `default`. `pool_size` und `available` beschreiben den Pool dieses Modells. `status` ist `loaded`, wenn Instanzen des Modells existieren, frei oder beschäftigt, `installed`, wenn die Gewichte auf der Platte liegen, aber noch nichts geladen ist, und sonst `absent`. Ein Backend, das konfiguriert, aber nicht installiert ist, meldet `absent` und nichts weiter; der Grund steht im Log. `accepts_language` sagt, ob `?language=` für dieses Backend überhaupt etwas bedeutet. Der Diarisierer meldet `null` statt einer leeren Sprachliste, weil er in keiner Sprache Text erzeugt.
+`id` ist das, was eine Anfrage als `model` übergibt, und genau eine Zeile hat `default: true`: Ihre ID ist `default_model`, ihr Backend das oberste `default`. `pool_size` und `available` beschreiben den Pool dieses Modells. `status` ist `loaded`, wenn Instanzen in seinen Pool geladen wurden, frei oder belegt, `installed`, wenn die Gewichte auf der Platte liegen, aber noch nichts geladen ist, und sonst `absent`. Ein Backend, das konfiguriert, aber nicht installiert ist, meldet `absent` und nichts weiter; der Grund steht im Log. `accepts_language` sagt, ob `?language=` für dieses Backend überhaupt etwas bedeutet. Der Diarisierer meldet `null` statt einer leeren Sprachliste, weil er in keiner Sprache Text erzeugt.
 
 Der CLI-Client liest denselben Endpunkt:
 
@@ -193,12 +197,26 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 
 `overlap` markiert eine Phrase, während der auch jemand anderes gesprochen hat. NVIDIA sagt ausdrücklich, dass die Kombination eines herkömmlichen Einzelsprecher-Modells mit Diarisierung nicht einem Modell entspricht, das für überlappende Sprache gebaut wurde: Ein herausgeschnittener Zeitbereich enthält weiterhin jede Stimme, die ihn überlappt, sodass diese Phrasen verschmelzen oder die Worte des falschen Sprechers auswählen können. Behandeln Sie ein mit `overlap` markiertes Segment als die Stelle, an der die Transkription am wenigsten vertrauenswürdig ist.
 
+**Lange Aufnahmen laufen über einen Job.** `POST /api/jobs` akzeptiert dieselben Body-Formen wie `/api/stt`, bis zu `JOB_MAX_CONTENT_LENGTH_MB` (1 GB), dazu einen `mode`: `text` (der Standard), `speakers` (das Ergebnis von `/api/transcript`) oder `turns` (das Ergebnis von `/api/diarize`). Der Endpunkt antwortet sofort mit `202`, der ID des Jobs und einer `Location`, die abgefragt werden kann:
+
+```bash
+curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
+curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+```
+
+```json
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+```
+
+`status` durchläuft `queued` (mit seiner `position`), `running` und dann `done` mit dem `result` oder `failed` mit einer `error`-Kategorie. `GET /api/jobs` listet die Jobs auf, und `DELETE /api/jobs/<id>` entfernt einen, der gerade nicht läuft. Ein Job arbeitet die Datei in Stücken von etwa einer Minute ab, die an Pausen geschnitten werden, und gibt das Modell zwischen ihnen zurück, sodass die kurzen Anfragen weiter beantwortet werden, während er läuft: Eine 30-minütige Aufnahme brauchte auf der GPU des Deployments 107 s, und Anfragen mit Telefongesprächen, die währenddessen gesendet wurden, höchstens 10 s. Die Diarisierung läuft im Streaming-Modus des Modells über die gesamte Datei, sodass ein Sprecher von der ersten bis zur letzten Minute dieselbe Nummer behält. Jobs sind Dateien unter `JOBS_DIR`, überstehen also einen Neustart, und abgeschlossene Jobs werden nach `JOB_RETENTION_HOURS` entfernt. Ein Job nimmt kein `model`: Er läuft auf dem Standardmodell, und seine `language` wird gegen dieses geprüft.
+
 `/api/stream` ist ein WebSocket für **Live-Transkription**: Audio geht hinein, während es aufgenommen wird, und jede Phrase kommt etwa eine Sekunde, nachdem der Sprecher eine Pause macht, zurück. JSON-Textnachrichten tragen die Steuerung, Binärnachrichten das Audio:
 
 1. Der Client sendet `{"type": "start", "model": "turbo", "language": "ru", "diarize": true, "token": "<token>"}`. Alle Felder außer `type` sind optional. `model` wählt eines der geladenen Modelle so, wie es `model` bei `/api/stt` tut, und die Sprache wird gegen dieses Modell geprüft; ohne das Feld arbeitet das Standardmodell, und die Sprache wird wie bisher nur darauf geprüft, ob sie überhaupt eine Sprache ist; ein Code, den das Standardmodell nicht kennt, scheitert erst beim Transkribieren einer Phrase. Über `token` authentifiziert sich ein Browser, da er bei einem WebSocket keine Header setzen kann; andere Clients können stattdessen beim Handshake `Authorization: Bearer <token>` senden.
 2. Der Server antwortet mit `{"type": "ready", "sample_rate": 16000, "backend": "whisper", "model": "turbo", "language": "ru", "diarize": true, "source": "client"}`.
-3. Der Client sendet rohes PCM - vorzeichenbehaftet, 16 Bit, Little-Endian, mono, 16 kHz - als Binärnachrichten beliebiger Größe und `{"type": "stop"}`, wenn er fertig ist.
-4. Der Server sendet für jede Phrase ein `segment`, etwa einmal pro Sekunde `progress` und vor dem Schließen `done`:
+3. Der Client sendet rohes PCM - vorzeichenbehaftet, 16 Bit, Little-Endian, mono, 16 kHz - als Binärnachrichten beliebiger Größe im Tempo der Aufnahme und `{"type": "stop"}`, wenn er fertig ist. Eine Datei, die schneller als in Echtzeit gesendet wird, gerät konstruktionsbedingt in Rückstand und verliert Phrasen (siehe `skipped` unten); eine Datei gehört in einen Job.
+4. Der Server sendet für jede Phrase ein `segment`, etwa einmal pro Sekunde `progress`, `skipped` mit den Sekunden verworfenen Audios, falls die Sitzung einmal mehr als zwei Minuten in Rückstand gerät, und vor dem Schließen `done`:
 
 ```json
 { "type": "segment", "id": 3, "start": 6.88, "end": 8.2, "text": "This is the second speaker.", "speaker": 1, "overlap": false }
@@ -206,13 +224,17 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 { "type": "done", "segments": 10, "seconds": 21.87, "elapsed": 22.08 }
 ```
 
-Das Audio kann auch von woanders kommen. Mit `"source": "url", "url": "https://..."` in der Startnachricht sendet der Client überhaupt kein Audio: Der Server liest den Stream unter dieser Adresse über ffmpeg im eigenen Tempo der Quelle, bis er endet oder der Client `stop` sendet. Internetradio, HLS, RTMP, RTSP und SRT funktionieren; das Schema muss `http`, `https`, `rtmp`, `rtmps`, `rtsp` oder `srt` sein, und ffmpeg ist auf Netzwerkprotokolle beschränkt, sodass eine URL oder eine Playlist es nicht dazu bringen kann, eine lokale Datei zu lesen. Trotzdem lässt das den Server eine Adresse abrufen, die ein Client gewählt hat, auch Adressen in seinem eigenen Netzwerk: Setzen Sie `STT_TOKENS` auf jedem Server, den andere erreichen können.
+Das Audio kann auch von woanders kommen. Mit `"source": "url", "url": "https://..."` in der Startnachricht sendet der Client überhaupt kein Audio: Der Server liest den Stream unter dieser Adresse über ffmpeg, bis er endet oder der Client `stop` sendet. Internetradio, HLS, RTMP, RTSP und SRT funktionieren; das Schema muss `http`, `https`, `rtmp`, `rtmps`, `rtsp` oder `srt` sein. Was eine Live-Quelle bereits vorhält, übernimmt der Server sofort, den Rest im eigenen Tempo der Quelle, sodass eine entfernte Datei so ankommt, wie es eine Sendung täte.
 
-Ein Fehler ist ein einzelnes `{"type": "error", "error": "<category>", "request_id": "..."}`, gefolgt vom Schließen der Verbindung, mit den Fehlerkategorien der HTTP-API sowie `Invalid start message`, `Invalid audio frame`, `Invalid stream URL` und `Stream source failed`.
+Weil der Server damit eine Adresse abruft, die ein Client gewählt hat, ist das eng eingegrenzt. ffmpeg darf nur Netzwerkprotokolle verwenden, sodass weder eine URL noch eine Playlist es dazu bringen kann, eine lokale Datei zu lesen, und nichts darf es dazu bringen, auf Verbindungen zu lauschen: Die SRT-Modi `listener` und `rendezvous` sowie jeder `listen`-Parameter werden abgelehnt. Eine Adresse, die der Server selbst ist oder dorthin auflöst (Loopback), eine Link-Local-Adresse wie der Cloud-Metadatendienst unter `169.254.169.254` oder `0.0.0.0` wird als `Invalid stream URL` abgelehnt; geprüft wird beim Start der Sitzung, und ffmpeg folgt weiterhin Weiterleitungen und Playlists. Eine Seite auf einer anderen Website kann keine solche Quelle starten (`Forbidden`): Browser wenden auf WebSockets kein CORS an, daher prüft der Socket, dass der Origin der Seite dieser Host ist oder in `CORS_ORIGINS` steht. Höchstens vier URL-Quellen laufen gleichzeitig in jedem Serverprozess (darüber hinaus `Service Unavailable`), gunicorn mit mehreren Workern erlaubt also so viele pro Worker, und das Log verzeichnet jede Adresse ohne Zugangsdaten und ohne Query. Hosts im eigenen Netzwerk des Servers bleiben erreichbar, was bei einer Kamera gerade der Sinn ist und der Grund, `STT_TOKENS` auf einem Server zu setzen, den andere erreichen können.
 
-Eine Phrase endet bei einer Pause von 0,6 s oder, sobald sie länger als 15 s dauert, an ihrer leisesten Stelle und wird für sich allein mit einem Modell transkribiert, das aus demselben Pool geliehen wird wie für Uploads, sodass ein ausgelasteter Pool Live-Phrasen verzögert, statt sie scheitern zu lassen. Mit `diarize` läuft der Diarisierer in seinem Streaming-Modus und führt einen Sprecher-Cache von Abschnitt zu Abschnitt mit, sodass ein Sprecher für die ganze Sitzung dieselbe Nummer behält. Der Socket existiert nur, wenn der Server unter uvicorn läuft (`python3 stt_server.py`, der Docker-Standard): Der Flask-Debug-Server und die Sync-Worker von gunicorn sprechen kein WebSocket.
+Ein Fehler ist ein einzelnes `{"type": "error", "error": "<category>", "request_id": "..."}`, gefolgt vom Schließen der Verbindung, mit den Fehlerkategorien der HTTP-API sowie `Invalid start message`, `Invalid audio frame`, `Invalid stream URL`, `Stream source failed` und `Forbidden`.
 
-Uploads sind auf `MAX_CONTENT_LENGTH_MB` begrenzt (standardmäßig 10 MB); ein größerer Body gibt `413` zurück.
+Eine Phrase endet bei einer Pause von 0,6 s, an der Stelle, an der der Diarisierer einen Sprecher an einen anderen übergeben hört (mit `diarize`, da Menschen, die einander antworten, oft weniger als 0,6 s Pause lassen), oder, sobald sie länger als 15 s dauert, an ihrer leisesten Stelle und wird für sich allein mit einem Modell transkribiert, das aus demselben Pool geliehen wird wie für Uploads, sodass ein ausgelasteter Pool Live-Phrasen verzögert, statt sie scheitern zu lassen. Mit `diarize` läuft der Diarisierer in seinem Streaming-Modus und führt einen Sprecher-Cache von Abschnitt zu Abschnitt mit, sodass ein Sprecher für die ganze Sitzung dieselbe Nummer behält. Der Socket existiert, wenn der Server unter uvicorn läuft - `python3 stt_server.py`, der Docker-Standard, oder gunicorn mit `GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker`, das `stt_server:asgi_app` ausliefert -, und nicht unter dem Flask-Debug-Server oder den standardmäßigen Sync-Workern von gunicorn, die kein WebSocket sprechen.
+
+**Zurückgegeben wird nur gesprochener Text.** Wo keine Sprache vorkommt - ein Ton, Musik, Rauschen, ein Freizeichen, sogar digitale Stille -, antwortet Whisper mit dem Abspann der untertitelten Videos, aus denen es gelernt hat (eine russische Zeile "Untertitel von DimaTorzok", "Fortsetzung folgt...", "Danke fürs Zuschauen."), und zwar mit voller Zuversicht: Im Testkorpus lag sein eigenes `no_speech_prob` selbst bei Stille bei 0,00. Deshalb lässt jeder Endpunkt eine Sprachaktivitätserkennung, Silero VAD, über das Audio laufen und verwirft ein transkribiertes Segment, das größtenteils außerhalb erkannter Sprache liegt, sowie jedes Segment, das eine vollständige Abspannzeile aus Untertiteln ist. Auf einem Korpus aus neun Aufnahmen ohne Sprache entfernte das jede solche Zeile, während jede Phrase der Sprachaufnahmen erhalten blieb. Eine Aufnahme, in der nichts gesprochen wird, ergibt jetzt leeren Text. Im Live-Stream wird eine Phrase ohne erkannte Sprache gar nicht erst an das Modell geschickt. Die Erkennung läuft auf der CPU und kostet etwa eine Sekunde pro drei Minuten Audio. `SPEECH_GATE=false` stellt das alte Verhalten wieder her.
+
+Uploads sind auf `MAX_CONTENT_LENGTH_MB` begrenzt (10 MB beim reinen Server, 100 MB im Docker-Setup); ein größerer Body gibt `413` zurück.
 
 Fehler sind einheitlich: `error` trägt eine generische Kategorie, und `request_id` verknüpft die Antwort mit dem Server-Log, in dem die vollständige Ausnahme festgehalten wird.
 
@@ -255,6 +277,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | maximale Upload-Größe in MB; ein größerer Body gibt `413` zurück |
 | `CORS_ORIGINS`          | `*`                     | erlaubte CORS-Ursprünge: `*` oder eine kommagetrennte Liste |
 | `GUNICORN_WORKERS`      | `4`                     | Worker-Prozesse (nur gunicorn)                      |
+| `GUNICORN_WORKER_CLASS` | `sync`                  | `uvicorn_worker.UvicornWorker` ergänzt `/api/stream` (nur gunicorn) |
 | `LOG_LEVEL`             | `INFO`                  | Logging-Level                                       |
 | `LOG_ACCESS`            | `false`                 | uvicorn-Access-Zeilen protokollieren                |
 | `WHISPER_MODEL`         | `small.en`              | Whisper-Modellname (z. B. `small.en`, `turbo`), wenn `STT_MODELS` leer ist |
@@ -271,6 +294,12 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `DIARIZE_POOL_SIZE`     | `1`                     | Anzahl vorab geladener Diarisierungs-Instanzen      |
 | `DIARIZE_DOWNLOAD_ROOT` | `models`                | Verzeichnis des Diarisierungsmodell-Caches          |
 | `DIARIZE_THRESHOLD`     | `0.5`                   | Sprecheraktivitäts-Wahrscheinlichkeit, die als Sprache zählt |
+| `JOBS_DIR`              | `recs/jobs`             | wo Jobs ihren Upload, ihren Datensatz und ihr Ergebnis ablegen |
+| `JOB_MAX_CONTENT_LENGTH_MB` | `1024`              | maximale Upload-Größe eines Jobs in MB              |
+| `JOB_RETENTION_HOURS`   | `24`                    | Stunden, nach denen abgeschlossene Jobs entfernt werden |
+| `SPEECH_GATE`           | `true`                  | verwirft Text, den niemand gesprochen hat (Sprachaktivitätserkennung) |
+| `STT_UID`, `STT_GID`    | (`stt` aus dem Image, 1001) | Host-Benutzer, dem `models/`, `logs/`, `recs/` gehören (Docker) |
+| `HF_HUB_OFFLINE`        | `0`                     | `1`, sobald die Modelle im Cache liegen: keine Hub-Anfragen beim Start |
 | `STT_WWW_PORT`          | `8080`                  | http-Port der Web-Oberfläche (compose)              |
 | `STT_WWW_TLS_PORT`      | `8443`                  | https-Port der Web-Oberfläche (compose)             |
 | `STT_URL`               | `http://localhost:5099` | Client: Basis-URL des Servers                       |
@@ -294,6 +323,11 @@ speech-to-text/
 │   ├── align.py         # verbindet Transkriptionssegmente mit Sprechbeiträgen
 │   ├── live.py          # der WebSocket /api/stream: Protokoll und Sitzungen
 │   ├── stream.py        # Kern der Live-Transkription: Pausen, Phrasen, Transkription je Phrase
+│   ├── url_source.py    # URL-Quellen für /api/stream: Prüfung der Adresse, Start von ffmpeg
+│   ├── speech_gate.py   # Sprachaktivitätserkennung, die Text verwirft, den niemand gesprochen hat
+│   ├── metrics.py       # Prometheus-Metriken für GET /metrics
+│   ├── jobs.py          # Hintergrund-Jobs: auf der Platte gespeichert, per Sperre übernommen, von einem Worker-Thread ausgeführt
+│   ├── longform.py      # eine lange Aufnahme in Stücken: ein geliehenes Modell pro Stück, Sprecher über die ganze Datei
 │   ├── stt.py           # Whisper-Wrapper
 │   ├── parakeet.py      # NVIDIA-Parakeet-Wrapper, der zweite Transkribierer
 │   ├── backends.py      # Backend-Name -> Transkriptionsmodul (STT_BACKEND oder ein STT_MODELS-Eintrag)
@@ -304,7 +338,8 @@ speech-to-text/
 ├── Dockerfile-www       # Image der Web-Oberfläche (nginx)
 ├── nginx/               # stt_www-Konfiguration: statische Oberfläche, /api/-Proxy, selbstsigniertes TLS
 ├── www/                 # Web-Oberfläche: Vue 2 ohne Build-Schritt, Bibliotheken mitgeliefert
-├── docs/                # README-Übersetzungen
+├── constraints.txt      # jede Abhängigkeitsversion, die das getestete Image aufgelöst hat
+├── docs/                # DEPLOY.md und die README-Übersetzungen
 └── tests/               # pytest-Tests, keine Modell-Downloads und keine GPU
 ```
 
