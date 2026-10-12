@@ -31,13 +31,14 @@ from libs import (
     logs,
     metrics,
     model_pool,
+    openai_api,
     registry,
     speech_gate,
     stream,
     url_source,
 )
 from libs.auth import is_request_authorized, token_required
-from libs.errors import build_error_response, get_request_id, register_error_handlers
+from libs.errors import build_error_response, get_request_id, is_openai_path, register_error_handlers
 
 logs.setup_logging()
 logger = logging.getLogger(__name__)
@@ -113,7 +114,13 @@ def before_request():
 
 @app.after_request
 def after_request(resp):
-    """Log one access line per request with its id, status and duration."""
+    """Log one access line per request with its id, status and duration.
+
+    An OpenAI-compatible response also carries the request id as X-Request-Id, errors included:
+    its body has no top-level field for it.
+    """
+    if is_openai_path(request.path):
+        resp.headers["X-Request-Id"] = get_request_id()
     elapsed = time.monotonic() - getattr(g, "request_start", time.monotonic())
     metrics.observe_request(request.url_rule.rule if request.url_rule else None, request.method, resp.status_code, elapsed)
     log_request = logger.debug if request.path in QUIET_PATHS else logger.info
@@ -700,6 +707,73 @@ def remove_job(job_id):
     if outcome == "running":
         return build_error_response("Job is running", 409)
     return jsonify({"deleted": job_id}), 200
+
+
+@app.route(openai_api.TRANSCRIPTIONS_PATH, methods=["POST"])
+@token_required
+def transcribe_openai():
+    """Transcribe an upload the way OpenAI's POST /v1/audio/transcriptions does, for its SDKs.
+
+    multipart/form-data with ``file``; ``model`` and ``language`` are resolved exactly as on
+    /api/stt, so a model is one of the ids GET /v1/models lists and none means the default.
+    ``prompt`` becomes Whisper's initial prompt and is ignored by Parakeet; it is never logged.
+    ``temperature`` must be absent or 0, ``response_format`` is ``json`` (the default), ``text``
+    or ``verbose_json``, and ``timestamp_granularities[]`` may only ask for ``segment``. The
+    same token, size limit, conversion, speech gate and STT_QUEUE_TIMEOUT wait apply as on
+    /api/stt; errors take OpenAI's shape.
+    """
+    start_time = time.monotonic()
+
+    upload = read_audio_upload()
+    if upload is None:
+        return build_error_response("No audio data", 400)
+    bio, filename = upload
+    size_kb = len(bio.getvalue()) // 1024
+
+    options, refusal = openai_api.read_transcription_options(request.form)
+    if options is None:
+        return refusal
+    spec, language, refusal = resolve_request_options()
+    if spec is None:
+        return refusal
+
+    wav_bio = convert_upload(bio)
+    if wav_bio is None:
+        return build_error_response("Invalid audio data", 400)
+
+    try:
+        model = model_pool.acquire_request_model(model_id=spec["id"])
+    except queue.Empty:
+        logger.warning("[%s] Model pool exhausted: %s", get_request_id(), model_pool.get_pool_status())
+        return build_error_response("Service Unavailable", 503)
+
+    try:
+        result = openai_api.transcribe_wav(wav_bio, model, language, spec, options["prompt"])
+    except Exception as exc:
+        logger.error("[%s] STT failed: %s: %s\n%s", get_request_id(), type(exc).__name__, exc, traceback.format_exc())
+        return build_error_response("Transcription failed", 500)
+    finally:
+        model_pool.release_model(model, model_id=spec["id"])
+
+    logger.info(
+        "[%s] OpenAI STT %s (%dkb) model=%s language=%s format=%s - %d chars (%.2fs)",
+        get_request_id(),
+        filename,
+        size_kb,
+        spec["id"],
+        result["language"],
+        options["response_format"],
+        len(result["text"]),
+        time.monotonic() - start_time,
+    )
+    return openai_api.build_transcription_response(result, options["response_format"])
+
+
+@app.route(openai_api.MODELS_PATH, methods=["GET"])
+@token_required
+def list_openai_models():
+    """The loaded models in OpenAI's GET /v1/models shape, by the ids /api/models uses; behind the token like it."""
+    return jsonify(openai_api.list_openai_models()), 200
 
 
 def log_auth_mode() -> None:

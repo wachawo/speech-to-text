@@ -3,6 +3,16 @@
 ### [Unreleased]
 
 #### Added
+- **An OpenAI-compatible API under `/v1`.** `POST /v1/audio/transcriptions` takes OpenAI's
+  multipart request and `GET /v1/models` lists the loaded models, so any OpenAI SDK works
+  with its `base_url` pointed at `/v1`. `model` and `language` are resolved exactly as on
+  `/api/stt` (`whisper-1` is not one of this server's models), and the same token, size
+  limit, conversion, speech gate and `STT_QUEUE_TIMEOUT` wait apply. `prompt` becomes
+  Whisper's initial prompt and is never logged; Parakeet ignores it. `temperature` may only
+  be 0. `response_format` is `json`, `text` or `verbose_json`, whose segments are Whisper's
+  own with their confidence fields, or for Parakeet one segment with those fields `null`;
+  `srt`, `vtt` and word timestamps are refused. Errors on `/v1` take OpenAI's shape and every
+  `/v1` response carries `X-Request-Id`; `/api/*` errors are unchanged.
 - **Settings for a short-phrase instance.** A synchronous upload that already is a
   RIFF/WAVE file of 16 kHz mono 16-bit PCM is passed on as it is instead of being decoded
   and re-exported by pydub, which cost 70 ms per phrase; any other format, rate or width
