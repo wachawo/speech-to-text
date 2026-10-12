@@ -15,7 +15,7 @@
                   :disabled="busy" @click="pickFile">
             <i class="fa fa-paperclip"></i>
           </button>
-          <input type="text" class="form-control cursor-pointer" readonly
+          <input type="text" class="form-control cursor-pointer" readonly aria-label="Chosen audio file"
                  :value="file ? file.name : ''" placeholder="No file chosen"
                  :disabled="busy" @click="pickFile" />
           <span class="input-group-text" v-if="file">{{ $fmtBytes(file.size) }}</span>

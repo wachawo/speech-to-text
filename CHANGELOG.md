@@ -234,6 +234,9 @@
   linked from the language switcher at the top of each README.
 
 #### Fixed
+- **Toasts and the chosen file name reach a screen reader.** The toast stack is a polite live
+  region (`role="status"`), so each toast is announced when it appears, and the read-only file
+  name on the FILE source has an accessible name.
 - **Background jobs, after a review.** A job whose run takes its process down - out of memory, a
   crash inside a model - is run at most three times and then fails as `Transcription failed`, instead
   of being claimed by every worker in turn and taking each one down; waiting for a busy model
