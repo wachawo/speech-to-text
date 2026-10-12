@@ -366,6 +366,11 @@
   speaker decision since it started; what no phrase can still ask about is now dropped.
 
 #### Changed
+- **The compose files take `STT_POOL_SIZE` from `.env`.** Both pinned `STT_POOL_SIZE: "1"`
+  in `environment:`, which overrides `env_file:`, so the value in `.env` was silently
+  ignored; it is now `"${STT_POOL_SIZE:-1}"`. A host whose `.env` sets it gets that many
+  instances per model on the next recreate, so check the value first: `.env.example` said
+  8 and now says 1.
 - **`libs.model_pool` keeps one pool per model.** The module attribute `MODEL_POOL` is
   replaced by `MODEL_POOLS`, a dict of queues keyed by model id, and `init_model_pool()`
   no longer takes a `size` argument: each model's size comes from its `STT_MODELS` entry
