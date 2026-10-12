@@ -3,7 +3,7 @@
 #
 # parakeet_tdt and AutoModelForTDT are in released transformers. The floor is the diarizer's,
 # so the two install together; the images hold the exact version through constraints.txt.
-transformers>=5.18.0
+transformers>=5.19.0
 
 # Reading the 16 kHz mono WAV the server hands over.
 soundfile>=0.12.1
