@@ -253,13 +253,11 @@ window.SttWait = {
 /* localStorage, or null where there is none.
 
    A browser with site data switched off throws on the property itself rather
-   than answering undefined, and this file is also run by syntax checks in a
-   sandbox where the global is simply absent. Either way the app has to start:
-   the preference becomes the default, not a ReferenceError thrown before the
-   router exists. */
+   than answering undefined. The app still has to start: the preference
+   becomes the default, not an error thrown before the router exists. */
 const browserStorage = function () {
   try {
-    return typeof localStorage === 'undefined' ? null : localStorage;
+    return localStorage;
   } catch (err) {
     return null;
   }

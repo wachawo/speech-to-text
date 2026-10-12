@@ -41,7 +41,7 @@
     </div>
 
     <stt-alerts :wait="wait" :error.sync="error" :warning.sync="warning"
-                :info.sync="info" :success.sync="success"></stt-alerts>
+                :info.sync="info"></stt-alerts>
   </div>
 </template>
 
@@ -115,7 +115,6 @@ module.exports = {
       error: '',
       warning: '',
       info: '',
-      success: '',
       liveKind: 'stream',
       // The address, starting from the last one used.
       url: startedAddress || this.$store.state.transcribe.url,

@@ -11,10 +11,7 @@
    - turning an open stream into frames (`create`): an AudioWorklet
      downsamples to 16 kHz mono, and this side converts to signed 16-bit
      little-endian and hands over one frame per 100 ms;
-   - nothing about the server. Where the frames go is the caller's business.
-
-   The pure parts - the Int16 conversion and the level - are exposed on the
-   object as well, so they can be checked from node without a browser. */
+   - nothing about the server. Where the frames go is the caller's business. */
 (function () {
   'use strict';
 
@@ -451,14 +448,11 @@
   window.SttCapture = {
     supported: supported,
     displaySupported: displaySupported,
-    isChromium: isChromium,
     listInputs: listInputs,
     stopTracks: stopTracks,
     askPermission: askPermission,
     openDevice: openDevice,
     openDisplay: openDisplay,
     create: create,
-    toInt16: toInt16,
-    rms: rms,
   };
 })();
