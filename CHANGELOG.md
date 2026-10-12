@@ -13,10 +13,11 @@
   before the 503; jobs, the live stream and the diarizer keep their own waits.
   `STT_KEEPALIVE_SECONDS` (default 5) is uvicorn's idle keep-alive and gunicorn's
   `keepalive`, which the UvicornWorker reads (gunicorn's own default was 2; sync workers
-  keep no connection alive). The synchronous path keeps audio and text off the log and the
-  disk: the speech gate logs a dropped segment's speech share and length instead of its
-  words, and a multipart upload over 500 KB is held in memory rather than spooled to a
-  temporary file (jobs still write theirs to `JOBS_DIR`, by design). `docs/DEPLOY.md`
+  keep no connection alive). The synchronous path keeps audio and text off the log: the speech
+  gate logs a dropped segment's speech share and length instead of its words. A multipart
+  upload over 500 KB is held in memory rather than spooled to a temporary file (jobs still
+  write theirs to `JOBS_DIR`, by design); an upload that still needs decoding is buffered
+  by ffmpeg in an unlinked file under `TMPDIR`, which a tmpfs at `/tmp` keeps in memory. `docs/DEPLOY.md`
   describes a second instance for short phrases, with the latencies, error rates and GPU
   memory of each model measured on one GB10.
 - **Several pre-loaded transcription models, chosen per request.** `STT_MODELS` lists

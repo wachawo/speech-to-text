@@ -48,10 +48,10 @@ JOBS_PATH = "/api/jobs"
 QUIET_PATHS = ("/api/health", "/metrics")
 
 
-def keep_upload_in_memory(total_content_length, content_type, filename, content_length=None) -> io.BytesIO:
+def keep_upload_in_memory(**unused_part_details) -> io.BytesIO:
     """Werkzeug stream factory that holds a multipart file part in memory, whatever its size.
 
-    None of the arguments is needed, and none is spelled `unused_`: werkzeug passes them by name.
+    Werkzeug passes the part's sizes, filename and content type by name; none of them is needed.
     """
     return io.BytesIO()
 
@@ -107,7 +107,7 @@ def before_request():
     if request.path == JOBS_PATH and request.method == "POST":
         request.max_content_length = config.JOB_MAX_CONTENT_LENGTH_MB * 1024 * 1024
     else:
-        # A synchronous upload never touches the disk; MAX_CONTENT_LENGTH_MB bounds the memory it takes.
+        # A synchronous upload is not spooled to disk; MAX_CONTENT_LENGTH_MB bounds the memory it takes.
         request.form_data_parser_class = MemoryFormDataParser
 
 

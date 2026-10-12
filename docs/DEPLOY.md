@@ -201,6 +201,9 @@ A client that sends short phrases - 1 to 3 s of 16 kHz mono 16-bit PCM WAV, one 
          - ./models:/opt/models
          - ./logs:/opt/logs
          - ./recs:/opt/recs
+       # An upload pydub has to decode is buffered by ffmpeg in a file under /tmp; this keeps it in memory.
+       tmpfs:
+         - /tmp
        devices:
          - "nvidia.com/gpu=all"
        logging:
@@ -234,6 +237,7 @@ Why these settings:
 
 - **`python3 stt_server.py`, not gunicorn sync workers.** One process holds one instance of each model and serves requests from a thread pool. Sync workers load the models once per worker and close the connection after every response, so a client would open a new connection for every phrase.
 - **16 kHz mono 16-bit PCM WAV is passed straight to the model.** The server reads its header and skips decoding; any other format or rate goes through pydub and ffmpeg, which cost 70 ms per phrase (81 ms p95): over a third of Whisper turbo's model time and nearly all of Parakeet's. The server does no resampling of its own for this path: the client sends 16 kHz.
+- **`/tmp` is a tmpfs.** A 16 kHz mono 16-bit PCM WAV is never written anywhere. Any other upload is decoded by ffmpeg, which reads it through its `cache:` protocol and so copies it into a temporary file under `/tmp` while it decodes; on a tmpfs that copy stays in memory.
 - **One instance per model.** A second instance of the same model on the same GPU added no throughput and doubled the time of every phrase: the two take turns on the same GPU.
 - **`STT_QUEUE_TIMEOUT` well under a second.** With one instance, a phrase that finds the model busy waits for at most that long and then gets `503`, which the client can retry or count, instead of waiting behind a burst. 0.3 s is one or two phrases of Whisper turbo at beam 1.
 
