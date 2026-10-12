@@ -1,5 +1,10 @@
 <template>
-  <div class="stt-toaster">
+  <div class="stt-toaster" role="status" aria-live="polite" aria-atomic="false">
+    <!-- A polite live region, so a screen reader announces each toast once
+         the current sentence ends. On the stack rather than on each toast:
+         the region has to exist before the text arrives, or nothing is
+         announced. Not atomic, which role="status" is by default: a new
+         toast is read on its own, not together with the ones still shown. -->
     <div v-for="t in $store.state.toasts" :key="t.id"
          class="stt-toast" :class="'stt-toast-' + t.level"
          @click="$store.dispatch('dismiss_toast', t.id)">

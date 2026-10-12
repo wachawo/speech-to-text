@@ -22,8 +22,9 @@
      <stt-alerts :wait="wait" :error.sync="error" :warning.sync="warning"
                  :info.sync="info" :success.sync="success"></stt-alerts>
 
-   Four strings on the screen's own `data`, one component, and no screen
-   deciding for itself where a failure goes or what colour it is.
+   One string per bar on the screen's own `data`, one component, and no
+   screen deciding for itself where a failure goes or what colour it is. A
+   screen that never raises a bar leaves it unbound, and it stays empty.
 
    The strip is the screen's wait queue joined - progress, which belongs to
    the request rather than to the operator, so it is drawn first and has no

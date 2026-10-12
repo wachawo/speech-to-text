@@ -36,7 +36,7 @@ def test_metrics_count_errors_by_category(client):
 def test_metrics_report_pools_and_sessions_at_scrape_time(client):
     """Pool sizes and running live sessions are read when scraped."""
     text = scrape(client)
-    assert "stt_pool_pool_size 1.0" in text
+    assert "stt_pool_size 1.0" in text
     assert "stt_pool_available 1.0" in text
     assert 'stt_model_pool_size{backend="whisper",model="small.en-stub"} 1.0' in text
     assert 'stt_stream_sessions_active{source="any"} 0.0' in text

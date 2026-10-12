@@ -234,6 +234,9 @@
   linked from the language switcher at the top of each README.
 
 #### Fixed
+- **Toasts and the chosen file name reach a screen reader.** The toast stack is a polite live
+  region (`role="status"`), so each toast is announced when it appears, and the read-only file
+  name on the FILE source has an accessible name.
 - **Background jobs, after a review.** A job whose run takes its process down - out of memory, a
   crash inside a model - is run at most three times and then fails as `Transcription failed`, instead
   of being claimed by every worker in turn and taking each one down; waiting for a busy model
@@ -388,6 +391,11 @@
   speaker decision since it started; what no phrase can still ask about is now dropped.
 
 #### Changed
+- **`stt_pool_pool_size` is now `stt_pool_size`.** The unlabelled pool gauges in `/metrics`
+  were named `stt_pool_` plus the pool status key, which doubled the word: the default model's
+  size is now `stt_pool_size` and the diarizer's `stt_pool_diarize_size` (was
+  `stt_pool_diarize_pool_size`). `stt_pool_available` and `stt_pool_diarize_available` keep
+  their names. Dashboards and alerts that read the old names need updating.
 - **The compose files take `STT_POOL_SIZE` from `.env`.** Both pinned `STT_POOL_SIZE: "1"`
   in `environment:`, which overrides `env_file:`, so the value in `.env` was silently
   ignored; it is now `"${STT_POOL_SIZE:-1}"`. A host whose `.env` sets it gets that many

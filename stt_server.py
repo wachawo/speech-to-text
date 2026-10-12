@@ -13,8 +13,10 @@ from functools import partial
 from typing import Any, cast
 
 import numpy as np
+import uvicorn
 from flask import Flask, g, has_request_context, jsonify, request
 from flask_cors import CORS
+from uvicorn.middleware.wsgi import WSGIMiddleware
 from werkzeug.formparser import FormDataParser
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -803,8 +805,6 @@ def build_asgi_app(wsgi_app):
     Flask would then see `/health` for `/api/health` and answer its own 404. Here every public URL
     stays exactly what it was.
     """
-    from uvicorn.middleware.wsgi import WSGIMiddleware
-
     http_app = WSGIMiddleware(wsgi_app)
 
     async def asgi_app(scope, receive, send):
@@ -835,8 +835,6 @@ def run_server() -> None:
     if config.STT_DEBUG:
         app.run(host=config.STT_HOST, port=config.STT_PORT, debug=True)
         return
-
-    import uvicorn
 
     uvicorn.run(
         asgi_app,

@@ -3,13 +3,10 @@
 """Optional static-token auth via STT_TOKENS / Authorization: Bearer."""
 
 import io
-import re
 
 from libs import config
 from libs.auth import is_valid_token
-from tests.helpers import make_wav
-
-REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+from tests.helpers import assert_error_shape, make_wav
 
 
 def post_audio(client, headers=None):
@@ -37,8 +34,7 @@ def test_missing_token_when_required(client, monkeypatch):
     assert resp.status_code == 401
     body = resp.get_json()
     assert body["error"] == "Unauthorized"
-    assert REQ_ID_RE.match(body["request_id"])
-    assert set(body.keys()) == {"error", "request_id"}
+    assert_error_shape(body)
 
 
 def test_invalid_token(client, monkeypatch):

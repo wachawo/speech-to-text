@@ -4,17 +4,8 @@
 
 import io
 import queue
-import re
 
-from tests.helpers import get_default_pool, make_wav
-
-REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
-
-
-def assert_error_shape(body):
-    """Assert the response carries exactly the generic error category and a request id."""
-    assert set(body.keys()) == {"error", "request_id"}
-    assert REQ_ID_RE.match(body["request_id"])
+from tests.helpers import assert_error_shape, get_default_pool, make_wav
 
 
 def raise_runtime_error(bio, model=None, device=None, language=None):

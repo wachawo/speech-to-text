@@ -3,14 +3,11 @@
 """POST /api/stt - per-request ``language`` option."""
 
 import io
-import re
 
 import pytest
 
 from libs import config, model_pool
-from tests.helpers import make_model_sentinel, make_wav, use_legacy_model
-
-REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+from tests.helpers import assert_error_shape, make_model_sentinel, make_wav, use_legacy_model
 
 
 def capture_language(stt_module, monkeypatch) -> dict:
@@ -80,8 +77,7 @@ def test_unknown_language_400(client):
     assert resp.status_code == 400
     body = resp.get_json()
     assert body["error"] == "Invalid language"
-    assert set(body.keys()) == {"error", "request_id"}
-    assert REQ_ID_RE.match(body["request_id"])
+    assert_error_shape(body)
 
 
 def test_language_name_is_resolved_to_its_code(client, stt_module, monkeypatch):

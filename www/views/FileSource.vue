@@ -15,7 +15,7 @@
                   :disabled="busy" @click="pickFile">
             <i class="fa fa-paperclip"></i>
           </button>
-          <input type="text" class="form-control cursor-pointer" readonly
+          <input type="text" class="form-control cursor-pointer" readonly aria-label="Chosen audio file"
                  :value="file ? file.name : ''" placeholder="No file chosen"
                  :disabled="busy" @click="pickFile" />
           <span class="input-group-text" v-if="file">{{ $fmtBytes(file.size) }}</span>
@@ -54,7 +54,7 @@
     </div>
 
     <stt-alerts :wait="wait" :error.sync="error" :warning.sync="warning"
-                :info.sync="info" :success.sync="success"></stt-alerts>
+                :info.sync="info"></stt-alerts>
   </div>
 </template>
 
@@ -117,7 +117,6 @@ module.exports = {
       wait: [],
       warning: '',
       info: '',
-      success: '',
     };
   },
 

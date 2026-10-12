@@ -45,9 +45,7 @@
 </template>
 
 <script>
-/* The tabs, in order. One entry per screen, and a screen that belongs to a tab
-   without being its path is listed under `owns` - otherwise nothing is lit on
-   that screen and it reads as a broken page rather than a nested one. */
+/* The tabs, in order. One entry per screen. */
 var TABS = [
   { path: '/transcribe', label: 'TRANSCRIBE' },
   { path: '/models', label: 'MODELS' },
@@ -94,9 +92,7 @@ module.exports = {
     /* Whether a tab is the one the operator is on. By path rather than by
        name: the path is what the tab links to. */
     tabActive: function (own) {
-      var tab = TABS.filter(function (entry) { return entry.path === own; })[0];
-      var owned = (tab && tab.owns) || [own];
-      return owned.indexOf(this.$route.path) !== -1;
+      return this.$route.path === own;
     },
 
     /* Publish how tall this bar is, for the dialogs that open under it.

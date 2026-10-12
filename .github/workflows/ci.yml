@@ -23,6 +23,19 @@ jobs:
         run: pre-commit run --all-files --show-diff-on-failure
       - name: Run mypy
         run: mypy
+      # node --check parses without running anything. A .vue file is checked through its <script>
+      # block, copied to a file of its own with every other line blanked rather than dropped: node
+      # cannot read the template around it, and a reported line number must match the .vue.
+      - name: Check the web UI's JavaScript syntax
+        run: |
+          set -e
+          for file in www/js/*.js; do node --check "$file"; done
+          for file in www/views/*.vue; do
+            script="$RUNNER_TEMP/$(basename "$file").js"
+            awk '/^<\/script>$/ { inside = 0 } { print inside ? $0 : "" } /^<script>$/ { inside = 1 }' "$file" > "$script"
+            if ! grep -q '[^[:space:]]' "$script"; then echo "$file: no <script> block"; exit 1; fi
+            node --check "$script"
+          done
 
   test:
     runs-on: ubuntu-latest

@@ -147,11 +147,23 @@ def test_background_work_steps_aside_for_a_waiting_request(monkeypatch):
     kind = model_pool.build_waiting_kind("small.en-stub")
     monkeypatch.setattr(model_pool, "WAITING", {"diarizer": 0})
     model_pool.count_waiting(kind, 1)
-    released = threading.Timer(0.2, lambda: model_pool.count_waiting(kind, -1))
+    left = []
+
+    def leave_waiting():
+        """Note when the waiter leaves, then stop counting it."""
+        left.append(time.monotonic())
+        model_pool.count_waiting(kind, -1)
+
+    released = threading.Timer(0.2, leave_waiting)
     released.start()
     started = time.monotonic()
     model_pool.yield_to_waiters(kind)
-    assert 0.15 < time.monotonic() - started < 2.0
+    returned = time.monotonic()
+    released.join()
+    # It waited for the waiter and returned soon after it left. Measured from the moment it left
+    # rather than from the start, so a timer that fires late on a slow runner costs nothing.
+    assert 0.15 < returned - started
+    assert left[0] <= returned < left[0] + 1.5
     monkeypatch.setattr(model_pool, "YIELD_LIMIT_SECONDS", 0.1)
     model_pool.count_waiting(kind, 1)
     started = time.monotonic()

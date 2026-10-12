@@ -15,7 +15,7 @@
     </div>
 
     <stt-alerts :wait="wait" :error.sync="error" :warning.sync="warning"
-                :info.sync="info" :success.sync="success"></stt-alerts>
+                :info.sync="info"></stt-alerts>
 
     <!-- One row per model GET /api/models reports, as it reports it. No
          row tint: the STATUS word carries the state, and on a server with
@@ -123,7 +123,6 @@ module.exports = {
       error: '',
       warning: '',
       info: '',
-      success: '',
       // The row whose languages the dialog shows, or null.
       shown: null,
     };

@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import queue
-import re
 import socket
 import threading
 import types
@@ -16,11 +15,10 @@ import pytest
 
 # Local imports
 from libs import config, live, model_pool, registry, stream, url_source
-from tests.helpers import make_model_sentinel, make_silence, make_tone
+from tests.helpers import REQ_ID_RE, make_model_sentinel, make_silence, make_tone
 
 RATE = stream.SAMPLE_RATE
 CHUNK_SECONDS = 0.1
-REQUEST_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 STREAM_URL = "http://example.com/live"
 
 # What the stand-in resolver answers. Any other name does not resolve, so no test reaches the network.
@@ -182,7 +180,7 @@ def assert_refused(result: dict, error: str, code: int, after_ready: bool = Fals
     assert len(errors) == 1
     assert errors[0]["error"] == error
     assert set(errors[0]) == {"type", "error", "request_id"}
-    assert REQUEST_ID_RE.match(errors[0]["request_id"])
+    assert REQ_ID_RE.match(errors[0]["request_id"])
     assert select_events(result, "done") == []
     assert read_closes(result) == [code]
     assert result["sent"][-1]["type"] == "websocket.close"

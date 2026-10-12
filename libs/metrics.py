@@ -120,7 +120,8 @@ def collect_live_gauges() -> list:
     """The gauges read at scrape time: pool sizes and free instances, running live sessions.
 
     The unlabelled stt_pool_* gauges describe the default model's pool and the diarizer, as they
-    did before several models could be loaded; stt_model_pool_size and stt_model_pool_available
+    did before several models could be loaded, named without the key's own `pool_` (stt_pool_size,
+    not stt_pool_pool_size); stt_model_pool_size and stt_model_pool_available
     carry every model the pool status lists under `models`, labelled with its id and backend, and
     are empty when it lists none - stt_server lists them only to a scrape that may see them.
     """
@@ -129,7 +130,8 @@ def collect_live_gauges() -> list:
     for name, value in pools.items():
         if isinstance(value, bool) or not isinstance(value, int | float):
             continue
-        family = GaugeMetricFamily(f"stt_pool_{name}", f"Model pool: {name.replace('_', ' ')}")
+        gauge_name = "stt_pool_" + name.replace("pool_", "")
+        family = GaugeMetricFamily(gauge_name, f"Model pool: {name.replace('_', ' ')}")
         family.add_metric([], value)
         families.append(family)
     families.extend(collect_model_pools(pools.get("models") or {}))
