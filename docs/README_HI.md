@@ -261,11 +261,11 @@ client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
-अनुरोध `file` के साथ `multipart/form-data` है और ठीक वही रास्ता लेता है जो `/api/stt` लेता है: वही टोकन, वही आकार सीमा, वही रूपांतरण, वही speech gate और खाली instance के लिए वही प्रतीक्षा (`STT_QUEUE_TIMEOUT`)। 16 kHz mono 16-bit PCM WAV बिना डिकोड किए आगे भेजा जाता है, और इस रास्ते पर सर्वर कुछ और resample नहीं करता।
+अनुरोध `file` के साथ `multipart/form-data` है और ठीक वही रास्ता लेता है जो `/api/stt` लेता है: वही टोकन, वही आकार सीमा, वही रूपांतरण, वही speech gate और खाली instance के लिए वही प्रतीक्षा (`STT_QUEUE_TIMEOUT`)। 16 kHz mono 16-bit PCM WAV बिना डिकोड किए आगे भेजा जाता है, बाकी सब कुछ `/api/stt` की तरह pydub से डिकोड होकर 16 kHz mono में बदला जाता है।
 
 - `model` उन id में से एक है जो `GET /v1/models` सूचीबद्ध करता है (वही id जो `/api/models` में हैं), एक alias या backend का नाम, ठीक `/api/stt` की तरह; अनुपस्थित या खाली होने पर default मॉडल चलता है। OpenAI के अपने नाम, जैसे `whisper-1`, `Invalid model` के साथ अस्वीकार किए जाते हैं।
 - `language` को `/api/stt` की तरह चुने गए मॉडल के विरुद्ध जाँचा जाता है; Parakeet इसे स्वीकार करके अनदेखा करता है।
-- `prompt` Whisper का initial prompt बन जाता है। openai-whisper उसके केवल अंतिम 223 टोकन रखता है और उसे ऑडियो के पहले 30 s के लिए उपयोग करता है। Parakeet कोई prompt नहीं लेता और उसे अनदेखा करता है। prompt कभी लॉग नहीं किया जाता।
+- `prompt` Whisper का initial prompt बन जाता है। openai-whisper उसके केवल अंतिम 223 टोकन रखता है और उसे ऑडियो के पहले 30 s के लिए उपयोग करता है। Parakeet कोई prompt नहीं लेता और उसे अनदेखा करता है। `<|endoftext|>` जैसे Whisper special token वाला prompt, मॉडल चाहे जो हो, 400 के साथ अस्वीकार किया जाता है। prompt कभी लॉग नहीं किया जाता।
 - `temperature` या तो अनुपस्थित हो सकता है या `0`: डिकोडिंग temperature 0 पर नियतात्मक है।
 - `response_format` `json` (default, `{"text": ...}`), `text` (सादा टेक्स्ट body) या `verbose_json` है; `srt` और `vtt` अस्वीकार किए जाते हैं। `timestamp_granularities[]` केवल `segment` माँग सकता है।
 

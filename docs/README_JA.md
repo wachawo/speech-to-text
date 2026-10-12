@@ -261,11 +261,11 @@ client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
-リクエストは `file` を含む `multipart/form-data` で、`/api/stt` とまったく同じ処理を通ります。同じトークン、同じサイズ上限、同じ変換、同じ音声ゲート、そして空きインスタンスを待つ同じ待機（`STT_QUEUE_TIMEOUT`）です。16 kHz、モノラル、16 ビット PCM の WAV はデコードせずにそのまま渡され、この経路でサーバーがそれ以外をリサンプリングすることはありません。
+リクエストは `file` を含む `multipart/form-data` で、`/api/stt` とまったく同じ処理を通ります。同じトークン、同じサイズ上限、同じ変換、同じ音声ゲート、そして空きインスタンスを待つ同じ待機（`STT_QUEUE_TIMEOUT`）です。16 kHz、モノラル、16 ビット PCM の WAV はデコードせずにそのまま渡され、それ以外は `/api/stt` と同じく pydub でデコードされ、16 kHz モノラルに変換されます。
 
 - `model` は `GET /v1/models` が列挙する ID（`/api/models` と同じ ID）、エイリアス、またはバックエンド名で、`/api/stt` とまったく同じです。省略または空ならデフォルトモデルが使われます。`whisper-1` のような OpenAI 独自の名前は `Invalid model` として拒否されます。
 - `language` は `/api/stt` と同様に選ばれたモデルに対して検証されます。Parakeet は受け付けて無視します。
-- `prompt` は Whisper の initial prompt になります。openai-whisper はその末尾 223 トークンだけを保持し、音声の最初の 30 秒にのみ使います。Parakeet はプロンプトを受け取らず、無視します。プロンプトがログに記録されることはありません。
+- `prompt` は Whisper の initial prompt になります。openai-whisper はその末尾 223 トークンだけを保持し、音声の最初の 30 秒にのみ使います。Parakeet はプロンプトを受け取らず、無視します。`<|endoftext|>` のような Whisper の特殊トークンを含むプロンプトは、モデルにかかわらず 400 で拒否されます。プロンプトがログに記録されることはありません。
 - `temperature` は省略するか `0` でなければなりません。デコードは温度 0 で決定的に行われます。
 - `response_format` は `json`（デフォルト、`{"text": ...}`）、`text`（プレーンテキストの本文）、`verbose_json` のいずれかです。`srt` と `vtt` は拒否されます。`timestamp_granularities[]` で指定できるのは `segment` だけです。
 

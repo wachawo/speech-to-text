@@ -261,11 +261,11 @@ client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
-요청은 `file`이 담긴 `multipart/form-data`이며 `/api/stt`와 정확히 같은 과정을 거칩니다. 같은 토큰, 같은 크기 제한, 같은 변환, 같은 음성 게이트, 그리고 빈 인스턴스를 기다리는 같은 대기 시간(`STT_QUEUE_TIMEOUT`)입니다. 16 kHz 모노 16비트 PCM WAV는 디코딩 없이 그대로 전달되며, 이 경로에서 서버는 그 밖의 어떤 것도 리샘플링하지 않습니다.
+요청은 `file`이 담긴 `multipart/form-data`이며 `/api/stt`와 정확히 같은 과정을 거칩니다. 같은 토큰, 같은 크기 제한, 같은 변환, 같은 음성 게이트, 그리고 빈 인스턴스를 기다리는 같은 대기 시간(`STT_QUEUE_TIMEOUT`)입니다. 16 kHz 모노 16비트 PCM WAV는 디코딩 없이 그대로 전달되며, 그 밖의 입력은 `/api/stt`와 같이 pydub로 디코딩되어 16 kHz 모노로 변환됩니다.
 
 - `model`은 `GET /v1/models`가 나열하는 id(`/api/models`와 같은 id), 별칭 또는 백엔드 이름이며 `/api/stt`와 똑같습니다. 없거나 비어 있으면 기본 모델이 사용됩니다. `whisper-1` 같은 OpenAI 고유의 이름은 `Invalid model`로 거부됩니다.
 - `language`는 `/api/stt`처럼 선택된 모델에 대해 검사됩니다. Parakeet은 이를 받아들이고 무시합니다.
-- `prompt`는 Whisper의 initial prompt가 됩니다. openai-whisper는 그 마지막 223개 토큰만 유지하고 오디오의 처음 30초에만 사용합니다. Parakeet은 프롬프트를 받지 않으며 무시합니다. 프롬프트는 절대 로그에 남지 않습니다.
+- `prompt`는 Whisper의 initial prompt가 됩니다. openai-whisper는 그 마지막 223개 토큰만 유지하고 오디오의 처음 30초에만 사용합니다. Parakeet은 프롬프트를 받지 않으며 무시합니다. `<|endoftext|>` 같은 Whisper 특수 토큰이 들어 있는 프롬프트는 모델과 관계없이 400으로 거부됩니다. 프롬프트는 절대 로그에 남지 않습니다.
 - `temperature`는 없거나 `0`이어야 합니다. 디코딩은 온도 0에서 결정적으로 이루어집니다.
 - `response_format`은 `json`(기본값, `{"text": ...}`), `text`(일반 텍스트 본문) 또는 `verbose_json`입니다. `srt`와 `vtt`는 거부됩니다. `timestamp_granularities[]`는 `segment`만 요청할 수 있습니다.
 

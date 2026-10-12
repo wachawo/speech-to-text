@@ -288,11 +288,11 @@ client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
-The request is `multipart/form-data` with `file` and goes through exactly what `/api/stt` does: the same token, size limit, conversion, speech gate and wait for a free instance (`STT_QUEUE_TIMEOUT`). A 16 kHz mono 16-bit PCM WAV is passed on without decoding, and the server resamples nothing else for this path.
+The request is `multipart/form-data` with `file` and goes through exactly what `/api/stt` does: the same token, size limit, conversion, speech gate and wait for a free instance (`STT_QUEUE_TIMEOUT`). A 16 kHz mono 16-bit PCM WAV is passed on without decoding; anything else is decoded and converted to 16 kHz mono through pydub, as on `/api/stt`.
 
 - `model` is one of the ids `GET /v1/models` lists (the same ids as `/api/models`), an alias or a backend name, exactly as on `/api/stt`; absent or empty means the default model. OpenAI's own names such as `whisper-1` are refused as `Invalid model`.
 - `language` is checked against the chosen model as on `/api/stt`; Parakeet accepts and ignores it.
-- `prompt` becomes Whisper's initial prompt. openai-whisper keeps only its last 223 tokens and uses it for the first 30 s of audio. Parakeet takes no prompt and ignores it. The prompt is never logged.
+- `prompt` becomes Whisper's initial prompt. openai-whisper keeps only its last 223 tokens and uses it for the first 30 s of audio. Parakeet takes no prompt and ignores it. A prompt holding a Whisper special token such as `<|endoftext|>` is refused with a 400, whatever the model. The prompt is never logged.
 - `temperature` may only be absent or `0`: decoding is deterministic at temperature 0.
 - `response_format` is `json` (the default, `{"text": ...}`), `text` (a plain-text body) or `verbose_json`; `srt` and `vtt` are refused. `timestamp_granularities[]` may only ask for `segment`.
 

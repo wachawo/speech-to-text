@@ -261,11 +261,11 @@ client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
-请求是带 `file` 的 `multipart/form-data`，走的流程与 `/api/stt` 完全相同：相同的令牌、相同的大小上限、相同的转换、相同的语音门控，以及相同的空闲实例等待时间（`STT_QUEUE_TIMEOUT`）。16 kHz 单声道 16 位 PCM 的 WAV 不经解码直接传递，在这条路径上服务器不会对其他任何内容重采样。
+请求是带 `file` 的 `multipart/form-data`，走的流程与 `/api/stt` 完全相同：相同的令牌、相同的大小上限、相同的转换、相同的语音门控，以及相同的空闲实例等待时间（`STT_QUEUE_TIMEOUT`）。16 kHz 单声道 16 位 PCM 的 WAV 不经解码直接传递，其他任何输入都与 `/api/stt` 一样经 pydub 解码并转换为 16 kHz 单声道。
 
 - `model` 是 `GET /v1/models` 列出的某个 id（与 `/api/models` 的 id 相同）、别名或后端名称，与 `/api/stt` 完全一致；缺省或为空时使用默认模型。OpenAI 自己的名称（如 `whisper-1`）会以 `Invalid model` 被拒绝。
 - `language` 与 `/api/stt` 一样按所选模型校验；Parakeet 接受但忽略它。
-- `prompt` 会成为 Whisper 的初始提示（initial prompt）。openai-whisper 只保留其最后 223 个 token，并且只用于音频的前 30 秒。Parakeet 不接受提示，会忽略它。提示永远不会写入日志。
+- `prompt` 会成为 Whisper 的初始提示（initial prompt）。openai-whisper 只保留其最后 223 个 token，并且只用于音频的前 30 秒。Parakeet 不接受提示，会忽略它。含有 Whisper 特殊 token（例如 `<|endoftext|>`）的提示无论使用哪个模型都会以 400 拒绝。提示永远不会写入日志。
 - `temperature` 只能缺省或为 `0`：解码在温度 0 下是确定性的。
 - `response_format` 为 `json`（默认，`{"text": ...}`）、`text`（纯文本正文）或 `verbose_json`；`srt` 和 `vtt` 会被拒绝。`timestamp_granularities[]` 只能请求 `segment`。
 

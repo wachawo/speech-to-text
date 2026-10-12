@@ -261,11 +261,11 @@ client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
-La richiesta è `multipart/form-data` con `file` e passa esattamente per lo stesso percorso di `/api/stt`: stesso token, stesso limite di dimensione, stessa conversione, stesso filtro del parlato e stessa attesa di un'istanza libera (`STT_QUEUE_TIMEOUT`). Un WAV PCM a 16 bit, mono, 16 kHz viene passato senza decodifica, e su questo percorso il server non ricampiona nient'altro.
+La richiesta è `multipart/form-data` con `file` e passa esattamente per lo stesso percorso di `/api/stt`: stesso token, stesso limite di dimensione, stessa conversione, stesso filtro del parlato e stessa attesa di un'istanza libera (`STT_QUEUE_TIMEOUT`). Un WAV PCM a 16 bit, mono, 16 kHz viene passato senza decodifica, tutto il resto viene decodificato e convertito a 16 kHz mono tramite pydub, come su `/api/stt`.
 
 - `model` è uno degli id elencati da `GET /v1/models` (gli stessi di `/api/models`), un alias o il nome di un backend, esattamente come su `/api/stt`; se assente o vuoto vale il modello predefinito. I nomi propri di OpenAI come `whisper-1` sono rifiutati con `Invalid model`.
 - `language` viene verificato rispetto al modello scelto come su `/api/stt`; Parakeet lo accetta e lo ignora.
-- `prompt` diventa il prompt iniziale di Whisper. openai-whisper ne conserva solo gli ultimi 223 token e lo usa per i primi 30 s di audio. Parakeet non accetta prompt e lo ignora. Il prompt non viene mai scritto nel log.
+- `prompt` diventa il prompt iniziale di Whisper. openai-whisper ne conserva solo gli ultimi 223 token e lo usa per i primi 30 s di audio. Parakeet non accetta prompt e lo ignora. Un prompt che contiene un token speciale di Whisper come `<|endoftext|>` viene rifiutato con un 400, qualunque sia il modello. Il prompt non viene mai scritto nel log.
 - `temperature` può solo mancare o valere `0`: la decodifica è deterministica a temperatura 0.
 - `response_format` è `json` (predefinito, `{"text": ...}`), `text` (un corpo di testo semplice) o `verbose_json`; `srt` e `vtt` sono rifiutati. `timestamp_granularities[]` può chiedere solo `segment`.
 
