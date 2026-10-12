@@ -93,10 +93,14 @@ def list_spec_names(spec: dict[str, Any]) -> list[str]:
 
     The bare backend name is not among them: several specs share it, and which one it selects
     is decided by find_spec and resolve_request_model rather than counted as a clash.
+
+    A backend nothing implements has no aliases to offer. validate_model_specs refuses it at
+    startup, but stt_server reads the pools for /metrics as soon as it is imported, before that,
+    and a KeyError here would take the place of the error that names the backend.
     """
     backend = spec["backend"]
     names = [spec["id"]]
-    if not config.is_model_path(spec["model"]):
+    if not config.is_model_path(spec["model"]) and backend in backends.TRANSCRIBERS:
         names.extend(backends.transcriber_for_backend(backend).list_aliases(spec["model"]))
     names.extend([f"{backend}:{name}" for name in list(names)])
     return list(dict.fromkeys(name.lower() for name in names))
