@@ -122,10 +122,10 @@ def test_each_mode_answers_in_the_shape_of_its_endpoint(mode, tmp_path, monkeypa
     monkeypatch.setattr(longform, "diarize_long", lambda samples: [{"speaker": 0, "start": 0.0, "end": 3.0}])
     path = tmp_path / "audio.wav"
     path.write_bytes(stream.encode_wav(make_tone(3.0)).getvalue())
-    result = longform.run(mode, str(path), None, "job")
+    result = longform.run(mode, str(path), None, "job", registry.get_default_spec())
     expected = {
-        "text": {"text", "segments", "seconds"},
-        "speakers": {"segments", "turns", "speakers", "text", "seconds"},
+        "text": {"text", "segments", "seconds", "model"},
+        "speakers": {"segments", "turns", "speakers", "text", "seconds", "model"},
         "turns": {"segments", "speakers", "seconds"},
     }[mode]
     assert set(result) == expected and result["seconds"] == 3.0
@@ -138,7 +138,7 @@ def test_the_speech_gate_vets_every_piece(tmp_path, monkeypatch, counting_pool):
     pool, pieces = counting_pool
     path = tmp_path / "audio.wav"
     path.write_bytes(stream.encode_wav(make_tone(5.0)).getvalue())
-    assert longform.run("text", str(path), None, "job")["text"] == ""
+    assert longform.run("text", str(path), None, "job", registry.get_default_spec())["text"] == ""
     assert pieces == []
 
 

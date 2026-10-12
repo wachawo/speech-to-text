@@ -205,11 +205,11 @@ curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
 ```
 
 ```json
-{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
-  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "model": "turbo", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6, "model": "turbo" } }
 ```
 
-`status` passa per `queued` (con la sua `position`), `running`, poi `done` con il `result`, oppure `failed` con una categoria `error`. `GET /api/jobs` li elenca e `DELETE /api/jobs/<id>` ne rimuove uno che non è in esecuzione. Un job elabora il file a pezzi di circa un minuto, tagliati sulle pause, e restituisce il modello tra un pezzo e l'altro, così le richieste brevi continuano a ricevere risposta mentre è in corso: una registrazione di 30 minuti ha richiesto 107 s sulla GPU del deploy, e le richieste di telefonate inviate nel frattempo hanno richiesto al massimo 10 s. La diarizzazione percorre l'intero file nella modalità streaming del modello, così un parlante mantiene lo stesso numero dal primo all'ultimo minuto. I job sono file sotto `JOBS_DIR`, quindi sopravvivono a un riavvio, e quelli terminati vengono rimossi dopo `JOB_RETENTION_HOURS`. Un job non accetta `model`: viene eseguito sul modello predefinito, e la sua `language` viene verificata rispetto a quello.
+`status` passa per `queued` (con la sua `position`), `running`, poi `done` con il `result`, oppure `failed` con una categoria `error`. `GET /api/jobs` li elenca e `DELETE /api/jobs/<id>` ne rimuove uno che non è in esecuzione. Un job elabora il file a pezzi di circa un minuto, tagliati sulle pause, e restituisce il modello tra un pezzo e l'altro, così le richieste brevi continuano a ricevere risposta mentre è in corso: una registrazione di 30 minuti ha richiesto 107 s sulla GPU del deploy, e le richieste di telefonate inviate nel frattempo hanno richiesto al massimo 10 s. La diarizzazione percorre l'intero file nella modalità streaming del modello, così un parlante mantiene lo stesso numero dal primo all'ultimo minuto. I job sono file sotto `JOBS_DIR`, quindi sopravvivono a un riavvio, e quelli terminati vengono rimossi dopo `JOB_RETENTION_HOURS`. Un job `text` o `speakers` accetta `model` e `language` come `/api/stt` e mantiene quel modello: il job e il suo risultato lo indicano, e un job il cui modello non è più caricato dopo un riavvio fallisce con `Model not loaded`. Un job `turns`, come `/api/diarize`, non accetta `model`.
 
 `/api/stream` è un WebSocket per la **trascrizione in tempo reale**: l'audio entra man mano che viene registrato, e ogni frase torna circa un secondo dopo che il parlante fa una pausa. I messaggi di testo JSON trasportano il controllo, i messaggi binari trasportano l'audio:
 

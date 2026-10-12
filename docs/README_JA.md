@@ -205,11 +205,11 @@ curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
 ```
 
 ```json
-{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
-  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "model": "turbo", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6, "model": "turbo" } }
 ```
 
-`status` は `queued`（`position` 付き）、`running` と進み、最後は `result` 付きの `done` か、`error` カテゴリ付きの `failed` になります。`GET /api/jobs` はジョブの一覧を返し、`DELETE /api/jobs/<id>` は実行中でないジョブを削除します。ジョブはファイルをポーズで区切った約 1 分ずつの断片に分けて処理し、断片の合間にモデルを返すため、実行中も短いリクエストには応答し続けます。デプロイ先の GPU では 30 分の録音に 107 秒かかり、その間に送られた通話のリクエストは最悪でも 10 秒でした。ダイアライゼーションはモデルのストリーミングモードでファイル全体を通して実行されるため、話者は最初の 1 分から最後の 1 分まで同じ番号を保ちます。ジョブは `JOBS_DIR` 配下のファイルなので再起動後も残り、完了したものは `JOB_RETENTION_HOURS` を過ぎると削除されます。ジョブは `model` を取らず、デフォルトモデルで実行され、その `language` もデフォルトモデルに対して検証されます。
+`status` は `queued`（`position` 付き）、`running` と進み、最後は `result` 付きの `done` か、`error` カテゴリ付きの `failed` になります。`GET /api/jobs` はジョブの一覧を返し、`DELETE /api/jobs/<id>` は実行中でないジョブを削除します。ジョブはファイルをポーズで区切った約 1 分ずつの断片に分けて処理し、断片の合間にモデルを返すため、実行中も短いリクエストには応答し続けます。デプロイ先の GPU では 30 分の録音に 107 秒かかり、その間に送られた通話のリクエストは最悪でも 10 秒でした。ダイアライゼーションはモデルのストリーミングモードでファイル全体を通して実行されるため、話者は最初の 1 分から最後の 1 分まで同じ番号を保ちます。ジョブは `JOBS_DIR` 配下のファイルなので再起動後も残り、完了したものは `JOB_RETENTION_HOURS` を過ぎると削除されます。`text` と `speakers` のジョブは `/api/stt` と同じく `model` と `language` を受け付け、そのモデルを保持します。ジョブとその結果にはモデル名が示され、再起動でモデルが読み込まれなくなったジョブは `Model not loaded` で失敗します。`turns` のジョブは `/api/diarize` と同じく `model` を取りません。
 
 `/api/stream` は**リアルタイム文字起こし**のための WebSocket です。音声は録音されるそばから送られ、各フレーズは話者が言葉を切ってから約 1 秒後に返ってきます。JSON のテキストメッセージが制御を、バイナリメッセージが音声を運びます。
 

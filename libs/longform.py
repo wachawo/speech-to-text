@@ -20,7 +20,7 @@ import numpy as np
 import soundfile as sf
 
 # Local imports
-from libs import align, config, diarize, model_pool, registry, speech_gate, stream
+from libs import align, config, diarize, model_pool, speech_gate, stream
 
 logger = logging.getLogger(__name__)
 
@@ -160,12 +160,12 @@ def diarize_long(samples: np.ndarray) -> list[dict[str, Any]]:
     return diarize.stream_turns(state, 0.0, samples.size / SAMPLE_RATE + 1.0)
 
 
-def run(mode: str, wav_path: str, language: str | None, request_id: str) -> dict[str, Any]:
+def run(mode: str, wav_path: str, language: str | None, request_id: str, spec: dict[str, Any]) -> dict[str, Any]:
     """Process one job's audio in the requested mode; the result has the shape of the matching endpoint.
 
-    A job takes no model: it is transcribed by the default model, resolved here when it runs.
-    Each stage's duration goes to the log: on a long file they are minutes, and which one it was
-    matters when a job is slower than expected.
+    `spec` is the model a transcribing mode runs on, which the result names as the endpoints do;
+    `turns` transcribes nothing and ignores it. Each stage's duration goes to the log: on a long
+    file they are minutes, and which one it was matters when a job is slower than expected.
     """
     samples = load_samples(wav_path)
     duration = round(samples.size / SAMPLE_RATE, 2)
@@ -187,7 +187,6 @@ def run(mode: str, wav_path: str, language: str | None, request_id: str) -> dict
         logger.info("[%s] Diarization: %d turns (%.1fs)", request_id, len(turns), time.monotonic() - started)
     if mode == "turns":
         return {"segments": turns, "speakers": len({turn["speaker"] for turn in turns}), "seconds": duration}
-    spec = registry.get_default_spec()
     started = time.monotonic()
     segments = transcribe_long(samples, language, ranges, request_id, spec)
     logger.info(
@@ -202,8 +201,9 @@ def run(mode: str, wav_path: str, language: str | None, request_id: str) -> dict
             "speakers": align.count_speakers(attributed),
             "text": text,
             "seconds": duration,
+            "model": spec["id"],
         }
-    return {"text": text, "segments": segments, "seconds": duration}
+    return {"text": text, "segments": segments, "seconds": duration, "model": spec["id"]}
 
 
 def main():

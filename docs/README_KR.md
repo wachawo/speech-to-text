@@ -205,11 +205,11 @@ curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
 ```
 
 ```json
-{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
-  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "model": "turbo", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6, "model": "turbo" } }
 ```
 
-`status`는 `queued`(`position` 포함), `running`을 거쳐 `result`가 담긴 `done`이 되거나, `error` 범주가 담긴 `failed`가 됩니다. `GET /api/jobs`는 작업 목록을 보여 주고, `DELETE /api/jobs/<id>`는 실행 중이 아닌 작업을 삭제합니다. 작업은 파일을 멈춤에서 자른 약 1분 길이의 조각으로 나누어 처리하고 조각 사이마다 모델을 돌려주므로, 작업이 도는 동안에도 짧은 요청은 계속 응답을 받습니다. 배포 환경의 GPU에서 30분짜리 녹음은 107초가 걸렸고, 그동안 보낸 전화 통화 요청은 길어야 10초가 걸렸습니다. 화자 분리는 모델의 스트리밍 모드로 파일 전체에 걸쳐 실행되므로, 한 화자는 첫 1분부터 마지막 1분까지 같은 번호를 유지합니다. 작업은 `JOBS_DIR` 아래의 파일이므로 재시작 후에도 남으며, 끝난 작업은 `JOB_RETENTION_HOURS`가 지나면 삭제됩니다. 작업은 `model`을 받지 않습니다. 기본 모델에서 실행되며, `language`도 그 모델을 기준으로 검사됩니다.
+`status`는 `queued`(`position` 포함), `running`을 거쳐 `result`가 담긴 `done`이 되거나, `error` 범주가 담긴 `failed`가 됩니다. `GET /api/jobs`는 작업 목록을 보여 주고, `DELETE /api/jobs/<id>`는 실행 중이 아닌 작업을 삭제합니다. 작업은 파일을 멈춤에서 자른 약 1분 길이의 조각으로 나누어 처리하고 조각 사이마다 모델을 돌려주므로, 작업이 도는 동안에도 짧은 요청은 계속 응답을 받습니다. 배포 환경의 GPU에서 30분짜리 녹음은 107초가 걸렸고, 그동안 보낸 전화 통화 요청은 길어야 10초가 걸렸습니다. 화자 분리는 모델의 스트리밍 모드로 파일 전체에 걸쳐 실행되므로, 한 화자는 첫 1분부터 마지막 1분까지 같은 번호를 유지합니다. 작업은 `JOBS_DIR` 아래의 파일이므로 재시작 후에도 남으며, 끝난 작업은 `JOB_RETENTION_HOURS`가 지나면 삭제됩니다. `text`와 `speakers` 작업은 `/api/stt`처럼 `model`과 `language`를 받고 그 모델을 유지합니다. 작업과 그 결과에 모델 이름이 표시되며, 재시작으로 모델이 더 이상 로드되지 않은 작업은 `Model not loaded`로 실패합니다. `turns` 작업은 `/api/diarize`처럼 `model`을 받지 않습니다.
 
 `/api/stream`은 **실시간 전사**를 위한 WebSocket입니다. 오디오는 녹음되는 대로 들어가고, 각 구절은 화자가 말을 멈춘 뒤 약 1초 후에 돌아옵니다. JSON 텍스트 메시지는 제어를, 바이너리 메시지는 오디오를 전달합니다.
 

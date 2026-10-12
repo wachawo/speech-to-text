@@ -232,11 +232,11 @@ curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
 ```
 
 ```json
-{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
-  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "model": "turbo", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6, "model": "turbo" } }
 ```
 
-`status` goes `queued` (with its `position`), `running`, then `done` with the `result`, or `failed` with an `error` category. `GET /api/jobs` lists them and `DELETE /api/jobs/<id>` removes one that is not running. A job works through the file in pieces of about a minute, cut at pauses, and gives the model back between them, so the short requests keep being answered while it runs: a 30-minute recording took 107 s on the deployment GPU, and phone-call requests sent during it took 10 s at worst. Diarization runs across the whole file in the model's streaming mode, so a speaker keeps one number from the first minute to the last. Jobs are files under `JOBS_DIR`, so they survive a restart, and finished ones are removed after `JOB_RETENTION_HOURS`. A job takes no `model`: it runs on the default model, and its `language` is checked against that one.
+`status` goes `queued` (with its `position`), `running`, then `done` with the `result`, or `failed` with an `error` category. `GET /api/jobs` lists them and `DELETE /api/jobs/<id>` removes one that is not running. A job works through the file in pieces of about a minute, cut at pauses, and gives the model back between them, so the short requests keep being answered while it runs: a 30-minute recording took 107 s on the deployment GPU, and phone-call requests sent during it took 10 s at worst. Diarization runs across the whole file in the model's streaming mode, so a speaker keeps one number from the first minute to the last. Jobs are files under `JOBS_DIR`, so they survive a restart, and finished ones are removed after `JOB_RETENTION_HOURS`. A `text` or `speakers` job takes `model` and `language` like `/api/stt` and keeps that model: the job and its result name it, and a job whose model a restart unloaded fails as `Model not loaded`. A `turns` job, like `/api/diarize`, takes no `model`.
 
 `/api/stream` is a websocket for **live transcription**: audio goes in as it is recorded, and each phrase comes back about a second after the speaker pauses. JSON text messages carry control, binary messages carry audio:
 

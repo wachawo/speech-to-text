@@ -21,10 +21,10 @@ def jobs_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "JOBS_DIR", str(tmp_path / "jobs"))
     calls = []
 
-    def fake_run(mode, wav_path, language, request_id):
-        """Record the call and answer like the text mode would."""
-        calls.append((mode, os.path.basename(wav_path), language, request_id))
-        return {"text": "hello", "segments": [], "seconds": 0.1}
+    def fake_run(mode, wav_path, language, request_id, spec):
+        """Record the call, with the id of the model it runs on, and answer like the text mode would."""
+        calls.append((mode, os.path.basename(wav_path), language, request_id, spec["id"]))
+        return {"text": "hello", "segments": [], "seconds": 0.1, "model": spec["id"]}
 
     monkeypatch.setattr(longform, "run", fake_run)
     return calls
@@ -54,7 +54,7 @@ def test_the_worker_runs_it_and_the_result_is_served(client, jobs_dir):
     assert jobs.run_pending() == 1
     body = client.get(f"/api/jobs/{job_id}").get_json()
     assert body["status"] == "done" and body["result"]["text"] == "hello"
-    assert jobs_dir == [("text", jobs.AUDIO_NAME, "ru", job_id)]
+    assert jobs_dir == [("text", jobs.AUDIO_NAME, "ru", job_id, "small.en-stub")]
     assert not os.path.exists(os.path.join(config.JOBS_DIR, job_id, jobs.INPUT_NAME))
     assert not os.path.exists(os.path.join(config.JOBS_DIR, job_id, jobs.AUDIO_NAME))
 
@@ -73,7 +73,7 @@ def test_an_upload_that_is_not_audio_fails_with_its_category(client, jobs_dir):
 def test_a_pipeline_failure_is_a_failed_job(client, jobs_dir, monkeypatch):
     """An exception inside the pipeline fails the job with a generic category, detail only in the log."""
 
-    def broken_run(mode, wav_path, language, request_id):
+    def broken_run(mode, wav_path, language, request_id, spec):
         """Fail like a CUDA error would."""
         raise RuntimeError("CUDA error")
 
@@ -89,7 +89,7 @@ def test_a_pipeline_failure_is_a_failed_job(client, jobs_dir, monkeypatch):
 def test_a_job_that_cannot_get_a_model_goes_back_to_the_queue(client, jobs_dir, monkeypatch):
     """Every model busy for the whole timeout is not the job's fault: it is queued again."""
 
-    def busy_run(mode, wav_path, language, request_id):
+    def busy_run(mode, wav_path, language, request_id, spec):
         """Behave like an exhausted pool."""
         raise queue.Empty
 

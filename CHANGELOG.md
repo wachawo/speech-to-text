@@ -19,10 +19,11 @@
   an entry served under a backend name, stop startup; a pool size must be plain digits, and
   an entry without `@pool` stops startup when `STT_POOL_SIZE` is below 1. A path entry's
   name is judged case-insensitively, so `/models/Tiny.EN.pt` is English-only like `tiny.en`.
-- **`model` on `POST /api/stt` and `POST /api/transcript`**, as a query parameter or a form
-  field: an id, an alias, `backend:model` or a bare backend name. A name nobody knows is
-  `400 Invalid model`; a real model this server did not load is `400 Model not loaded`.
-  Both are checked before the audio is decoded or an instance is borrowed.
+- **`model` on `POST /api/stt`, `POST /api/transcript` and `POST /api/jobs`**, as a query
+  parameter or a form field: an id, an alias, `backend:model` or a bare backend name. A name
+  nobody knows is `400 Invalid model`; a real model this server did not load is
+  `400 Model not loaded`. Both are checked before the audio is decoded or an instance is
+  borrowed, and for a job before it is created.
 - **`/api/stt` says which model transcribed and in which language.** The response gains
   `model` (the canonical id) and `language` (the code Whisper detected or used, always `en`
   for an English-only checkpoint, `null` for Parakeet, which does not report it).
@@ -275,10 +276,10 @@
 - **A known language outside the model's slice is a 400, not a 500.** `?language=yue` on a
   99-language checkpoint passed the check and raised inside Whisper; it is now
   `400 Unsupported language` before any audio is decoded, `POST /api/jobs` refuses it the same
-  way before a job is created, and on `/api/stream` whose start message names the model it is
-  an `Unsupported language` error before the session starts; a start message without `model`
-  is checked exactly as before. Only a checkpoint whose list is certain refuses it: a file
-  path whose name matches no known checkpoint (a fine-tune at
+  way before a `text` or `speakers` job is created, and on `/api/stream` whose start message
+  names the model it is an `Unsupported language` error before the session starts; a start
+  message without `model` is checked exactly as before. Only a checkpoint whose list is
+  certain refuses it: a file path whose name matches no known checkpoint (a fine-tune at
   `/models/my-large-v3-finetune.pt`) still has any known code passed on when the request
   names no model, because its list is only guessed from the name.
 - **The container stops cleanly.** `entrypoint.sh` ran the server under `/bin/sh -c` without
@@ -354,8 +355,9 @@
   `is_model_loaded(model_id)` and a per-id `MODELS_LOADED`, `WAITING` is kept per pool, and
   `acquire_model` / `release_model` require `model_id`, so an instance can never land in the
   default pool by omission. `stream.transcribe_piece`, `stream.transcribe_utterance`,
-  `stream.attribute_live_segments` and `longform.transcribe_long` take the spec of the model
-  they serve. `catalog.describe_transcriber` is replaced by `describe_configured_model` (one
+  `stream.attribute_live_segments`, `longform.transcribe_long` and `longform.run` take the
+  spec of the model they serve, and `jobs.create_job` the id of a job's model.
+  `catalog.describe_transcriber` is replaced by `describe_configured_model` (one
   loaded model) and `describe_unconfigured_backend` (a transcriber with nothing loaded), and
   `backends.transcriber()` is gone: every caller resolves
   `backends.transcriber_for_backend(spec["backend"])` for the model it serves. Code
@@ -370,9 +372,14 @@
   language and the segments of one decode, `list_aliases`, `list_known_models` and
   (Parakeet) `resolve_languages`; `get_stt_bio` and `get_stt_segments` are now thin
   wrappers. Parakeet's catalogue row lists its short name as an alias.
-- **Background jobs run on the default model.** `POST /api/jobs` takes no `model`, and its
-  `language` is checked against the default model. Between pieces a job steps aside only for
-  callers of that model's pool: a request for another model waits on another queue.
+- **Background jobs run on the model they were accepted for.** A `text` or `speakers` job
+  resolves `model` and checks its `language` against that model when it is submitted, keeps
+  the model's id in its record, and runs on that model when it is claimed, or fails as
+  `Model not loaded` if a restart unloaded it in between, rather than run on a model its
+  language was never checked against; the record and the result name the model. A `turns`
+  job, like `/api/diarize`, reads no `model`, and its `language` is only checked for being
+  one. Between pieces a job steps aside only for callers of its model's pool: a request for
+  another model waits on another queue.
 - **transformers comes from PyPI, not from a git commit.** 5.18.0 is the first release that
   recognises the diarization model, so the `diarize` extra and `requirements-diarize.txt` ask
   for `transformers>=5.18.0`, the same floor as Parakeet, and the two install together. The GPU

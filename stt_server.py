@@ -133,17 +133,16 @@ def read_model_argument() -> str | None:
     return model.strip() or None
 
 
-def resolve_request_options(accept_model: bool = True) -> tuple[dict[str, Any] | None, str | None, Any]:
+def resolve_request_options() -> tuple[dict[str, Any] | None, str | None, Any]:
     """Resolve the request's model and then its language against that model.
 
     Returns (spec, language, None) - the language None when the request names none - or
     (None, None, the 400 to answer). Both checks run before the audio is decoded and before any
     instance is borrowed, so a bad request costs nothing. A client that named a model gets the
     language checked against that model's own list; one that did not keeps the lenient
-    behaviour it always had. Without `accept_model` the request's `model` is not read at all
-    and the language is checked against the default model, which is what serves the request.
+    behaviour it always had.
     """
-    requested_model = read_model_argument() if accept_model else None
+    requested_model = read_model_argument()
     spec, error = registry.resolve_request_model(requested_model)
     if spec is None:
         return None, None, build_error_response(error or registry.INVALID_MODEL, 400)
@@ -551,6 +550,23 @@ def transcribe_by_speaker():
     )
 
 
+def resolve_job_options(mode: str) -> tuple[dict[str, Any] | None, str | None, Any]:
+    """Resolve a job's model and language the way the endpoint its mode stands in for does.
+
+    `text` and `speakers` transcribe, so like /api/stt and /api/transcript they take `model` and
+    have the language checked against that model. `turns` transcribes nothing: like /api/diarize
+    it reads no `model`, and its language is only checked for being a language at all, as every
+    job's was before models were selectable. Returns (spec, language, None), the spec None for
+    `turns`, or (None, None, the 400 to answer).
+    """
+    if mode != "turns":
+        return resolve_request_options()
+    language, error = backends.resolve_language_code(read_language_argument(), registry.get_default_spec())
+    if error is not None:
+        return None, None, build_error_response(error, 400)
+    return None, language, None
+
+
 def job_view(job: dict[str, Any]) -> dict[str, Any]:
     """What a client sees of a job record, with its place in the queue while it waits."""
     view = {
@@ -559,6 +575,7 @@ def job_view(job: dict[str, Any]) -> dict[str, Any]:
             "id",
             "status",
             "mode",
+            "model",
             "language",
             "filename",
             "size",
@@ -580,9 +597,10 @@ def submit_job():
 
     The same body shapes as /api/stt, up to JOB_MAX_CONTENT_LENGTH_MB. `mode` is `text` (the
     default), `speakers` (the /api/transcript result) or `turns` (the /api/diarize result);
-    `language` as everywhere else. A job takes no `model`: it runs on the default model, so the
-    language is checked against that one. The upload is written to disk as it arrives, never
-    held whole in memory. Returns 202 with the job record and a Location to poll.
+    `model` and `language` as on the endpoint the mode stands in for. A job that transcribes
+    keeps the model it was accepted for, named in its record: it runs on that model and on no
+    other. The upload is written to disk as it arrives, never held whole in memory. Returns 202
+    with the job record and a Location to poll.
     """
     mode = (request.args.get("mode") or request.form.get("mode") or "text").strip().lower()
     if mode not in jobs.MODES:
@@ -591,7 +609,7 @@ def submit_job():
         refusal = diarization_refusal()
         if refusal is not None:
             return refusal
-    unused_spec, language, refusal = resolve_request_options(accept_model=False)
+    spec, language, refusal = resolve_job_options(mode)
     if refusal is not None:
         return refusal
     if "file" in request.files:
@@ -612,7 +630,7 @@ def submit_job():
 
     else:
         return build_error_response("No audio data", 400)
-    job = jobs.create_job(save_input, filename, mode, language)
+    job = jobs.create_job(save_input, filename, mode, language, spec["id"] if spec is not None else None)
     return jsonify(job_view(job)), 202, {"Location": f"{JOBS_PATH}/{job['id']}"}
 
 

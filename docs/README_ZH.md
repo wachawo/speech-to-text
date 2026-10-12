@@ -205,11 +205,11 @@ curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
 ```
 
 ```json
-{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "position": null, "seconds": 1801.6,
-  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6 } }
+{ "id": "1f0c3a9e7d2b4c85", "status": "done", "mode": "speakers", "model": "turbo", "position": null, "seconds": 1801.6,
+  "result": { "segments": ["..."], "turns": ["..."], "speakers": 4, "text": "...", "seconds": 1801.6, "model": "turbo" } }
 ```
 
-`status` 依次经历 `queued`（附带其 `position`）、`running`，然后是带有 `result` 的 `done`，或带有 `error` 类别的 `failed`。`GET /api/jobs` 列出所有任务，`DELETE /api/jobs/<id>` 删除一个未在运行的任务。任务把文件在停顿处切成约一分钟一段逐段处理，并在段与段之间归还模型，因此任务运行期间短请求依然能得到响应：在部署所用的 GPU 上，一段 30 分钟的录音耗时 107 秒，其间发送的电话通话请求最多耗时 10 秒。说话人分离以模型的流式模式贯穿整个文件运行，因此同一说话人从第一分钟到最后一分钟都保持同一个编号。任务以文件形式保存在 `JOBS_DIR` 下，因此重启后依然存在，已完成的任务会在 `JOB_RETENTION_HOURS` 之后被删除。任务不接受 `model`：它在默认模型上运行，其 `language` 也按默认模型检查。
+`status` 依次经历 `queued`（附带其 `position`）、`running`，然后是带有 `result` 的 `done`，或带有 `error` 类别的 `failed`。`GET /api/jobs` 列出所有任务，`DELETE /api/jobs/<id>` 删除一个未在运行的任务。任务把文件在停顿处切成约一分钟一段逐段处理，并在段与段之间归还模型，因此任务运行期间短请求依然能得到响应：在部署所用的 GPU 上，一段 30 分钟的录音耗时 107 秒，其间发送的电话通话请求最多耗时 10 秒。说话人分离以模型的流式模式贯穿整个文件运行，因此同一说话人从第一分钟到最后一分钟都保持同一个编号。任务以文件形式保存在 `JOBS_DIR` 下，因此重启后依然存在，已完成的任务会在 `JOB_RETENTION_HOURS` 之后被删除。`text` 或 `speakers` 任务像 `/api/stt` 一样接受 `model` 和 `language`，并固定使用该模型：任务及其结果都会标明该模型，若重启后该模型不再加载，任务以 `Model not loaded` 失败。`turns` 任务与 `/api/diarize` 一样不接受 `model`。
 
 `/api/stream` 是一个用于**实时转录**的 WebSocket：音频边录制边送入，每个语句会在说话人停顿约一秒后返回。JSON 文本消息承载控制信息，二进制消息承载音频：
 
