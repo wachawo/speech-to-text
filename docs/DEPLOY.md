@@ -118,7 +118,7 @@ Leave `OMP_NUM_THREADS=1` as the compose file sets it. The voice detector runs o
 - `GET /api/health` is what the container healthcheck calls: the process is up and how many model instances are free.
 - `GET /api/health?deep=1` runs one second of silence through every loaded model, one at a time, reports each one by its id under `deep.models` and answers `503` when one fails. It needs a token when `STT_TOKENS` is set.
 - `GET /metrics` on `STT_PORT` is the Prometheus endpoint (`stt_www` does not proxy it). The metrics to alert on:
-  - `stt_pool_available` (the default model) at 0 for long, or `stt_model_pool_available` for any one model, labelled with its id and backend;
+  - `stt_pool_available` (the default model) at 0 for long, or `stt_model_pool_available` for any one model, labelled with its id and backend; with `STT_TOKENS` set, only a scrape that sends a token (`authorization` in the Prometheus scrape config) gets those series;
   - `stt_errors_total` growing in any category;
   - `stt_stream_skipped_seconds_total` growing, which means live sessions fall behind.
   - `stt_jobs_total{status="failed"}` growing.

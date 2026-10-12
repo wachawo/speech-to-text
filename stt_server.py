@@ -13,7 +13,7 @@ from functools import partial
 from typing import Any, cast
 
 import numpy as np
-from flask import Flask, g, jsonify, request
+from flask import Flask, g, has_request_context, jsonify, request
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -60,9 +60,20 @@ def create_app() -> Flask:
 
 app = create_app()
 
+
+def read_scrape_pools() -> dict[str, Any]:
+    """The pool status behind /metrics, with every model's pool only for a scrape health would show it to.
+
+    The per-model gauges are built from the `models` map and labelled with each model's id, which
+    /api/health and /api/models keep behind the token, so a scrape gets them on the same terms as
+    health's model list. prometheus_client also reads the gauges once when they are registered,
+    outside any request; that read gets the counters alone.
+    """
+    return model_pool.get_pool_status(detailed=has_request_context() and is_request_authorized())
+
+
 metrics.LIVE_STATE.update(
-    # Detailed whatever the default: the per-model gauges are built from the `models` map.
-    pools=partial(model_pool.get_pool_status, detailed=True),
+    pools=read_scrape_pools,
     sessions=lambda: live.ACTIVE_SESSIONS,
     url_sessions=lambda: url_source.URL_SESSIONS,
 )
@@ -261,7 +272,11 @@ def health():
 
 @app.route("/metrics", methods=["GET"])
 def prometheus_metrics():
-    """Prometheus metrics. Open like /api/health, and like it not proxied by stt_www: scrape :STT_PORT."""
+    """Prometheus metrics. Open like /api/health, and like it not proxied by stt_www: scrape :STT_PORT.
+
+    Also like health, the per-model gauges only carry the loaded models for a scrape that passes
+    the token check, or when auth is off; see read_scrape_pools.
+    """
     body, content_type = metrics.render()
     return body, 200, {"Content-Type": content_type}
 

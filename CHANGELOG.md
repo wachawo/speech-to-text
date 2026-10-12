@@ -46,7 +46,9 @@
 - **`GET /metrics` reports every model's pool.** `stt_model_pool_size` and
   `stt_model_pool_available`, labelled `model` and `backend`, carry each loaded model; the
   unlabelled `stt_pool_*` gauges keep describing the default model and the diarizer, so
-  existing dashboards keep working.
+  existing dashboards keep working. The labels name the deployment's models, so with
+  `STT_TOKENS` set their series only reach a scrape that sends a valid token, like the model
+  list of `/api/health`; any other scrape gets those two gauges empty.
 - **A model select in the web UI.** With several models loaded, TRANSCRIBE offers the
   selectable rows of `GET /api/models` beside the mode and the language, for the FILE,
   DEVICE and STREAM sources alike: FILE sends it as the `model` form field, DEVICE and

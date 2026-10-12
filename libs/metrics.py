@@ -68,7 +68,8 @@ def collect_live_gauges() -> list:
 
     The unlabelled stt_pool_* gauges describe the default model's pool and the diarizer, as they
     did before several models could be loaded; stt_model_pool_size and stt_model_pool_available
-    carry every loaded model, labelled with its id and backend.
+    carry every model the pool status lists under `models`, labelled with its id and backend, and
+    are empty when it lists none - stt_server lists them only to a scrape that may see them.
     """
     pools = LIVE_STATE["pools"]()
     families = []
