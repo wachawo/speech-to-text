@@ -40,7 +40,7 @@ def is_target_wav(bio: io.BytesIO) -> bool:
     Only the headers are read: the chunks are walked up to `data`, skipping any other (LIST, fact,
     cue) together with its pad byte, and the fmt chunk may be longer than its 16 required bytes.
     Anything unexpected - no fmt before data, another format tag, rate, channel count or width, a
-    truncated header - answers False and the upload goes through pydub exactly as before: a miss
+    truncated header, a data chunk that declares no bytes - answers False and the upload goes through pydub exactly as before: a miss
     costs that conversion, a false yes would hand the transcriber a file it cannot read.
     """
     bio.seek(0)
@@ -52,7 +52,9 @@ def is_target_wav(bio: io.BytesIO) -> bool:
         while (chunk := read_chunk_header(bio)) is not None:
             chunk_id, size = chunk
             if chunk_id == b"data":
-                return seen_fmt
+                # A size of 0 is the header a streaming writer leaves when it cannot seek back:
+                # soundfile reads it as no samples, ffmpeg reads to the end, so it takes pydub.
+                return seen_fmt and size > 0
             if chunk_id == b"fmt ":
                 body = bio.read(size)
                 if size < FMT_FIELDS.size or len(body) < size:
