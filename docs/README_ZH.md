@@ -244,6 +244,40 @@ curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
 
 当设置了 `STT_TOKENS` 时，除 `GET /api/health` 之外的每个路由都必须携带 `Authorization: Bearer <token>`；该接口保持开放，以便健康检查能正常工作。
 
+### OpenAI 兼容 API
+
+`POST /v1/audio/transcriptions` 和 `GET /v1/models` 遵循 OpenAI 的音频 API，因此只要把 `base_url` 指向 `http://<host>:<port>/v1`，并把 API 密钥设为 `STT_TOKENS` 之一（关闭鉴权时可以是任意字符串），任何 OpenAI SDK 都能使用。
+
+```bash
+curl localhost:5099/v1/audio/transcriptions \
+  -H 'Authorization: Bearer <token>' \
+  -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
+print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
+```
+
+请求是带 `file` 的 `multipart/form-data`，走的流程与 `/api/stt` 完全相同：相同的令牌、相同的大小上限、相同的转换、相同的语音门控，以及相同的空闲实例等待时间（`STT_QUEUE_TIMEOUT`）。16 kHz 单声道 16 位 PCM 的 WAV 不经解码直接传递，在这条路径上服务器不会对其他任何内容重采样。
+
+- `model` 是 `GET /v1/models` 列出的某个 id（与 `/api/models` 的 id 相同）、别名或后端名称，与 `/api/stt` 完全一致；缺省或为空时使用默认模型。OpenAI 自己的名称（如 `whisper-1`）会以 `Invalid model` 被拒绝。
+- `language` 与 `/api/stt` 一样按所选模型校验；Parakeet 接受但忽略它。
+- `prompt` 会成为 Whisper 的初始提示（initial prompt）。openai-whisper 只保留其最后 223 个 token，并且只用于音频的前 30 秒。Parakeet 不接受提示，会忽略它。提示永远不会写入日志。
+- `temperature` 只能缺省或为 `0`：解码在温度 0 下是确定性的。
+- `response_format` 为 `json`（默认，`{"text": ...}`）、`text`（纯文本正文）或 `verbose_json`；`srt` 和 `vtt` 会被拒绝。`timestamp_granularities[]` 只能请求 `segment`。
+
+`verbose_json` 包含 `task`、`language`（Whisper 报告的小写完整语言名，例如 `english`；Parakeet 不报告语言，因此为 `null`）、以秒为单位的 `duration`、`text` 和 `segments`。Whisper 的分段是它自己的，带有 `id`、`seek`、`start`、`end`、`text`、`tokens`、`temperature`、`avg_logprob`、`compression_ratio` 和 `no_speech_prob`。Parakeet 不产生置信度数值，因此返回一个 `tokens` 为空、置信度字段为 `null` 的分段。
+
+所有 `/v1` 路径上的错误，包括 `401`、`404`、`405`、`413` 和 `500`，都采用 OpenAI 的格式，`message` 中是相同的类别；每个 `/v1` 响应还会在 `X-Request-Id` 头中携带请求 id。`/api/*` 的错误保持原有格式。
+
+```json
+{ "error": { "message": "Invalid language", "type": "invalid_request_error", "param": "language",
+             "code": "invalid_language", "request_id": "a1b2c3d4e5f6" } }
+```
+
 ### 命令行客户端
 
 `stt_client.py` 是一个用于操作和测试服务器的小型客户端。它从 `STT_URL` 和 `STT_TOKEN` 读取服务器地址和令牌。
@@ -323,6 +357,7 @@ speech-to-text/
 │   ├── audio.py         # upload -> 16 kHz mono WAV conversion
 │   ├── model_pool.py    # a pool per transcription model, and one for the diarizer
 │   ├── catalog.py       # what the server can do, for GET /api/models
+│   ├── openai_api.py    # the OpenAI-compatible /v1 API: its options, answers and model list
 │   ├── align.py         # joins transcription segments to speaker turns
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription

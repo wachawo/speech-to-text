@@ -244,6 +244,40 @@ Les erreurs sont uniformes : `error` porte une catégorie générique et `reques
 
 Lorsque `STT_TOKENS` est défini, chaque route à l'exception de `GET /api/health` doit comporter `Authorization: Bearer <token>` ; l'état de santé reste ouvert afin que les contrôles de santé continuent de fonctionner.
 
+### API compatible OpenAI
+
+`POST /v1/audio/transcriptions` et `GET /v1/models` suivent l'API audio d'OpenAI : n'importe quel SDK OpenAI fonctionne dès que son `base_url` pointe vers `http://<host>:<port>/v1` et que sa clé d'API est l'un des `STT_TOKENS` (n'importe quelle chaîne quand l'authentification est désactivée).
+
+```bash
+curl localhost:5099/v1/audio/transcriptions \
+  -H 'Authorization: Bearer <token>' \
+  -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
+print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
+```
+
+La requête est en `multipart/form-data` avec `file` et passe exactement par le même chemin que `/api/stt` : même jeton, même limite de taille, même conversion, même filtre de parole et même attente d'une instance libre (`STT_QUEUE_TIMEOUT`). Un WAV PCM 16 bits mono à 16 kHz est transmis sans décodage, et le serveur ne rééchantillonne rien d'autre sur ce chemin.
+
+- `model` est l'un des identifiants listés par `GET /v1/models` (les mêmes que `/api/models`), un alias ou un nom de backend, exactement comme sur `/api/stt` ; absent ou vide, c'est le modèle par défaut. Les noms propres à OpenAI comme `whisper-1` sont refusés avec `Invalid model`.
+- `language` est vérifié par rapport au modèle choisi comme sur `/api/stt` ; Parakeet l'accepte et l'ignore.
+- `prompt` devient le prompt initial de Whisper. openai-whisper n'en garde que les 223 derniers tokens et ne l'utilise que pour les 30 premières secondes d'audio. Parakeet ne prend pas de prompt et l'ignore. Le prompt n'est jamais journalisé.
+- `temperature` ne peut qu'être absente ou valoir `0` : le décodage est déterministe à température 0.
+- `response_format` vaut `json` (par défaut, `{"text": ...}`), `text` (un corps en texte brut) ou `verbose_json` ; `srt` et `vtt` sont refusés. `timestamp_granularities[]` ne peut demander que `segment`.
+
+`verbose_json` contient `task`, `language` (le nom complet en minuscules que rapporte Whisper, par exemple `english`, ou `null` pour Parakeet, qui n'en rapporte aucun), `duration` en secondes, `text` et `segments`. Les segments de Whisper sont les siens, avec `id`, `seek`, `start`, `end`, `text`, `tokens`, `temperature`, `avg_logprob`, `compression_ratio` et `no_speech_prob`. Parakeet renvoie un seul segment avec `tokens` vide et les champs de confiance à `null`, car il n'en produit aucun.
+
+Les erreurs sur tout chemin `/v1`, y compris `401`, `404`, `405`, `413` et `500`, prennent la forme d'OpenAI, avec la même catégorie comme `message` ; chaque réponse `/v1` porte aussi l'identifiant de requête dans l'en-tête `X-Request-Id`. Les erreurs de `/api/*` gardent leur propre forme.
+
+```json
+{ "error": { "message": "Invalid language", "type": "invalid_request_error", "param": "language",
+             "code": "invalid_language", "request_id": "a1b2c3d4e5f6" } }
+```
+
 ### Client en ligne de commande
 
 `stt_client.py` est un petit client pour travailler avec le serveur et le tester. Il lit l'adresse du serveur et le jeton depuis `STT_URL` et `STT_TOKEN`.
@@ -323,6 +357,7 @@ speech-to-text/
 │   ├── audio.py         # conversion de l'envoi en WAV mono 16 kHz
 │   ├── model_pool.py    # un pool par modèle de transcription, et un pour le diariseur
 │   ├── catalog.py       # ce que le serveur sait faire, pour GET /api/models
+│   ├── openai_api.py    # l'API /v1 compatible OpenAI : ses options, ses réponses et sa liste de modèles
 │   ├── align.py         # joint les segments de transcription aux tours de parole
 │   ├── live.py          # le WebSocket /api/stream : protocole et sessions
 │   ├── stream.py        # cœur de la transcription en direct : pauses, phrases, transcription par phrase

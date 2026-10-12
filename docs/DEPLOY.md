@@ -231,7 +231,10 @@ A client that sends short phrases - 1 to 3 s of 16 kHz mono 16-bit PCM WAV, one 
    docker compose -f docker-compose.short.yml restart stt_short    # after a code-only update
    curl -s -H "Authorization: Bearer <token>" "localhost:5061/api/health"
    curl -s -H "Authorization: Bearer <token>" -F file=@phrase.wav -F model=parakeet "localhost:5061/api/stt"
+   curl -s -H "Authorization: Bearer <token>" -F file=@phrase.wav -F model=parakeet "localhost:5061/v1/audio/transcriptions"
    ```
+
+   A client built on an OpenAI SDK points its `base_url` at `http://<host>:5061/v1`; see "OpenAI-compatible API" in the README.
 
 Why these settings:
 

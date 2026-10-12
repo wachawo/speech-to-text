@@ -271,6 +271,40 @@ Errors are uniform: `error` carries a generic category and `request_id` correlat
 
 When `STT_TOKENS` is set, every route except `GET /api/health` must carry `Authorization: Bearer <token>`; health stays open so healthchecks keep working.
 
+### OpenAI-compatible API
+
+`POST /v1/audio/transcriptions` and `GET /v1/models` follow OpenAI's audio API, so any OpenAI SDK works once its `base_url` points at `http://<host>:<port>/v1` and its API key is one of `STT_TOKENS` (any string while auth is off).
+
+```bash
+curl localhost:5099/v1/audio/transcriptions \
+  -H 'Authorization: Bearer <token>' \
+  -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
+print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
+```
+
+The request is `multipart/form-data` with `file` and goes through exactly what `/api/stt` does: the same token, size limit, conversion, speech gate and wait for a free instance (`STT_QUEUE_TIMEOUT`). A 16 kHz mono 16-bit PCM WAV is passed on without decoding, and the server resamples nothing else for this path.
+
+- `model` is one of the ids `GET /v1/models` lists (the same ids as `/api/models`), an alias or a backend name, exactly as on `/api/stt`; absent or empty means the default model. OpenAI's own names such as `whisper-1` are refused as `Invalid model`.
+- `language` is checked against the chosen model as on `/api/stt`; Parakeet accepts and ignores it.
+- `prompt` becomes Whisper's initial prompt. openai-whisper keeps only its last 223 tokens and uses it for the first 30 s of audio. Parakeet takes no prompt and ignores it. The prompt is never logged.
+- `temperature` may only be absent or `0`: decoding is deterministic at temperature 0.
+- `response_format` is `json` (the default, `{"text": ...}`), `text` (a plain-text body) or `verbose_json`; `srt` and `vtt` are refused. `timestamp_granularities[]` may only ask for `segment`.
+
+`verbose_json` carries `task`, `language` (the full lower-case name Whisper reports, such as `english`, or `null` for Parakeet, which does not report one), `duration` in seconds, `text` and `segments`. Whisper's segments are its own, with `id`, `seek`, `start`, `end`, `text`, `tokens`, `temperature`, `avg_logprob`, `compression_ratio` and `no_speech_prob`. Parakeet gives one segment with `tokens` empty and the confidence fields `null`, because it produces none.
+
+Errors on every `/v1` path, `401`, `404`, `405`, `413` and `500` included, take OpenAI's shape, with the same category as `message`; every `/v1` response also carries the request id in an `X-Request-Id` header. `/api/*` errors keep their own shape.
+
+```json
+{ "error": { "message": "Invalid language", "type": "invalid_request_error", "param": "language",
+             "code": "invalid_language", "request_id": "a1b2c3d4e5f6" } }
+```
+
 ### CLI client
 
 `stt_client.py` is a small client for working with and testing the server. It reads the server address and token from `STT_URL` and `STT_TOKEN`.
@@ -350,6 +384,7 @@ speech-to-text/
 │   ├── audio.py         # upload -> 16 kHz mono WAV conversion
 │   ├── model_pool.py    # a pool per transcription model, and one for the diarizer
 │   ├── catalog.py       # what the server can do, for GET /api/models
+│   ├── openai_api.py    # the OpenAI-compatible /v1 API: its options, answers and model list
 │   ├── align.py         # joins transcription segments to speaker turns
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
