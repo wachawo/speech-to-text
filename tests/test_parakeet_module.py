@@ -28,7 +28,17 @@ def token(text, start, end):
 def test_module_imports_and_exposes_the_same_surface_as_whisper():
     """Interchangeability is the whole design, so the names and their absence both matter."""
     module = load_real_parakeet()
-    for name in ("get_model", "get_stt_bio", "get_stt_segments", "describe_backend", "group_tokens"):
+    for name in (
+        "get_model",
+        "get_stt_result",
+        "get_stt_bio",
+        "get_stt_segments",
+        "describe_backend",
+        "resolve_languages",
+        "list_aliases",
+        "list_known_models",
+        "group_tokens",
+    ):
         assert callable(getattr(module, name)), name
     # It detects the language itself, so it deliberately has no language table to resolve against.
     assert not hasattr(module, "normalize_language_code")
@@ -85,3 +95,23 @@ def test_languages_are_refused_for_an_unknown_model_id(monkeypatch):
     row = module.describe_backend()
     assert row["languages"] is None
     assert row["languages_source"] is None
+
+
+def test_describe_backend_takes_the_model_to_describe():
+    """Each loaded model gets its own row, so the id is an argument; an uncovered one reports null."""
+    assert load_real_parakeet().describe_backend(model_name="nvidia/parakeet-something-else")["languages"] is None
+
+
+def test_the_short_name_is_an_alias():
+    """A client may name the model without its organisation prefix."""
+    module = load_real_parakeet()
+    assert module.list_aliases("nvidia/parakeet-tdt-0.6b-v3") == ["parakeet-tdt-0.6b-v3"]
+    assert module.describe_backend()["aliases"] == ["parakeet-tdt-0.6b-v3"]
+
+
+def test_languages_and_known_models_come_from_the_table():
+    """The table is what the module can vouch for: its ids, and their languages or None."""
+    module = load_real_parakeet()
+    assert module.list_known_models() == ["nvidia/parakeet-tdt-0.6b-v3"]
+    assert len(module.resolve_languages("nvidia/parakeet-tdt-0.6b-v3")) == 25
+    assert module.resolve_languages("nvidia/parakeet-something-else") is None

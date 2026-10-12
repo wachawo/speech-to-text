@@ -11,8 +11,8 @@ import pytest
 import soundfile as sf
 
 # Local imports
-from libs import config, model_pool, stream
-from tests.helpers import make_silence, make_tone
+from libs import model_pool, registry, stream
+from tests.helpers import make_model_sentinel, make_silence, make_tone
 
 RATE = stream.SAMPLE_RATE
 FRAME = stream.FRAME_SAMPLES
@@ -22,13 +22,9 @@ POST_ROLL = int(stream.POST_ROLL_SECONDS * RATE)
 
 
 @pytest.fixture
-def model_queue(monkeypatch):
+def model_queue(legacy_pool):
     """A one-slot model pool holding a sentinel, with the whisper stub as the transcriber."""
-    pool: queue.Queue = queue.Queue()
-    pool.put("model-sentinel")
-    monkeypatch.setattr(model_pool, "MODEL_POOL", pool)
-    monkeypatch.setattr(config, "STT_BACKEND", "whisper")
-    return pool
+    return legacy_pool
 
 
 def build_buffer(*chunks) -> dict:
@@ -249,12 +245,17 @@ def test_transcribe_utterance_offsets_clamps_and_drops_empty_text(model_queue, s
     monkeypatch.setattr(stt_module, "get_stt_segments", fake_segments)
     buffer = build_buffer(make_silence(4.0))
     utterance = {"start": 2 * RATE, "end": int(3.6 * RATE)}
-    segments = stream.transcribe_utterance(buffer, utterance, "ru")
+    segments = stream.transcribe_utterance(buffer, utterance, "ru", registry.get_default_spec())
     assert segments == [
         {"start": 2.0, "end": 3.0, "text": "hello"},
         {"start": 3.5, "end": 3.6, "text": "tail"},
     ]
-    assert seen == {"model": "model-sentinel", "language": "ru", "samples": int(1.6 * RATE), "pool_during_call": 0}
+    assert seen == {
+        "model": make_model_sentinel("small.en-stub"),
+        "language": "ru",
+        "samples": int(1.6 * RATE),
+        "pool_during_call": 0,
+    }
     # Borrowed for the utterance only.
     assert model_queue.qsize() == 1
 
@@ -269,7 +270,7 @@ def test_transcribe_utterance_returns_the_model_when_the_transcriber_fails(model
     monkeypatch.setattr(stt_module, "get_stt_segments", fail_segments)
     buffer = build_buffer(make_tone(1.0))
     with pytest.raises(RuntimeError):
-        stream.transcribe_utterance(buffer, {"start": 0, "end": RATE}, None)
+        stream.transcribe_utterance(buffer, {"start": 0, "end": RATE}, None, registry.get_default_spec())
     assert model_queue.qsize() == 1
 
 
@@ -282,12 +283,12 @@ def test_transcribe_utterance_never_ends_a_segment_before_it_starts(model_queue,
 
     monkeypatch.setattr(stt_module, "get_stt_segments", fake_segments)
     buffer = build_buffer(make_tone(1.0))
-    segments = stream.transcribe_utterance(buffer, {"start": 0, "end": RATE}, None)
+    segments = stream.transcribe_utterance(buffer, {"start": 0, "end": RATE}, None, registry.get_default_spec())
     assert all(segment["start"] <= segment["end"] for segment in segments)
     assert [segment["text"] for segment in segments] == ["hello"]
 
 
-def test_attribute_live_segments_names_speakers_without_merging():
+def test_attribute_live_segments_names_speakers_without_merging(legacy_pool):
     """Each segment gets the speaker holding most of it and an overlap flag; runs are not merged."""
     segments = [
         {"start": 0.0, "end": 1.0, "text": "a"},
@@ -302,7 +303,7 @@ def test_attribute_live_segments_names_speakers_without_merging():
         {"speaker": 0, "start": 2.9, "end": 4.2},
     ]
     original = [dict(segment) for segment in segments]
-    attributed = stream.attribute_live_segments(segments, turns)
+    attributed = stream.attribute_live_segments(segments, turns, registry.get_default_spec())
     assert [(item["text"], item["speaker"], item["overlap"]) for item in attributed] == [
         ("a", 0, True),
         ("b", 1, True),

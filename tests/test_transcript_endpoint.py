@@ -7,7 +7,7 @@ import queue
 import re
 
 from libs import model_pool
-from tests.helpers import make_wav
+from tests.helpers import get_default_pool, make_wav
 
 REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
@@ -34,7 +34,7 @@ def refuse_borrowing(monkeypatch, name, borrowed):
     given back too early leaves the pool just as full as one never borrowed. The record can.
     """
 
-    def record_borrowing(timeout=None):
+    def record_borrowing(timeout=None, model_id=None):
         """Stand in for an acquire function: note the call and report the pool as exhausted."""
         borrowed.append(name)
         raise queue.Empty
@@ -102,7 +102,7 @@ def test_the_diarizer_is_released_before_a_transcription_model_is_borrowed(
 
     def diarize_and_count(bio, diarizer=None, threshold=None):
         """Stand in for diarize.diarize_wav() and note how many transcription models are free."""
-        free["models while diarizing"] = model_pool.MODEL_POOL.qsize()
+        free["models while diarizing"] = get_default_pool().qsize()
         return diarize_wav(bio, diarizer=diarizer, threshold=threshold)
 
     def transcribe_and_count(bio, model=None, device=None, language=None):
@@ -120,7 +120,7 @@ def test_the_diarizer_is_released_before_a_transcription_model_is_borrowed(
 def test_both_instances_are_returned_to_their_pools(diarize_client):
     """A served request leaves both pools exactly as it found them."""
     post_audio(diarize_client)
-    assert model_pool.MODEL_POOL.qsize() == 1
+    assert get_default_pool().qsize() == 1
     assert model_pool.DIARIZER_POOL.qsize() == 1
 
 
@@ -140,7 +140,7 @@ def test_a_transcription_failure_still_returns_the_diarizer(diarize_client, monk
     assert resp.get_json()["error"] == "Transcription failed"
     assert "transcription exploded" not in resp.get_data(as_text=True)
     assert free == [1]
-    assert model_pool.MODEL_POOL.qsize() == 1
+    assert get_default_pool().qsize() == 1
     assert model_pool.DIARIZER_POOL.qsize() == 1
 
 

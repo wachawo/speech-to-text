@@ -26,7 +26,7 @@
         </div>
       </div>
 
-      <!-- Mode and language: the screen's own, the same for every source. -->
+      <!-- Model, mode and language: the screen's own, the same for every source. -->
       <slot name="options" :busy="busy"></slot>
 
       <div style="margin-left: auto"></div>
@@ -69,23 +69,23 @@
    - Text is POST /api/stt - the words alone;
    - Turns is POST /api/diarize - who spoke when, as time ranges, and no text
      at all.
-   The first two take the language as the form field `language` when one is
-   chosen; diarization has no use for one.
+   The first two take the model and the language as the form fields `model`
+   and `language` when one is chosen; diarization has no use for either.
 
-   The screen owns the mode and the language (they are the same for every
-   source) and hands this the values to send. The answer is kept in the store
-   as FILE's transcript, where the screen reads it - and where it still lands
-   if the screen was left while the upload ran. The chosen file is kept there
-   too, so a look at another screen does not lose it, and so is the upload in
-   flight, so the source rebuilt on the way back shows it still running and
-   does not send the file again, and so is the reason it failed, so a failure
-   that comes while the screen is away is still on the error bar when it is
-   back. `busy` tells the screen when an upload is in flight, so it can keep
-   the source switch from destroying it. Used as:
+   The screen owns the model, the mode and the language (they are the same
+   for every source) and hands this the values to send. The answer is kept in
+   the store as FILE's transcript, where the screen reads it - and where it
+   still lands if the screen was left while the upload ran. The chosen file is
+   kept there too, so a look at another screen does not lose it, and so is the
+   upload in flight, so the source rebuilt on the way back shows it still
+   running and does not send the file again, and so is the reason it failed,
+   so a failure that comes while the screen is away is still on the error bar
+   when it is back. `busy` tells the screen when an upload is in flight, so it
+   can keep the source switch from destroying it. Used as:
 
-     <stt-file-source :mode="mode" :language="language" :compact="!!result"
-                      :held="catalogue loading" @busy="...">
-       <template #options="{ busy }">...the mode and language selects...</template>
+     <stt-file-source :model="model" :mode="mode" :language="language"
+                      :compact="!!result" :held="catalogue loading" @busy="...">
+       <template #options="{ busy }">...the model, mode and language selects...</template>
      </stt-file-source>
 */
 
@@ -100,9 +100,10 @@ module.exports = {
   mixins: [SttWait],
 
   props: {
-    // What the request carries: 'speakers', 'text' or 'turns', and a language
-    // code, 'auto', or '' for none. Already reconciled with what the server
-    // offers.
+    // What the request carries: a model id or '' for the server default,
+    // 'speakers', 'text' or 'turns', and a language code, 'auto', or '' for
+    // none. Already reconciled with what the server offers.
+    model: { type: String, default: '' },
     mode: { type: String, default: 'text' },
     language: { type: String, default: '' },
     // A transcript is on the screen: the drop zone shrinks to one line.
@@ -258,9 +259,11 @@ module.exports = {
       var file = this.file;
       var mode = REQUESTS[this.mode] ? this.mode : 'text';
       var request = REQUESTS[mode];
+      var model = mode === 'turns' ? '' : this.model;
       var language = mode === 'turns' ? '' : this.language;
       var body = new FormData();
       body.append('file', file, file.name);
+      if (model) body.append('model', model);
       if (language) body.append('language', language);
       this.error = '';
       this.warning = '';
@@ -270,7 +273,11 @@ module.exports = {
       // it, and a header set here would drop the boundary.
       this.$http.post(request.url, body)
         .then(function (resp) {
-          var result = { mode: mode, name: file.name, language: language, data: resp.data || {} };
+          var data = resp.data || {};
+          // The model the server says transcribed, which is the default's id
+          // when none was chosen; /api/diarize names none.
+          var used = typeof data.model === 'string' ? data.model : model;
+          var result = { mode: mode, name: file.name, model: used, language: language, data: data };
           self.$store.dispatch('finish_upload', { serial: serial, result: result, error: '' });
         }, function (err) {
           self.$store.dispatch('finish_upload', { serial: serial, result: null, error: self.$apiError(err) });

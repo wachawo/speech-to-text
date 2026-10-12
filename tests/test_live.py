@@ -15,8 +15,8 @@ import numpy as np
 import pytest
 
 # Local imports
-from libs import config, live, model_pool, stream, url_source
-from tests.helpers import make_silence, make_tone
+from libs import config, live, model_pool, registry, stream, url_source
+from tests.helpers import make_model_sentinel, make_silence, make_tone
 
 RATE = stream.SAMPLE_RATE
 CHUNK_SECONDS = 0.1
@@ -47,21 +47,16 @@ def answer_hello(bio, model=None, device=None, language=None):
 
 
 @pytest.fixture(autouse=True)
-def live_env(monkeypatch, stt_module):
+def live_env(monkeypatch, stt_module, legacy_pool):
     """A one-slot model pool, no auth, diarization off, the whisper stub, no URL session running, no real DNS."""
-    pool: queue.Queue = queue.Queue()
-    pool.put("model-sentinel")
-    monkeypatch.setattr(model_pool, "MODEL_POOL", pool)
     monkeypatch.setattr(model_pool, "DIARIZER_POOL", queue.Queue())
     monkeypatch.setattr(model_pool, "DIARIZERS_LOADED", 0)
     monkeypatch.setattr(config, "STT_TOKENS", set())
-    monkeypatch.setattr(config, "DIARIZE_ENABLED", False)
-    monkeypatch.setattr(config, "STT_BACKEND", "whisper")
     monkeypatch.setattr(config, "CORS_ORIGINS", ["*"])
     monkeypatch.setattr(url_source, "URL_SESSIONS", 0)
     monkeypatch.setattr(socket, "getaddrinfo", resolve_test_name)
     monkeypatch.setattr(stt_module, "get_stt_segments", answer_hello)
-    return pool
+    return legacy_pool
 
 
 @pytest.fixture
@@ -255,6 +250,7 @@ def test_client_session_streams_segments_then_done(live_env):
         "type": "ready",
         "sample_rate": RATE,
         "backend": "whisper",
+        "model": "small.en-stub",
         "language": None,
         "diarize": False,
         "source": "client",
@@ -456,7 +452,7 @@ def test_a_disconnect_during_transcription_stops_the_session_and_the_model_comes
     assert select_events(result, "segment") == []
     assert read_closes(result) == []
     assert result["leftover"] == []
-    assert live_env.get(timeout=5) == "model-sentinel"
+    assert live_env.get(timeout=5) == make_model_sentinel("small.en-stub")
 
 
 def test_a_transcriber_that_raises_fails_the_session(live_env, stt_module, monkeypatch):
@@ -493,7 +489,7 @@ def test_a_connection_that_is_not_a_handshake_is_left_alone():
 def test_an_exhausted_pool_fails_the_session(monkeypatch):
     """No model freeing up in time is a try-again-later, not an internal error."""
 
-    def raise_empty(timeout=None):
+    def raise_empty(timeout=None, model_id=None):
         """Stand in for a pool whose wait timed out."""
         raise queue.Empty
 
@@ -596,7 +592,7 @@ def test_a_source_that_fails_before_any_audio_is_reported_with_the_url_redacted(
 
 def test_find_keep_from_between_utterances_keeps_the_pre_roll():
     """With nothing in progress, only the pre-roll behind the detector is still needed."""
-    session = live.new_session({"language": None, "diarize": False, "url": None}, "abc")
+    session = live.new_session({"spec": registry.get_default_spec(), "language": None, "diarize": False, "url": None}, "abc")
     session["segmenter"]["position"] = 10 * RATE
     assert live.find_keep_from(session) == 10 * RATE - int(stream.PRE_ROLL_SECONDS * RATE)
     # Never back into the previous utterance, which is already done with.
@@ -606,7 +602,7 @@ def test_find_keep_from_between_utterances_keeps_the_pre_roll():
 
 def test_find_keep_from_takes_the_earliest_need():
     """An utterance in progress, a queued one and an unfinished diarizer each hold samples back."""
-    session = live.new_session({"language": None, "diarize": False, "url": None}, "abc")
+    session = live.new_session({"spec": registry.get_default_spec(), "language": None, "diarize": False, "url": None}, "abc")
     segmenter = session["segmenter"]
     segmenter.update(position=20 * RATE, in_speech=True, speech_start=15 * RATE)
     assert live.find_keep_from(session) == 15 * RATE
@@ -715,7 +711,7 @@ def test_idle_catch_up_diarizes_and_trims_no_further_than_the_diarizer_needs(mon
 def test_a_handover_splits_the_phrase_in_progress(monkeypatch):
     """When the diarizer reports a speaker change inside an open phrase, the phrase is closed there."""
     monkeypatch.setattr(live.diarize, "find_handover", lambda state, start, end: 1.5)
-    session = live.new_session({"language": None, "diarize": False, "url": None}, "abc")
+    session = live.new_session({"spec": registry.get_default_spec(), "language": None, "diarize": False, "url": None}, "abc")
     session["diarization"] = {"frames": 250, "finished": False, "next_start": 0}
     stream.append_samples(session["buffer"], make_tone(2.5))
     live.queue_utterances(session)
@@ -727,7 +723,7 @@ def test_a_handover_splits_the_phrase_in_progress(monkeypatch):
 
 def test_no_diarizer_no_split(monkeypatch):
     """Without diarization there is nothing to split on, and the phrase stays open."""
-    session = live.new_session({"language": None, "diarize": False, "url": None}, "abc")
+    session = live.new_session({"spec": registry.get_default_spec(), "language": None, "diarize": False, "url": None}, "abc")
     stream.append_samples(session["buffer"], make_tone(2.5))
     live.queue_utterances(session)
     live.split_at_handover(session)
@@ -737,7 +733,7 @@ def test_no_diarizer_no_split(monkeypatch):
 def test_a_session_that_falls_behind_sheds_its_oldest_queued_phrases(monkeypatch):
     """Past MAX_BACKLOG_SECONDS of queued audio the oldest waiting phrases go; the head stays."""
     monkeypatch.setattr(live, "MAX_BACKLOG_SECONDS", 10.0)
-    session = live.new_session({"language": None, "diarize": False, "url": None}, "abc")
+    session = live.new_session({"spec": registry.get_default_spec(), "language": None, "diarize": False, "url": None}, "abc")
     phrases = [{"start": index * 4 * RATE, "end": (index * 4 + 4) * RATE} for index in range(5)]
     session["pending"].extend(phrases)
     live.shed_backlog(session)
@@ -748,7 +744,7 @@ def test_a_session_that_falls_behind_sheds_its_oldest_queued_phrases(monkeypatch
 
 def test_skipped_audio_is_reported_once(monkeypatch):
     """The client hears about shed audio in one `skipped` message per increase, with the running total."""
-    session = live.new_session({"language": None, "diarize": False, "url": None}, "abc")
+    session = live.new_session({"spec": registry.get_default_spec(), "language": None, "diarize": False, "url": None}, "abc")
     sent = []
 
     async def record(event):

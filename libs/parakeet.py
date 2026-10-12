@@ -72,15 +72,31 @@ def resolve_device(device: str | None = None) -> str:
     return device
 
 
-def describe_backend() -> dict:
-    """Describe this backend for GET /api/models, loading nothing."""
-    model_id = config.PARAKEET_MODEL
+def resolve_languages(model_name: str) -> list[str] | None:
+    """The language codes this table carries for a model id, or None for an id it does not cover."""
+    return list(LANGUAGES_BY_MODEL.get(model_name) or []) or None
+
+
+def list_aliases(model_name: str) -> list[str]:
+    """The short name after the last `/` (`parakeet-tdt-0.6b-v3`), when it differs from the id."""
+    short_name = model_name.rsplit("/", 1)[-1]
+    return [short_name] if short_name and short_name != model_name else []
+
+
+def list_known_models() -> list[str]:
+    """Every model id this module can describe with confidence, loaded or not."""
+    return sorted(LANGUAGES_BY_MODEL)
+
+
+def describe_backend(model_name: str | None = None) -> dict:
+    """Describe one Parakeet model for GET /api/models, loading nothing; None means PARAKEET_MODEL."""
+    model_id = config.PARAKEET_MODEL if model_name is None else model_name
     cached = os.path.join(config.PARAKEET_DOWNLOAD_ROOT, "models--" + model_id.replace("/", "--"))
     languages = LANGUAGES_BY_MODEL.get(model_id)
     return {
         "backend": "parakeet",
         "model": model_id,
-        "aliases": [],
+        "aliases": list_aliases(model_id),
         "status": "installed" if os.path.isdir(cached) else "absent",
         "multilingual": True,
         # The model detects the language itself; there is no language argument to honour, so a
@@ -93,8 +109,10 @@ def describe_backend() -> dict:
     }
 
 
-def get_model(device: str | None = None) -> Any:
+def get_model(device: str | None = None, model_name: str | None = None) -> Any:
     """Load the Parakeet processor and model as one pair, ready for inference.
+
+    `model_name` None means PARAKEET_MODEL, the single-model deployment's id.
 
     transformers is imported inside the function for the same reason libs/diarize.py does it:
     it pulls torch, and the Gunicorn master must be able to import this module without either.
@@ -105,7 +123,7 @@ def get_model(device: str | None = None) -> Any:
     """
     from transformers import AutoModelForTDT, AutoProcessor
 
-    model_id = config.PARAKEET_MODEL
+    model_id = config.PARAKEET_MODEL if model_name is None else model_name
     os.makedirs(config.PARAKEET_DOWNLOAD_ROOT, exist_ok=True)
     processor = AutoProcessor.from_pretrained(model_id, cache_dir=config.PARAKEET_DOWNLOAD_ROOT)
     model = AutoModelForTDT.from_pretrained(model_id, cache_dir=config.PARAKEET_DOWNLOAD_ROOT)
@@ -169,22 +187,36 @@ def group_tokens(tokens: list[dict]) -> list[dict]:
     return words
 
 
+def get_stt_result(
+    bio: io.BytesIO,
+    model: Any = None,
+    device: str | None = None,
+    language: str | None = None,
+) -> dict:
+    """Transcribe a WAV buffer and return `{"text", "language", "segments"}` from one decode.
+
+    `language` is accepted and ignored, so this module is interchangeable with libs/stt.py:
+    the model detects the language itself and takes no such argument. GET /api/models reports
+    `accepts_language: false` so a caller is told rather than left to wonder. The reported
+    language is always None, because the model does not say which one it detected. `segments`
+    are the words get_stt_segments returns, from the same decode.
+    """
+    if language:
+        logger.debug("Parakeet detects the language itself; ignoring the requested %s", language)
+    text, tokens = transcribe_tokens(bio, model=model, device=device)
+    segments = group_tokens(tokens)
+    logger.debug("Transcribed %d words from %d tokens", len(segments), len(tokens))
+    return {"text": text.strip(), "language": None, "segments": segments}
+
+
 def get_stt_bio(
     bio: io.BytesIO,
     model: Any = None,
     device: str | None = None,
     language: str | None = None,
 ) -> str:
-    """Transcribe a WAV buffer and return the text.
-
-    `language` is accepted and ignored, so this module is interchangeable with libs/stt.py:
-    the model detects the language itself and takes no such argument. GET /api/models reports
-    `accepts_language: false` so a caller is told rather than left to wonder.
-    """
-    if language:
-        logger.debug("Parakeet detects the language itself; ignoring the requested %s", language)
-    text, unused_timestamps = transcribe_tokens(bio, model=model, device=device)
-    return text.strip()
+    """Transcribe a WAV buffer and return the text alone; see get_stt_result."""
+    return get_stt_result(bio, model=model, device=device, language=language)["text"]
 
 
 def get_stt_segments(
@@ -193,13 +225,8 @@ def get_stt_segments(
     device: str | None = None,
     language: str | None = None,
 ) -> list[dict]:
-    """Transcribe a WAV buffer and return its words with their times, for the speaker join."""
-    if language:
-        logger.debug("Parakeet detects the language itself; ignoring the requested %s", language)
-    unused_text, tokens = transcribe_tokens(bio, model=model, device=device)
-    segments = group_tokens(tokens)
-    logger.debug("Transcribed %d words from %d tokens", len(segments), len(tokens))
-    return segments
+    """Transcribe a WAV buffer and return its words with their times, for the speaker join; see get_stt_result."""
+    return get_stt_result(bio, model=model, device=device, language=language)["segments"]
 
 
 def main():

@@ -238,14 +238,21 @@ def encode_wav(samples: np.ndarray) -> io.BytesIO:
 
 
 def transcribe_piece(
-    samples: np.ndarray, offset: float, language: str | None, ranges: list[tuple[float, float]] | None, request_id: str
+    samples: np.ndarray,
+    offset: float,
+    language: str | None,
+    spec: dict[str, Any],
+    ranges: list[tuple[float, float]] | None,
+    request_id: str,
 ) -> list[dict[str, Any]]:
     """Transcribe one piece of audio with a pooled model; segments come back shifted by `offset` seconds.
 
     The one way a piece of audio is transcribed, for a live utterance and for a piece of a
-    background job alike. The model is borrowed for this piece only and returned in `finally`.
-    `ranges` are the piece's speech ranges from zero, or None without a detector; segments mostly
-    outside them are dropped. Raises queue.Empty when no model frees up in time.
+    background job alike. `spec` is the model to use (libs/registry.py): an instance of it is
+    borrowed from that model's own pool for this piece only, run through that model's backend,
+    and returned to the same pool in `finally`. `ranges` are the piece's speech ranges from zero,
+    or None without a detector; segments mostly outside them are dropped. Raises queue.Empty when
+    no instance frees up in time.
 
     The text stays exactly as the transcriber emitted it, leading space included: joined with
     nothing, those spaces are what makes a readable transcript - Whisper's segments and Parakeet's
@@ -254,11 +261,12 @@ def transcribe_piece(
     text at all is dropped.
     """
     length = samples.size / SAMPLE_RATE
-    model = model_pool.acquire_model()
+    model = model_pool.acquire_model(model_id=spec["id"])
     try:
-        segments = backends.transcriber().get_stt_segments(encode_wav(samples), model=model, language=language)
+        transcriber = backends.transcriber_for_backend(spec["backend"])
+        segments = transcriber.get_stt_segments(encode_wav(samples), model=model, language=language)
     finally:
-        model_pool.release_model(model)
+        model_pool.release_model(model, model_id=spec["id"])
     timed = []
     for segment in speech_gate.keep_spoken(segments, ranges, request_id, length):
         if not segment["text"].strip():
@@ -274,16 +282,17 @@ def transcribe_piece(
 
 
 def transcribe_utterance(
-    buffer: dict[str, Any], utterance: dict[str, int], language: str | None, request_id: str = "-"
+    buffer: dict[str, Any], utterance: dict[str, int], language: str | None, spec: dict[str, Any], request_id: str = "-"
 ) -> list[dict[str, Any]]:
-    """Transcribe one utterance with a pooled model and return its segments in stream time.
+    """Transcribe one utterance with a pooled instance of the session's model; segments in stream time.
 
     The model is borrowed for this utterance only and returned at once: the pool is shared with
     every upload, and a session that held a model for its whole length would starve them all.
-    With the speech gate on, an utterance with no detected speech in it is not transcribed at all
-    - the pause detector cuts on loudness, so a tone or a jingle reaches here, and Whisper would
-    answer it with a subtitle credit - and the segments of the rest are vetted against the same
-    speech ranges. Raises queue.Empty when no model frees up in time.
+    `spec` is the model the start message chose (libs/registry.py), and the instance goes back
+    to that model's own pool. With the speech gate on, an utterance with no detected speech in it
+    is not transcribed at all - the pause detector cuts on loudness, so a tone or a jingle reaches
+    here, and Whisper would answer it with a subtitle credit - and the segments of the rest are
+    vetted against the same speech ranges. Raises queue.Empty when no instance frees up in time.
     """
     samples = read_samples(buffer, utterance["start"], utterance["end"])
     ranges = None
@@ -291,12 +300,16 @@ def transcribe_utterance(
         ranges = speech_gate.find_speech(samples.astype(np.float32) / 32768.0, request_id)
         if ranges is not None and speech_gate.spoken_seconds(ranges) < MIN_VOICED_SECONDS:
             return []
-    segments = transcribe_piece(samples, utterance["start"] / SAMPLE_RATE, language, ranges, request_id)
+    segments = transcribe_piece(
+        samples, utterance["start"] / SAMPLE_RATE, language, spec=spec, ranges=ranges, request_id=request_id
+    )
     # A live segment is shown on its own, so it goes out without the transcriber's leading space.
     return [{**segment, "text": segment["text"].strip()} for segment in segments]
 
 
-def attribute_live_segments(segments: list[dict[str, Any]], turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def attribute_live_segments(
+    segments: list[dict[str, Any]], turns: list[dict[str, Any]], spec: dict[str, Any]
+) -> list[dict[str, Any]]:
     """Give the segments of one utterance a speaker and an overlap flag from the turns diarized so far.
 
     Whisper's segments are phrases and go out one by one, not merged into runs as on the upload
@@ -305,9 +318,11 @@ def attribute_live_segments(segments: list[dict[str, Any]], turns: list[dict[str
     words are joined into phrases here, within this one utterance, by the upload path's own join:
     a new phrase starts wherever the attributed speaker changes or another speaker held a turn in
     between, and a phrase is marked `overlap` when any of its words was. With no turns, as without
-    diarization, all the words of the utterance make one phrase.
+    diarization, all the words of the utterance make one phrase. `spec` is the session's model, and
+    its backend decides: a Parakeet session joins its words under a Whisper default, and a Whisper
+    session keeps its phrases under a Parakeet one.
     """
-    if getattr(backends.transcriber(), "WORD_SEGMENTS", False):
+    if getattr(backends.transcriber_for_backend(spec["backend"]), "WORD_SEGMENTS", False):
         return align.attribute_segments(segments, turns)
     attributed = []
     for segment in segments:

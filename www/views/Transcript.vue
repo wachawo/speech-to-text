@@ -89,10 +89,12 @@
 
      <stt-transcript :result="result"></stt-transcript>
 
-   where `result` is {mode, name, language, data}: `mode` 'speakers', 'text'
-   or 'turns' (who spoke when, drawn by views/Turns.vue),
+   where `result` is {mode, name, model, language, data}: `mode` 'speakers',
+   'text' or 'turns' (who spoke when, drawn by views/Turns.vue),
    `name` the recording's file name (the downloads are saved under it),
-   `language` what the request asked for ('' for the server default), and
+   `model` the id of the model that transcribed ('' when the server did not
+   say, which for turns is always), `language` what the request asked for
+   ('' for the server default), and
    `data` the server's JSON as sent - JSON saves exactly that.
 
    A live session adds `live: true`, `listening` (between START and STOP),
@@ -156,9 +158,10 @@ var copyByTextarea = function (text) {
   return copied;
 };
 
-/* The line above the blocks. "dialog.wav - ru - 2 speakers - transcribed in
-   0.9 s"; "meeting.wav - 4 speakers - 57 turns - diarized in 3.1 s"; for a
-   live session "<device> - ru - 2 speakers - 21.9 s of audio". */
+/* The line above the blocks. "dialog.wav - turbo - ru - 2 speakers -
+   transcribed in 0.9 s"; "meeting.wav - 4 speakers - 57 turns - diarized in
+   3.1 s"; for a live session "<device> - turbo - ru - 2 speakers - 21.9 s of
+   audio". */
 var TranscriptSummary = {
   props: {
     result: { type: Object, required: true },
@@ -167,6 +170,7 @@ var TranscriptSummary = {
     text: function () {
       var result = this.result;
       var parts = [result.name];
+      if (result.model) parts.push(result.model);
       if (result.language) parts.push(result.language === 'auto' ? 'language detected' : result.language);
       if (result.mode === 'speakers' || result.mode === 'turns') {
         var count = Number(result.data.speakers) || 0;

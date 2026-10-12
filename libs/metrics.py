@@ -32,6 +32,9 @@ JOBS = Counter("stt_jobs_total", "Background jobs by the status they reached", [
 # Filled in by the modules that own the numbers, so this one imports none of them.
 LIVE_STATE: dict[str, Any] = {"pools": lambda: {}, "sessions": lambda: 0, "url_sessions": lambda: 0}
 
+# The labelled per-model gauges, by the key of each model's entry in the pool status they report.
+MODEL_POOL_GAUGES = {"pool_size": "stt_model_pool_size", "available": "stt_model_pool_available"}
+
 UNMATCHED_ROUTE = "unmatched"
 
 
@@ -47,8 +50,27 @@ def count_error(category: str) -> None:
     ERRORS.labels(category=category).inc()
 
 
+def collect_model_pools(models: dict[str, Any]) -> list:
+    """One labelled family per pool figure, with a series for every loaded model."""
+    families = []
+    for key, name in MODEL_POOL_GAUGES.items():
+        family = GaugeMetricFamily(
+            name, f"Model pool of each loaded model: {key.replace('_', ' ')}", labels=["model", "backend"]
+        )
+        for model_id, pool in models.items():
+            family.add_metric([model_id, pool["backend"]], pool[key])
+        families.append(family)
+    return families
+
+
 def collect_live_gauges() -> list:
-    """The gauges read at scrape time: pool sizes and free instances, running live sessions."""
+    """The gauges read at scrape time: pool sizes and free instances, running live sessions.
+
+    The unlabelled stt_pool_* gauges describe the default model's pool and the diarizer, as they
+    did before several models could be loaded; stt_model_pool_size and stt_model_pool_available
+    carry every model the pool status lists under `models`, labelled with its id and backend, and
+    are empty when it lists none - stt_server lists them only to a scrape that may see them.
+    """
     pools = LIVE_STATE["pools"]()
     families = []
     for name, value in pools.items():
@@ -57,6 +79,7 @@ def collect_live_gauges() -> list:
         family = GaugeMetricFamily(f"stt_pool_{name}", f"Model pool: {name.replace('_', ' ')}")
         family.add_metric([], value)
         families.append(family)
+    families.extend(collect_model_pools(pools.get("models") or {}))
     sessions = GaugeMetricFamily("stt_stream_sessions_active", "Live sessions running now", labels=["source"])
     sessions.add_metric(["any"], LIVE_STATE["sessions"]())
     sessions.add_metric(["url"], LIVE_STATE["url_sessions"]())

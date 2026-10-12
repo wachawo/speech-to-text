@@ -19,7 +19,7 @@
         </div>
       </div>
 
-      <!-- Mode and language: the screen's own, the same for every source. -->
+      <!-- Model, mode and language: the screen's own, the same for every source. -->
       <slot name="options" :busy="liveActive"></slot>
 
       <div style="margin-left: auto"></div>
@@ -97,8 +97,10 @@ module.exports = {
   mixins: [SttWait, SttLive],
 
   props: {
-    // What the session asks for: 'speakers' or 'text', and a language code,
-    // 'auto', or '' for none. Already reconciled with what the server offers.
+    // What the session asks for: a model id or '' for the server default,
+    // 'speakers' or 'text', and a language code, 'auto', or '' for none.
+    // Already reconciled with what the server offers.
+    model: { type: String, default: '' },
     mode: { type: String, default: 'text' },
     language: { type: String, default: '' },
     // The screen is still reading the catalogue: START waits for it.
@@ -166,6 +168,7 @@ module.exports = {
         source: 'url',
         url: url,
         diarize: this.mode === 'speakers',
+        model: this.model || undefined,
         language: this.language || undefined,
       });
     },

@@ -3,6 +3,66 @@
 ### [Unreleased]
 
 #### Added
+- **Several pre-loaded transcription models, chosen per request.** `STT_MODELS` lists
+  them as `backend:model[@pool]` entries, for example
+  `whisper:turbo@2,whisper:small.en@1,parakeet:nvidia/parakeet-tdt-0.6b-v3@1`, each with
+  its own pool; `STT_DEFAULT_MODEL` names the one a request without `model` gets, else the
+  first entry serves. Every model still loads at startup and nothing is ever loaded
+  lazily. An entry without `@pool` takes `STT_POOL_SIZE`. With `STT_MODELS` empty the
+  server loads exactly what `STT_BACKEND` / `WHISPER_MODEL` / `PARAKEET_MODEL` chose
+  before. A malformed list, an unknown backend, the same weights listed twice (`turbo`
+  and `large-v3-turbo`) or a default that is not in the list stops the server at startup.
+  A file path is served under its basename without `.pt`, so the host's layout never
+  reaches a client, and its languages are those of the checkpoint that name names
+  (`/models/large-v3.pt` knows what `large-v3` knows). `STT_DEFAULT_MODEL` accepts a path
+  entry by that name or as written in `STT_MODELS`. Two entries one name would select, or
+  an entry served under a backend name, stop startup; a pool size must be plain digits, and
+  an entry without `@pool` stops startup when `STT_POOL_SIZE` is below 1. A path entry's
+  name is judged case-insensitively, so `/models/Tiny.EN.pt` is English-only like `tiny.en`.
+- **`model` on `POST /api/stt`, `POST /api/transcript` and `POST /api/jobs`**, as a query
+  parameter or a form field: an id, an alias, `backend:model` or a bare backend name. A name
+  nobody knows is `400 Invalid model`; a real model this server did not load is
+  `400 Model not loaded`. Both are checked before the audio is decoded or an instance is
+  borrowed, and for a job before it is created.
+- **`/api/stt` says which model transcribed and in which language.** The response gains
+  `model` (the canonical id) and `language` (the code Whisper detected or used, always `en`
+  for an English-only checkpoint, `null` for Parakeet, which does not report it).
+  `/api/transcript` gains `model`.
+- **`GET /api/models` has one row per loaded model**, each with `id`, `selectable`,
+  `pool_size` and `available`, and the body gains `default_model`. A transcriber with
+  nothing loaded keeps its single row, with `selectable: false`. `default` is still the
+  default model's backend.
+- **`stt_client.py --model NAME --language CODE`.** Both flags accept `--flag VALUE` and
+  `--flag=VALUE` and are sent as form fields only when given; each result line shows the
+  model and language the server used, and `--list` prints one line per model with its
+  selectability and pool.
+- **`GET /api/health` reports every pool.** `default_model` and `models` (per id: backend,
+  pool size, available) join the top-level `pool_size` and `available`, which now describe
+  the default model and are unchanged for a single-model deployment. With `STT_TOKENS`
+  set, the model list is only included for a request carrying a valid token: it is
+  configuration, like `/api/models`, and health itself stays open. `?deep=1` checks every
+  loaded model, one at a time: each is reported by its id under `deep.models`, and
+  `deep.transcriber` is the worst of them.
+- **`GET /metrics` reports every model's pool.** `stt_model_pool_size` and
+  `stt_model_pool_available`, labelled `model` and `backend`, carry each loaded model; the
+  unlabelled `stt_pool_*` gauges keep describing the default model and the diarizer, so
+  existing dashboards keep working. The labels name the deployment's models, so with
+  `STT_TOKENS` set their series only reach a scrape that sends a valid token, like the model
+  list of `/api/health`; any other scrape gets those two gauges empty.
+- **A model select in the web UI.** With several models loaded, TRANSCRIBE offers the
+  selectable rows of `GET /api/models` beside the mode and the language, for the FILE,
+  DEVICE and STREAM sources alike: FILE sends it as the `model` form field, DEVICE and
+  STREAM in the stream's start message; Turns, which transcribes nothing, sends none. The
+  language list is the chosen model's own, the choice is remembered in the browser, and
+  the line above a transcript names the model that produced it. The MODELS screen keys its
+  rows by model id, so two Whisper models no longer collide. A server with one model shows
+  no select and gets no `model`, exactly as before.
+- **`model` in the `/api/stream` start message.** A live session names one of the loaded
+  models the way `/api/stt` does, and every phrase borrows an instance from that model's
+  pool; without it the default model serves. The language is checked against the chosen
+  model, an unknown or unloaded model is one `error` message (`Invalid model` /
+  `Model not loaded`) and a close, and `ready` names the model. `stt_client.py --stream`
+  takes `--model`.
 - **Background jobs for long recordings, `/api/jobs`.** Upload up to 1 GB, get an id at once,
   fetch the result later: plain text, who said what, or who spoke when. The file is worked through
   in pieces of about a minute cut at pauses, and the model goes back to the pool between them, so
@@ -150,11 +210,11 @@
   running it, an upload cut off midway leaves no directory behind, and a failed status write no
   longer keeps a job locked until the process exits. `POST /api/jobs` answered 500 on Flask 3.0,
   where a request's size limit cannot be set; Flask 3.1 is now the minimum.
-- **The catalogue, backend selection and the diarization routes.** `GET /api/models` reads a model
-  as `loaded` while a request or a job holds it, instead of flipping to `installed` whenever the
-  only instance was in use. A typo in `STT_BACKEND` is logged once, not on every request, and the
-  value is case-insensitive, so `Parakeet` no longer falls back to Whisper unnoticed.
-  `/api/diarize` with no diarizer loaded answers 503 before reading the upload, as
+- **The catalogue, backend selection and the diarization routes.** `GET /api/models` reads every
+  loaded model as `loaded` while a request or a job holds it, instead of flipping to `installed`
+  whenever the only instance was in use. A typo in `STT_BACKEND` is logged once, not on every
+  request, and the value is case-insensitive, so `Parakeet` no longer falls back to Whisper
+  unnoticed. `/api/diarize` with no diarizer loaded answers 503 before reading the upload, as
   `/api/transcript` already did.
 - **A URL source ending as the client left** is logged as the client leaving, not as an abnormal end.
 - **A stopped live session in the web UI no longer hangs on a dead connection.** After STOP it
@@ -208,6 +268,24 @@
   with `Invalid value for config`. The default `python3 stt_server.py` run was not affected.
   Gunicorn 26's control socket is turned off in the same file: it defaults to a path under
   `$HOME`, which the unprivileged server user cannot write, and nothing here uses it.
+- **A bearer token with non-ASCII characters is a 401, not a 500.** `hmac.compare_digest`
+  raised `TypeError` on such a string, so such a header failed `/api/stt`
+  with a 500 and, now that health reads the token for its detailed body, made the open
+  `GET /api/health` fail too. Tokens are compared as UTF-8 bytes; health answers 200 with
+  the non-detailed body. A `token` in the `/api/stream` start message holding a lone
+  surrogate (`"\ud800"`), which UTF-8 cannot encode, is `Unauthorized` too, instead of an
+  internal close with a traceback.
+- **A known language outside the model's slice is a 400, not a 500.** `?language=yue` on a
+  99-language checkpoint passed the check and raised inside Whisper; it is now
+  `400 Unsupported language` before any audio is decoded, `POST /api/jobs` refuses it the same
+  way before a `text` or `speakers` job is created, and on `/api/stream` whose start message
+  names the model it is an `Unsupported language` error before the session starts; a start
+  message without `model` is checked exactly as before. Only a checkpoint whose list is
+  certain refuses it: a file path whose name matches no known checkpoint (a fine-tune at
+  `/models/my-large-v3-finetune.pt`) still has any known code passed on when the request
+  names no model, because its list is only guessed from the name. Both that case and an
+  English-only model handed another code are logged once per model and code, not on every
+  request.
 - **The container stops cleanly.** `entrypoint.sh` ran the server under `/bin/sh -c` without
   `exec`, so the shell stayed PID 1, never forwarded SIGTERM, and every stop and redeploy
   waited out Docker's 10 s grace period and then SIGKILLed the server with requests in flight
@@ -274,6 +352,38 @@
   speaker decision since it started; what no phrase can still ask about is now dropped.
 
 #### Changed
+- **`libs.model_pool` keeps one pool per model.** The module attribute `MODEL_POOL` is
+  replaced by `MODEL_POOLS`, a dict of queues keyed by model id, and `init_model_pool()`
+  no longer takes a `size` argument: each model's size comes from its `STT_MODELS` entry
+  or `STT_POOL_SIZE`. `model_ready()` and the integer `MODELS_LOADED` give way to
+  `is_model_loaded(model_id)` and a per-id `MODELS_LOADED`, `WAITING` is kept per pool, and
+  `acquire_model` / `release_model` require `model_id`, so an instance can never land in the
+  default pool by omission. `stream.transcribe_piece`, `stream.transcribe_utterance`,
+  `stream.attribute_live_segments`, `longform.transcribe_long` and `longform.run` take the
+  spec of the model they serve, and `jobs.create_job` the id of a job's model.
+  `catalog.describe_transcriber` is replaced by `describe_configured_model` (one
+  loaded model) and `describe_unconfigured_backend` (a transcriber with nothing loaded), and
+  `backends.transcriber()` is gone: every caller resolves
+  `backends.transcriber_for_backend(spec["backend"])` for the model it serves. Code
+  importing `libs` directly needs these new names.
+- **A request that names its model has its `language` checked against that model's own
+  list.** An English-only Whisper given `ru`, or Parakeet given a code outside its 25, is
+  `400 Unsupported language`. A request without `model` keeps the old leniency: an
+  English-only default still quietly transcribes English, and Parakeet still accepts and
+  ignores any value.
+- **The transcriber modules take the model to work on.** `get_model` and `describe_backend`
+  accept `model_name`, and both modules gained `get_stt_result`, which returns the text, the
+  language and the segments of one decode, `list_aliases`, `list_known_models` and
+  (Parakeet) `resolve_languages`; `get_stt_bio` and `get_stt_segments` are now thin
+  wrappers. Parakeet's catalogue row lists its short name as an alias.
+- **Background jobs run on the model they were accepted for.** A `text` or `speakers` job
+  resolves `model` and checks its `language` against that model when it is submitted, keeps
+  the model's id in its record, and runs on that model when it is claimed, or fails as
+  `Model not loaded` if a restart unloaded it in between, rather than run on a model its
+  language was never checked against; the record and the result name the model. A `turns`
+  job, like `/api/diarize`, reads no `model`, and its `language` is only checked for being
+  one. Between pieces a job steps aside only for callers of its model's pool: a request for
+  another model waits on another queue.
 - **transformers comes from PyPI, not from a git commit.** 5.18.0 is the first release that
   recognises the diarization model, so the `diarize` extra and `requirements-diarize.txt` ask
   for `transformers>=5.18.0`, the same floor as Parakeet, and the two install together. The GPU

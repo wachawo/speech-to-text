@@ -28,7 +28,7 @@
 
    What a source provides:
    - data `wait`, `error`, `warning`, `info` (the stt-alerts strings), and the
-     props `mode` and `language` the screen hands down;
+     props `model`, `mode` and `language` the screen hands down;
    - `liveKind` in data ('device', 'stream'): the prefix of the file name a
      transcript is saved under;
    - liveName(): what the transcript is of, for the line above it;
@@ -234,6 +234,8 @@
           mode: message.diarize ? 'speakers' : 'text',
           name: this.liveName(),
           stem: this.liveKind + '-' + fileStamp(),
+          // The model `ready` names: the chosen one, or the server's default.
+          model: typeof message.model === 'string' ? message.model : (this.model || ''),
           language: this.language,
           live: true,
           listening: true,

@@ -6,6 +6,7 @@ import queue
 
 import stt_server
 from libs import config, model_pool
+from tests.helpers import get_default_pool
 
 
 def scrape(client) -> str:
@@ -37,6 +38,7 @@ def test_metrics_report_pools_and_sessions_at_scrape_time(client):
     text = scrape(client)
     assert "stt_pool_pool_size 1.0" in text
     assert "stt_pool_available 1.0" in text
+    assert 'stt_model_pool_size{backend="whisper",model="small.en-stub"} 1.0' in text
     assert 'stt_stream_sessions_active{source="any"} 0.0' in text
 
 
@@ -62,17 +64,17 @@ def test_deep_health_runs_the_transcriber_once(client):
     """?deep=1 pushes silence through the transcriber, returns the model, and reports ok."""
     response = client.get("/api/health?deep=1")
     assert response.status_code == 200
-    assert response.get_json()["deep"] == {"transcriber": "ok"}
-    assert model_pool.MODEL_POOL.qsize() == 1
+    assert response.get_json()["deep"] == {"transcriber": "ok", "models": {"small.en-stub": "ok"}}
+    assert get_default_pool().qsize() == 1
 
 
 def test_deep_health_reports_a_busy_pool_as_busy(client, monkeypatch):
     """A pool with no free model is busy, not broken: still 200."""
-    monkeypatch.setattr(model_pool, "MODEL_POOL", queue.Queue())
+    monkeypatch.setattr(model_pool, "MODEL_POOLS", {"small.en-stub": queue.Queue()})
     monkeypatch.setattr(stt_server, "DEEP_CHECK_TIMEOUT", 0.01)
     response = client.get("/api/health?deep=1")
     assert response.status_code == 200
-    assert response.get_json()["deep"] == {"transcriber": "busy"}
+    assert response.get_json()["deep"] == {"transcriber": "busy", "models": {"small.en-stub": "busy"}}
 
 
 def test_deep_health_reports_a_failing_model_with_503(client, monkeypatch, stt_module):
@@ -86,13 +88,13 @@ def test_deep_health_reports_a_failing_model_with_503(client, monkeypatch, stt_m
     response = client.get("/api/health?deep=1")
     assert response.status_code == 503
     assert response.get_json()["status"] == "failed"
-    assert model_pool.MODEL_POOL.qsize() == 1
+    assert get_default_pool().qsize() == 1
 
 
 def test_deep_health_checks_the_diarizer_when_enabled(diarize_client):
     """With diarization on, the diarizer is exercised too."""
     body = diarize_client.get("/api/health?deep=1").get_json()
-    assert body["deep"] == {"transcriber": "ok", "diarizer": "ok"}
+    assert body["deep"] == {"transcriber": "ok", "models": {"small.en-stub": "ok"}, "diarizer": "ok"}
 
 
 def test_deep_health_needs_the_token_when_tokens_are_set(client, monkeypatch):

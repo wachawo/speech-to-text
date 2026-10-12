@@ -3,13 +3,12 @@
 """The speech gate: segments nobody spoke are dropped from every transcript, the detector replaced."""
 
 import io
-import queue
 
 import numpy as np
 import pytest
 import soundfile as sf
 
-from libs import config, model_pool, speech_gate, stream
+from libs import config, registry, speech_gate, stream
 from tests.helpers import make_silence, make_tone, make_wav
 
 RATE = stream.SAMPLE_RATE
@@ -194,13 +193,9 @@ def test_transcript_drops_unspoken_segments_before_the_join(diarize_client, gate
 
 
 @pytest.fixture
-def stream_pool(monkeypatch):
+def stream_pool(legacy_pool):
     """A one-slot model pool with the whisper stub as the transcriber."""
-    pool: queue.Queue = queue.Queue()
-    pool.put("model-sentinel")
-    monkeypatch.setattr(model_pool, "MODEL_POOL", pool)
-    monkeypatch.setattr(config, "STT_BACKEND", "whisper")
-    return pool
+    return legacy_pool
 
 
 def utterance_buffer(samples: np.ndarray) -> dict:
@@ -222,7 +217,9 @@ def test_an_utterance_with_no_speech_is_not_transcribed(stream_pool, gate_on, st
     monkeypatch.setattr(stt_module, "get_stt_segments", counting_segments)
     gate_on["ranges"] = []
     samples = make_tone(2.0)
-    result = stream.transcribe_utterance(utterance_buffer(samples), {"start": 0, "end": samples.size}, None)
+    result = stream.transcribe_utterance(
+        utterance_buffer(samples), {"start": 0, "end": samples.size}, None, registry.get_default_spec()
+    )
     assert result == []
     assert called["count"] == 0
     assert stream_pool.qsize() == 1
@@ -233,7 +230,7 @@ def test_an_utterance_keeps_its_spoken_segments_in_stream_time(stream_pool, gate
     gate_on["ranges"] = [(0.0, 1.1)]
     samples = np.concatenate([make_silence(1.0), make_tone(3.0)])
     buffer = utterance_buffer(samples)
-    result = stream.transcribe_utterance(buffer, {"start": RATE, "end": samples.size}, None)
+    result = stream.transcribe_utterance(buffer, {"start": RATE, "end": samples.size}, None, registry.get_default_spec())
     assert [(item["start"], item["end"], item["text"]) for item in result] == [(1.0, 2.1, "first phrase")]
     assert stream_pool.qsize() == 1
 
@@ -248,5 +245,7 @@ def test_a_broken_detector_lets_the_utterance_through(stream_pool, monkeypatch):
 
     monkeypatch.setattr(speech_gate, "detect_speech", broken_detect_speech)
     samples = make_tone(3.0)
-    result = stream.transcribe_utterance(utterance_buffer(samples), {"start": 0, "end": samples.size}, None)
+    result = stream.transcribe_utterance(
+        utterance_buffer(samples), {"start": 0, "end": samples.size}, None, registry.get_default_spec()
+    )
     assert [item["text"] for item in result] == ["first phrase", "second phrase"]

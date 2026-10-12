@@ -335,18 +335,18 @@ applyTheme(startingTheme);
    here, only in the type named here, anything else the default. The stored
    text is hand-editable.
 
-   An empty string means "not chosen": for the mode, the screen picks Speakers
-   when the server can diarize and Text when it cannot; for the language, it is
-   the server's own default, so a browser that never chose follows the
-   deployment rather than a value baked into this file; for the source, FILE;
-   for the device, the browser's default input; for the stream address,
-   nothing.
+   An empty string means "not chosen": for the model, the server's default
+   model; for the mode, the screen picks Speakers when the server can diarize
+   and Text when it cannot; for the language, it is the server's own default,
+   so a browser that never chose follows the deployment rather than a value
+   baked into this file; for the source, FILE; for the device, the browser's
+   default input; for the stream address, nothing.
 
    A group is written whole, so a screen saving one field starts from the
    stored group and changes only its own - see $savePrefs. */
 const PREFS_PREFIX = 'stt.';
 const PREFS = {
-  transcribe: { mode: '', language: '', source: '', device: '', url: '' },
+  transcribe: { model: '', mode: '', language: '', source: '', device: '', url: '' },
 };
 
 const validatePrefs = function (name, value) {
@@ -434,11 +434,14 @@ const state = {
   // place.
   auth: { checked: false, token: readToken() },
   // GET /api/models, as sent: `backend` is the server's default transcription
-  // backend, `models` one row per backend it carries. `loaded` is false until
-  // the first answer, so a screen can tell "not asked yet" from "no rows".
-  // Replaced whole by file_models, never edited in place.
-  catalog: { loaded: false, backend: '', models: [] },
-  // The transcribe screen's remembered mode and language, already validated.
+  // backend, `defaultModel` the id of the model a request without `model`
+  // gets ('' from a server older than per-request models), `models` one row
+  // per loaded model, per backend with nothing loaded, and the diarizer.
+  // `loaded` is false until the first answer, so a screen can tell "not
+  // asked yet" from "no rows". Replaced whole by file_models, never edited in
+  // place.
+  catalog: { loaded: false, backend: '', defaultModel: '', models: [] },
+  // The transcribe screen's remembered model, mode and language, already validated.
   // Replaced whole by $savePrefs.
   transcribe: readPrefs('transcribe'),
   // The last result of each source, kept here rather than on the screen so
@@ -475,6 +478,7 @@ const file_models = function (context, data) {
   context.state.catalog = {
     loaded: true,
     backend: typeof body['default'] === 'string' ? body['default'] : '',
+    defaultModel: typeof body.default_model === 'string' ? body.default_model : '',
     models: Array.isArray(body.models) ? body.models : [],
   };
   return context.state.catalog;

@@ -117,21 +117,31 @@ def shift_ranges(ranges: list[tuple[float, float]] | None, start: float, end: fl
 
 
 def transcribe_long(
-    samples: np.ndarray, language: str | None, ranges: list[tuple[float, float]] | None, request_id: str
+    samples: np.ndarray,
+    language: str | None,
+    ranges: list[tuple[float, float]] | None,
+    request_id: str,
+    spec: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Transcribe a whole file piece by piece; segments come back in file time.
+    """Transcribe a whole file piece by piece with the model `spec` names; segments come back in file time.
 
     A piece with no detected speech is skipped without borrowing the model. Each piece goes through
     stream.transcribe_piece, the same path as a live utterance, and keeps the transcriber's own text.
+    After each piece the job steps aside for callers waiting on that model's pool only: a request
+    for another model waits on another queue, which this job never takes from.
     """
+    waiting_kind = model_pool.build_waiting_kind(spec["id"])
     segments: list[dict[str, Any]] = []
     for start, end in plan_chunks(samples, ranges):
         offset, length = start / SAMPLE_RATE, (end - start) / SAMPLE_RATE
         local_ranges = shift_ranges(ranges, offset, offset + length)
         if local_ranges is not None and speech_gate.spoken_seconds(local_ranges) < stream.MIN_VOICED_SECONDS:
             continue
-        segments.extend(stream.transcribe_piece(samples[start:end], offset, language, local_ranges, request_id))
-        model_pool.yield_to_waiters("model")
+        piece = stream.transcribe_piece(
+            samples[start:end], offset, language, spec=spec, ranges=local_ranges, request_id=request_id
+        )
+        segments.extend(piece)
+        model_pool.yield_to_waiters(waiting_kind)
     return segments
 
 
@@ -150,11 +160,12 @@ def diarize_long(samples: np.ndarray) -> list[dict[str, Any]]:
     return diarize.stream_turns(state, 0.0, samples.size / SAMPLE_RATE + 1.0)
 
 
-def run(mode: str, wav_path: str, language: str | None, request_id: str) -> dict[str, Any]:
+def run(mode: str, wav_path: str, language: str | None, request_id: str, spec: dict[str, Any]) -> dict[str, Any]:
     """Process one job's audio in the requested mode; the result has the shape of the matching endpoint.
 
-    Each stage's duration goes to the log: on a long file they are minutes, and which one it was
-    matters when a job is slower than expected.
+    `spec` is the model a transcribing mode runs on, which the result names as the endpoints do;
+    `turns` transcribes nothing and ignores it. Each stage's duration goes to the log: on a long
+    file they are minutes, and which one it was matters when a job is slower than expected.
     """
     samples = load_samples(wav_path)
     duration = round(samples.size / SAMPLE_RATE, 2)
@@ -177,8 +188,10 @@ def run(mode: str, wav_path: str, language: str | None, request_id: str) -> dict
     if mode == "turns":
         return {"segments": turns, "speakers": len({turn["speaker"] for turn in turns}), "seconds": duration}
     started = time.monotonic()
-    segments = transcribe_long(samples, language, ranges, request_id)
-    logger.info("[%s] Transcription: %d segments (%.1fs)", request_id, len(segments), time.monotonic() - started)
+    segments = transcribe_long(samples, language, ranges, request_id, spec)
+    logger.info(
+        "[%s] Transcription: model %s, %d segments (%.1fs)", request_id, spec["id"], len(segments), time.monotonic() - started
+    )
     text = "".join(segment["text"] for segment in segments).strip()
     if mode == "speakers":
         attributed = align.attribute_segments(segments, turns)
@@ -188,8 +201,9 @@ def run(mode: str, wav_path: str, language: str | None, request_id: str) -> dict
             "speakers": align.count_speakers(attributed),
             "text": text,
             "seconds": duration,
+            "model": spec["id"],
         }
-    return {"text": text, "segments": segments, "seconds": duration}
+    return {"text": text, "segments": segments, "seconds": duration, "model": spec["id"]}
 
 
 def main():

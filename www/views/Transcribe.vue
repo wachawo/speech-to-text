@@ -16,12 +16,29 @@
     </ul>
 
     <!-- The source's own form, and under it whatever it needs to say about
-         itself. Mode and language are this screen's and are the same for
-         every source, so they are written once here and placed by the source
-         in its row; the source says when they must be off (`busy`). -->
-    <component :is="sourceComponent" ref="source" :mode="requestMode" :language="requestLanguage"
+         itself. Model, mode and language are this screen's and are the same
+         for every source, so they are written once here and placed by the
+         source in its row; the source says when they must be off (`busy`). -->
+    <component :is="sourceComponent" ref="source" :model="requestModel" :mode="requestMode" :language="requestLanguage"
                :compact="!!result" :held="catalogPending" @busy="sourceBusy = $event">
       <template #options="{ busy }">
+        <!-- The model, among the ones the server loaded at startup. The empty
+             choice sends none, so the server's default serves. A server with
+             one model, or one from before per-request models that lists no
+             selectable row, gets no select at all and looks as it always did.
+             Turns transcribes nothing, so it takes no model. -->
+        <div style="margin-right: 0.25rem" v-if="hasModelChoice">
+          <div class="input-group input-group-sm" :title="modelTitle">
+            <select class="form-select form-select-sm" style="width: 220px" aria-label="Model"
+                    v-model="modelChoice" :disabled="busy || catalogPending || !modelUsed">
+              <option value="" title="Sends no model; the server uses its default">{{ defaultModelLabel }}</option>
+              <option v-for="row in selectableRows" :key="row.id" :value="row.id" :title="row.backend + ' ' + row.id">
+                {{ row.id }}
+              </option>
+            </select>
+          </div>
+        </div>
+
         <!-- Who said what, or just the words. Speakers is offered only when
              the server has the diarizer loaded; otherwise the select holds
              Text alone and says why. -->
@@ -36,7 +53,7 @@
           </div>
         </div>
 
-        <!-- The language, from the default backend's own list. A backend that
+        <!-- The language, from the chosen model's own list. A backend that
              detects the language itself takes no argument, so the select is
              off and the request carries none. -->
         <div style="margin-right: 0.25rem">
@@ -73,9 +90,9 @@
 /* The transcribe screen: sound in, a transcript out.
 
    The screen is the frame the sources share: the FILE / DEVICE switch, the
-   mode and the language, and the transcript under them. Each source is its
-   own component with its own form, its own request and its own messages, and
-   keeps its result in the store (keep_transcript):
+   model, the mode and the language, and the transcript under them. Each
+   source is its own component with its own form, its own request and its own
+   messages, and keeps its result in the store (keep_transcript):
 
    - FILE (views/FileSource.vue): a file, chosen or dropped, sent whole.
    - DEVICE (views/DeviceSource.vue): an input captured live and streamed.
@@ -147,7 +164,7 @@ module.exports = {
       // A file is being dragged over the window, and FILE would take it.
       dragging: false,
       source: sourceEntry(prefs.source) ? prefs.source : 'file',
-      form: { mode: prefs.mode, language: prefs.language },
+      form: { model: prefs.model, mode: prefs.mode, language: prefs.language },
     };
   },
 
@@ -179,9 +196,10 @@ module.exports = {
   },
 
   computed: {
-    /* The open source's last result, from the store: {mode, name, language,
-       data}, plus {live, listening, finishing, seconds, skipped, messages,
-       stem} from a live session. `data` is the server's JSON as sent. */
+    /* The open source's last result, from the store: {mode, name, model,
+       language, data}, plus {live, listening, finishing, seconds, skipped,
+       messages, stem} from a live session. `data` is the server's JSON as
+       sent. */
     result: function () {
       return this.$store.state.transcripts[this.source] || null;
     },
@@ -206,15 +224,79 @@ module.exports = {
       return this.$store.state.catalog;
     },
 
-    /* The row of the backend the server transcribes with: the one the
-       catalogue names as its default, or the row flagged default. Null until
-       the catalogue is in. */
-    backendRow: function () {
+    /* The models a request may name: one row each, in the catalogue's order. */
+    selectableRows: function () {
+      return this.catalog.models.filter(function (row) {
+        return row.selectable === true && typeof row.id === 'string' && row.id;
+      });
+    },
+
+    /* The row of the model a request without `model` gets: the row flagged
+       default, or - from a server older than per-request models - the row of
+       the backend the catalogue names as its default. Null until the
+       catalogue is in. */
+    defaultRow: function () {
       var rows = this.catalog.models;
       var named = this.catalog.backend;
-      return rows.filter(function (row) { return row.backend === named; })[0] ||
-        rows.filter(function (row) { return row['default'] === true; })[0] ||
+      return rows.filter(function (row) { return row['default'] === true; })[0] ||
+        rows.filter(function (row) { return row.backend === named; })[0] ||
         null;
+    },
+
+    /* The row of the model this screen transcribes with: the chosen one while
+       the server still lists it, the default otherwise. Its languages and
+       whether it takes one at all drive the language select. Read from the
+       choice, not from what is sent: Turns sends no model, and picking it
+       must not swap the language list under the select. */
+    backendRow: function () {
+      var wanted = this.chosenModel;
+      return this.selectableRows.filter(function (row) { return row.id === wanted; })[0] || this.defaultRow;
+    },
+
+    /* Whether there is a model to choose at all: two selectable rows or more. */
+    hasModelChoice: function () {
+      return this.selectableRows.length > 1;
+    },
+
+    /* The remembered model while the server lists it and there is a choice,
+       '' (the server's default) otherwise - so a server with one model gets
+       the requests it always got. */
+    chosenModel: function () {
+      var wanted = this.form.model;
+      var listed = this.selectableRows.some(function (row) { return row.id === wanted; });
+      return wanted && listed && this.hasModelChoice ? wanted : '';
+    },
+
+    /* Whether the request names a model: not for Turns, which transcribes
+       nothing. */
+    modelUsed: function () {
+      return this.requestMode !== 'turns';
+    },
+
+    modelTitle: function () {
+      if (!this.modelUsed) return 'Who spoke when transcribes nothing, so it takes no model';
+      return 'The model that transcribes, among the ones the server loaded';
+    },
+
+    defaultModelLabel: function () {
+      var id = this.catalog.defaultModel || (this.defaultRow && this.defaultRow.id);
+      return id ? 'Server default (' + id + ')' : 'Server default';
+    },
+
+    /* The select's value. A remembered model the server no longer lists shows
+       as the default. Only the model is remembered on a change; the language
+       on the select is settled again from the remembered one, which stays
+       for a model that knows it. */
+    modelChoice: {
+      get: function () {
+        return this.chosenModel;
+      },
+      set: function (value) {
+        this.form.model = value;
+        this.$savePrefs('transcribe', { model: value });
+        var language = this.$store.state.transcribe.language;
+        this.form.language = this.isOfferedLanguage(language) ? language : '';
+      },
     },
 
     speakersAvailable: function () {
@@ -282,6 +364,9 @@ module.exports = {
 
     /* What a source sends, reconciled with what the server offers and what
        the open source can do. */
+    requestModel: function () {
+      return this.modelUsed ? this.chosenModel : '';
+    },
     requestMode: function () {
       var wanted = this.form.mode;
       var offered = this.modes.some(function (mode) { return mode.value === wanted; });
@@ -295,7 +380,7 @@ module.exports = {
   watch: {
     /* A catalogue that answers after the screen opened - the guard's first
        request failed, or RELOAD on the models screen - may add or take away
-       Speakers and change the language list. */
+       Speakers or a model, and change the language list. */
     catalog: function () {
       this.settleForm();
     },
@@ -400,19 +485,25 @@ module.exports = {
 
     /* Form */
 
-    /* Put the remembered mode and language on the selects, as far as this
-       server allows them. Read from the store each time, not from the
+    /* Put the remembered model, mode and language on the selects, as far as
+       this server allows them. Read from the store each time, not from the
        selects: before the catalogue answers only Text is on offer, and
        settling on it then must not lose a remembered Speakers for when the
        catalogue arrives. */
     settleForm: function () {
       var prefs = this.$store.state.transcribe;
+      // The model first: the language list below is the chosen model's.
+      this.form.model = prefs.model;
       var offered = this.modes.map(function (mode) { return mode.value; });
       var wanted = prefs.mode || offered[0];
       this.form.mode = offered.indexOf(wanted) !== -1 ? wanted : offered[0];
-      var language = prefs.language;
-      if (language && language !== 'auto' && this.languageCodes.indexOf(language) === -1) language = '';
-      this.form.language = language;
+      this.form.language = this.isOfferedLanguage(prefs.language) ? prefs.language : '';
+    },
+
+    /* Whether the language select of the current model offers a value: the
+       empty choice and auto always, a code only from the model's own list. */
+    isOfferedLanguage: function (language) {
+      return !language || language === 'auto' || this.languageCodes.indexOf(language) !== -1;
     },
 
     /* The operator's choice, remembered for the next visit. Written on a

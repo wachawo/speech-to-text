@@ -10,6 +10,10 @@ second, and `done` before it closes. Any failure is one `error` message and a cl
 With `"source": "url"` in the start message the client sends no audio: the server reads the
 stream at that address itself, through ffmpeg, until it ends or the client says stop.
 
+An optional `"model"` in the start message picks one of the models loaded at startup, named as
+`model` is on /api/stt; without it the default model serves. Every phrase borrows an instance of
+that model from its pool, and the language is checked against that model's own list.
+
 This is plain ASGI, not Flask: a WSGI app cannot hold a socket open. Blocking model calls go to
 a worker thread so the event loop keeps receiving audio while a phrase is being transcribed.
 """
@@ -27,7 +31,7 @@ from typing import Any
 import numpy as np
 
 # Local imports
-from libs import auth, backends, config, diarize, metrics, model_pool, stream, url_source
+from libs import auth, backends, config, diarize, metrics, model_pool, registry, stream, url_source
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +54,10 @@ CLOSE_INTERNAL = 1011
 CLOSE_CODES = {
     "Unauthorized": CLOSE_POLICY,
     "Invalid start message": CLOSE_UNSUPPORTED,
+    "Invalid model": CLOSE_UNSUPPORTED,
+    "Model not loaded": CLOSE_UNSUPPORTED,
     "Invalid language": CLOSE_UNSUPPORTED,
+    "Unsupported language": CLOSE_UNSUPPORTED,
     "Invalid audio frame": CLOSE_UNSUPPORTED,
     "Invalid stream URL": CLOSE_UNSUPPORTED,
     "Forbidden": CLOSE_POLICY,
@@ -96,14 +103,26 @@ def check_start(scope: dict[str, Any], start: Any) -> tuple[str | None, dict[str
         if not auth.is_valid_token(token):
             return "Unauthorized", {}
 
+    model = start.get("model")
     language = start.get("language")
+    if model is not None and not isinstance(model, str):
+        return "Invalid start message", {}
     if language is not None and not isinstance(language, str):
         return "Invalid start message", {}
+    # The same order as /api/stt: the model first, then the language against that model.
+    requested_model = (model or "").strip() or None
+    spec, error = registry.resolve_request_model(requested_model)
+    if spec is None:
+        return error or registry.INVALID_MODEL, {}
     language = (language or "").strip().lower() or None
-    if language is not None:
-        language = backends.resolve_language(language)
-        if language is None:
-            return "Invalid language", {}
+    if requested_model is None:
+        # A client that sends nothing new is checked exactly as before: only whether the value is
+        # a language at all. A code the default model lacks fails later, when a phrase is transcribed.
+        language, error = backends.resolve_language_code(language, spec)
+    else:
+        language, error = backends.resolve_language(language, spec, explicit=True)
+    if error:
+        return error, {}
 
     source = start.get("source") or "client"
     url = None
@@ -121,13 +140,14 @@ def check_start(scope: dict[str, Any], start: Any) -> tuple[str | None, dict[str
         return "Diarization disabled", {}
     if speakers and not model_pool.diarizer_ready():
         return "Diarization unavailable", {}
-    return None, {"language": language, "diarize": speakers, "source": source, "url": url}
+    return None, {"spec": spec, "language": language, "diarize": speakers, "source": source, "url": url}
 
 
 def new_session(options: dict[str, Any], request_id: str) -> dict[str, Any]:
     """Everything one connection owns: its samples, its pause detector, its diarizer state."""
     return {
         "request_id": request_id,
+        "spec": options["spec"],
         "language": options["language"],
         "url": options["url"],
         "buffer": stream.new_buffer(),
@@ -328,14 +348,19 @@ async def process_utterance(session: dict[str, Any], utterance: dict[str, int]) 
     if diarization is not None:
         await asyncio.to_thread(stream.advance_diarization, diarization, session["buffer"], utterance["end"], session["final"])
     segments = await asyncio.to_thread(
-        stream.transcribe_utterance, session["buffer"], utterance, session["language"], session["request_id"]
+        stream.transcribe_utterance,
+        session["buffer"],
+        utterance,
+        session["language"],
+        session["spec"],
+        session["request_id"],
     )
     if diarization is None:
         # No turns: every segment is unattributed and none is overlapped, and words still join.
-        return stream.attribute_live_segments(segments, [])
+        return stream.attribute_live_segments(segments, [], session["spec"])
     start = utterance["start"] / stream.SAMPLE_RATE
     end = utterance["end"] / stream.SAMPLE_RATE
-    return stream.attribute_live_segments(segments, diarize.stream_turns(diarization, start, end))
+    return stream.attribute_live_segments(segments, diarize.stream_turns(diarization, start, end), session["spec"])
 
 
 def split_at_handover(session: dict[str, Any]) -> None:
@@ -542,13 +567,19 @@ async def serve_session(session: dict[str, Any], options: dict[str, Any], receiv
 
 
 async def announce_and_run(session: dict[str, Any], options: dict[str, Any], receive, send, send_event) -> None:
-    """Send `ready`, run the session, and answer an unexpected failure with an error and a close."""
+    """Send `ready`, run the session, and answer an unexpected failure with an error and a close.
+
+    `ready` names the model that serves the session, chosen in the start message or the default,
+    so a client that named none still learns which one transcribes.
+    """
     request_id = session["request_id"]
+    spec = session["spec"]
     logger.info(
-        "[%s] Stream started - source %s, backend %s, language %s, diarize %s",
+        "[%s] Stream started - source %s, backend %s, model %s, language %s, diarize %s",
         request_id,
         options["source"],
-        backends.transcriber_name(),
+        spec["backend"],
+        spec["id"],
         options["language"] or "default",
         "on" if options["diarize"] else "off",
     )
@@ -557,7 +588,8 @@ async def announce_and_run(session: dict[str, Any], options: dict[str, Any], rec
             {
                 "type": "ready",
                 "sample_rate": stream.SAMPLE_RATE,
-                "backend": backends.transcriber_name(),
+                "backend": spec["backend"],
+                "model": spec["id"],
                 "language": options["language"],
                 "diarize": options["diarize"],
                 "source": options["source"],

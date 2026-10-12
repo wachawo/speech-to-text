@@ -22,7 +22,7 @@
         </div>
       </div>
 
-      <!-- Mode and language: the screen's own, the same for every source. -->
+      <!-- Model, mode and language: the screen's own, the same for every source. -->
       <slot name="options" :busy="liveActive || !usable"></slot>
 
       <div style="margin-left: auto"></div>
@@ -103,8 +103,10 @@ module.exports = {
   mixins: [SttWait, SttLive],
 
   props: {
-    // What the session asks for: 'speakers' or 'text', and a language code,
-    // 'auto', or '' for none. Already reconciled with what the server offers.
+    // What the session asks for: a model id or '' for the server default,
+    // 'speakers' or 'text', and a language code, 'auto', or '' for none.
+    // Already reconciled with what the server offers.
+    model: { type: String, default: '' },
     mode: { type: String, default: 'text' },
     language: { type: String, default: '' },
     // The screen is still reading the catalogue: START waits for it.
@@ -339,6 +341,7 @@ module.exports = {
         if (!display) self.followRecording(stream);
         self.liveConnect(attempt, {
           diarize: self.mode === 'speakers',
+          model: self.model || undefined,
           language: self.language || undefined,
         });
       }, function (err) {

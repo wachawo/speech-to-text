@@ -9,10 +9,11 @@ import shutil
 import time
 import traceback
 import uuid
+from functools import partial
 from typing import Any, cast
 
 import numpy as np
-from flask import Flask, g, jsonify, request
+from flask import Flask, g, has_request_context, jsonify, request
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -29,11 +30,12 @@ from libs import (
     logs,
     metrics,
     model_pool,
+    registry,
     speech_gate,
     stream,
     url_source,
 )
-from libs.auth import is_valid_token, read_bearer_token, token_required
+from libs.auth import is_request_authorized, token_required
 from libs.errors import build_error_response, get_request_id, register_error_handlers
 
 logs.setup_logging()
@@ -58,8 +60,20 @@ def create_app() -> Flask:
 
 app = create_app()
 
+
+def read_scrape_pools() -> dict[str, Any]:
+    """The pool status behind /metrics, with every model's pool only for a scrape health would show it to.
+
+    The per-model gauges are built from the `models` map and labelled with each model's id, which
+    /api/health and /api/models keep behind the token, so a scrape gets them on the same terms as
+    health's model list. prometheus_client also reads the gauges once when they are registered,
+    outside any request; that read gets the counters alone.
+    """
+    return model_pool.get_pool_status(detailed=has_request_context() and is_request_authorized())
+
+
 metrics.LIVE_STATE.update(
-    pools=model_pool.get_pool_status,
+    pools=read_scrape_pools,
     sessions=lambda: live.ACTIVE_SESSIONS,
     url_sessions=lambda: url_source.URL_SESSIONS,
 )
@@ -118,19 +132,35 @@ def read_language_argument() -> str | None:
     return language.strip().lower() or None
 
 
-def resolve_request_language() -> tuple[str | None, Any]:
-    """Read the per-request language and resolve it against the backend.
+def read_model_argument() -> str | None:
+    """Read the optional per-request model from the query string or the form field; empty means default.
 
-    Returns (language, None) - the language None when the request names none - or
-    (None, the 400 to answer) when the backend knows no such language.
+    Like read_language_argument, it must run after read_audio_upload: parsing the form
+    consumes the stream a raw-body upload lives in.
     """
-    language = read_language_argument()
-    if language is None:
-        return None, None
-    resolved = backends.resolve_language(language)
-    if resolved is None:
-        return None, build_error_response("Invalid language", 400)
-    return resolved, None
+    model = request.args.get("model") or request.form.get("model")
+    if model is None:
+        return None
+    return model.strip() or None
+
+
+def resolve_request_options() -> tuple[dict[str, Any] | None, str | None, Any]:
+    """Resolve the request's model and then its language against that model.
+
+    Returns (spec, language, None) - the language None when the request names none - or
+    (None, None, the 400 to answer). Both checks run before the audio is decoded and before any
+    instance is borrowed, so a bad request costs nothing. A client that named a model gets the
+    language checked against that model's own list; one that did not keeps the lenient
+    behaviour it always had.
+    """
+    requested_model = read_model_argument()
+    spec, error = registry.resolve_request_model(requested_model)
+    if spec is None:
+        return None, None, build_error_response(error or registry.INVALID_MODEL, 400)
+    language, error = backends.resolve_language(read_language_argument(), spec, explicit=requested_model is not None)
+    if error is not None:
+        return None, None, build_error_response(error, 400)
+    return spec, language, None
 
 
 def diarization_refusal():
@@ -161,6 +191,9 @@ def convert_upload(bio):
 # How long the deep health check waits for a free model before reporting it busy rather than broken.
 DEEP_CHECK_TIMEOUT = 5
 
+# Deep check outcomes from best to worst; `transcriber` reports the worst of the loaded models.
+CHECK_SEVERITY = ("ok", "busy", "failed")
+
 
 def check_model(acquire, release, run) -> str:
     """Borrow one pooled instance, run it once: "ok", "busy" when none frees up, or "failed"."""
@@ -180,16 +213,25 @@ def check_model(acquire, release, run) -> str:
         release(instance)
 
 
-def run_deep_check() -> dict[str, str]:
-    """Push one second of silence through every loaded model, the way a request would."""
+def check_transcriber(spec: dict[str, Any], silence: np.ndarray) -> str:
+    """Run one loaded model once, with an instance borrowed from and returned to its own pool."""
+    transcriber = backends.transcriber_for_backend(spec["backend"])
+    return check_model(
+        partial(model_pool.acquire_model, model_id=spec["id"]),
+        partial(model_pool.release_model, model_id=spec["id"]),
+        lambda model: transcriber.get_stt_segments(stream.encode_wav(silence), model=model, language=None),
+    )
+
+
+def run_deep_check() -> dict[str, Any]:
+    """Push one second of silence through every loaded model, one at a time, the way a request would.
+
+    Each transcription model is reported by its id under `models`, and `transcriber` is the worst
+    of them, so a check that reads only that line still sees one broken model among several.
+    """
     silence = np.zeros(speech_gate.SAMPLE_RATE, dtype=np.int16)
-    results = {
-        "transcriber": check_model(
-            model_pool.acquire_model,
-            model_pool.release_model,
-            lambda model: backends.transcriber().get_stt_segments(stream.encode_wav(silence), model=model, language=None),
-        )
-    }
+    models = {spec["id"]: check_transcriber(spec, silence) for spec in registry.get_model_specs()}
+    results: dict[str, Any] = {"transcriber": max(models.values(), key=CHECK_SEVERITY.index), "models": models}
     if config.DIARIZE_ENABLED:
         results["diarizer"] = check_model(
             model_pool.acquire_diarizer,
@@ -201,16 +243,24 @@ def run_deep_check() -> dict[str, str]:
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    """Report service liveness and model pool occupancy; available=0 means all models are busy.
+    """Report service liveness and model pool occupancy.
 
-    `?deep=1` also runs one second of silence through every loaded model and reports each as ok,
-    busy or failed, answering 503 if any failed. That costs GPU work, so while STT_TOKENS is set it
-    needs a token like every other route; the plain check stays open for container healthchecks.
+    Open, so healthchecks need no token. The top-level `pool_size` and `available` describe the
+    default model (available=0 means every instance of it is busy). `default_model` and `models`
+    (every loaded model's pool by id) name the deployment's configuration, so like /api/models
+    they are only included for a caller that passes the token check, or when auth is off.
+
+    `?deep=1` also runs one second of silence through every loaded model, one at a time, and
+    reports each as ok, busy or failed - every transcription model by its id under
+    `deep.models`, `deep.transcriber` the worst of them, `deep.diarizer` when diarization is on -
+    answering 503 if any failed. That costs GPU work, so while STT_TOKENS is set it needs a token
+    like every other route; the plain check stays open for container healthchecks.
     """
-    body = {"status": "ok", **model_pool.get_pool_status()}
+    authorized = is_request_authorized()
+    body = {"status": "ok", **model_pool.get_pool_status(detailed=authorized)}
     if request.args.get("deep", "").lower() not in config.TRUE_VALUES:
         return jsonify(body), 200
-    if config.STT_TOKENS and not is_valid_token(read_bearer_token()):
+    if not authorized:
         logger.warning("[%s] Unauthorized deep health check", get_request_id())
         return build_error_response("Unauthorized", 401)
     body["deep"] = run_deep_check()
@@ -222,7 +272,11 @@ def health():
 
 @app.route("/metrics", methods=["GET"])
 def prometheus_metrics():
-    """Prometheus metrics. Open like /api/health, and like it not proxied by stt_www: scrape :STT_PORT."""
+    """Prometheus metrics. Open like /api/health, and like it not proxied by stt_www: scrape :STT_PORT.
+
+    Also like health, the per-model gauges only carry the loaded models for a scrape that passes
+    the token check, or when auth is off; see read_scrape_pools.
+    """
     body, content_type = metrics.render()
     return body, 200, {"Content-Type": content_type}
 
@@ -230,35 +284,41 @@ def prometheus_metrics():
 @app.route("/api/models", methods=["GET"])
 @token_required
 def list_models():
-    """Report the backends this server carries, each with its own language list.
+    """Report the models this server carries, each with its own language list.
 
     Behind the token like every other non-health route: a catalogue publishes the server's
     configuration, including which model is loaded and where it is in its lifecycle.
 
-    `status` is one of `loaded` (instances were loaded into a pool, free or busy), `installed` (the weights
-    are on disk but nothing is loaded yet) or `absent`. A backend that is configured but not
+    One row per loaded model (a request may name its `id` as `model`), one row for a
+    transcriber with nothing loaded, and the diarizer when it is on. `status` is one of
+    `loaded` (instances were loaded into its pool, free or busy), `installed` (the weights are
+    on disk but nothing is loaded yet) or `absent`. A backend that is configured but not
     installed says `absent` and nothing more; the reason is in the log.
 
-    `languages` is per backend and never a union, because the sets genuinely diverge.
+    `selectable` says whether a request may name the row as its `model`, `pool_size` and
+    `available` are that model's pool, and exactly one row has `default` true: its id is the
+    top-level `default_model`, and its backend the top-level `default`.
+
+    `languages` is per row and never a union, because the sets genuinely diverge.
     `accepts_language` says whether `?language=` means anything to that backend at all.
     """
     return jsonify(catalog.list_models()), 200
 
 
-def transcribe_text(wav_bio, model, language) -> str:
-    """The plain transcript; with the speech gate on, built only from segments that were spoken.
+def transcribe_text(wav_bio, model, language, spec) -> tuple[str, str | None]:
+    """The plain transcript and its language; with the speech gate on, built only from segments that were spoken.
 
-    Without the gate this is exactly what it always was. With it, the text is the joined segment
-    texts - what the transcriber's own text is made of - minus the ones the gate drops, so a
-    recording with speech in it reads the same and one without reads empty instead of a
-    subtitle credit such as "to be continued...".
+    Without the gate the text is exactly what it always was. With it, the text is the joined
+    segment texts - what the transcriber's own text is made of - minus the ones the gate drops, so
+    a recording with speech in it reads the same and one without reads empty instead of a
+    subtitle credit such as "to be continued...". Either way one decode by the spec's backend
+    gives the text, the segments and the language the model reports.
     """
-    transcriber = backends.transcriber()
+    result = backends.transcriber_for_backend(spec["backend"]).get_stt_result(wav_bio, model=model, language=language)
     if not config.SPEECH_GATE:
-        return transcriber.get_stt_bio(wav_bio, model=model, language=language)
-    segments = transcriber.get_stt_segments(wav_bio, model=model, language=language)
-    kept = speech_gate.gate_wav(wav_bio, segments, get_request_id())
-    return "".join(segment["text"] for segment in kept).strip()
+        return result["text"], result["language"]
+    kept = speech_gate.gate_wav(wav_bio, result["segments"], get_request_id())
+    return "".join(segment["text"] for segment in kept).strip(), result["language"]
 
 
 @app.route("/api/stt", methods=["POST"])
@@ -267,12 +327,18 @@ def transcribe():
     """Transcribe an uploaded audio file.
 
     Accepts multipart/form-data with field ``file`` (any format pydub supports)
-    or a raw binary body with Content-Type audio/*. An optional ``language``
-    (query string or form field) overrides the server WHISPER_LANGUAGE default
+    or a raw binary body with Content-Type audio/*. An optional ``model`` (query
+    string or form field: an id, an alias, ``backend:model`` or a bare backend
+    name) picks one of the models loaded at startup; without it the default model
+    serves. An optional ``language`` overrides the server WHISPER_LANGUAGE default
     for this request; ``auto`` autodetects.
 
+    ``model`` is the id of the model that transcribed. ``language`` is the code
+    Whisper detected or used (always ``en`` for an English-only checkpoint), or
+    null for a backend that does not report it.
+
     Returns::
-        {"text": "transcribed text", "elapsed": 1.23}
+        {"text": "transcribed text", "elapsed": 1.23, "model": "turbo", "language": "en"}
     """
     start_time = time.monotonic()
 
@@ -282,8 +348,8 @@ def transcribe():
     bio, filename = upload
     size_kb = len(bio.getvalue()) // 1024
 
-    language, refusal = resolve_request_language()
-    if refusal is not None:
+    spec, language, refusal = resolve_request_options()
+    if spec is None:
         return refusal
 
     wav_bio = convert_upload(bio)
@@ -291,23 +357,25 @@ def transcribe():
         return build_error_response("Invalid audio data", 400)
 
     try:
-        model = model_pool.acquire_model()
+        model = model_pool.acquire_model(model_id=spec["id"])
     except queue.Empty:
         logger.warning("[%s] Model pool exhausted: %s", get_request_id(), model_pool.get_pool_status())
         return build_error_response("Service Unavailable", 503)
 
     try:
-        text = transcribe_text(wav_bio, model, language)
+        text, detected = transcribe_text(wav_bio, model, language, spec)
         elapsed = time.monotonic() - start_time
         logger.info(
-            "[%s] STT %s (%dkb) - %d chars (%.2fs)",
+            "[%s] STT %s (%dkb) model=%s language=%s - %d chars (%.2fs)",
             get_request_id(),
             filename,
             size_kb,
+            spec["id"],
+            detected,
             len(text),
             elapsed,
         )
-        return jsonify({"text": text, "elapsed": round(elapsed, 3)}), 200
+        return jsonify({"text": text, "elapsed": round(elapsed, 3), "model": spec["id"], "language": detected}), 200
     except Exception as exc:
         logger.error(
             "[%s] STT failed: %s: %s\n%s",
@@ -318,7 +386,7 @@ def transcribe():
         )
         return build_error_response("Transcription failed", 500)
     finally:
-        model_pool.release_model(model)
+        model_pool.release_model(model, model_id=spec["id"])
 
 
 @app.route("/api/diarize", methods=["POST"])
@@ -395,14 +463,14 @@ def run_diarization(wav_bio):
         model_pool.release_diarizer(diarizer)
 
 
-def run_transcription(wav_bio, language):
-    """Transcribe the buffer with a pooled model, releasing it before anything else runs."""
-    model = model_pool.acquire_model()
+def run_transcription(wav_bio, language, spec):
+    """Transcribe the buffer with an instance of the chosen model, releasing it before anything else runs."""
+    model = model_pool.acquire_model(model_id=spec["id"])
     try:
         wav_bio.seek(0)
-        return backends.transcriber().get_stt_segments(wav_bio, model=model, language=language)
+        return backends.transcriber_for_backend(spec["backend"]).get_stt_segments(wav_bio, model=model, language=language)
     finally:
-        model_pool.release_model(model)
+        model_pool.release_model(model, model_id=spec["id"])
 
 
 @app.route("/api/transcript", methods=["POST"])
@@ -410,8 +478,10 @@ def run_transcription(wav_bio, language):
 def transcribe_by_speaker():
     """Transcribe an uploaded file and attribute each part of it to a speaker.
 
-    Accepts the same body shapes as /api/stt. Diarization runs first and its instance is
-    released before a transcription model is borrowed, so no request ever holds one of each.
+    Accepts the same body shapes and the same ``model`` and ``language`` options as /api/stt.
+    Diarization runs first and its instance is released before a transcription model is
+    borrowed, so no request ever holds one of each. ``model`` in the response is the id of the
+    model that transcribed.
 
     `turns` is the diarizer's raw output and `segments` is the join, kept as two fields rather
     than one fused list so a caller who distrusts the attribution can still see what the
@@ -423,7 +493,7 @@ def transcribe_by_speaker():
     overlaps it, so those segments may merge or select the wrong speaker's words.
 
     Returns::
-        {"segments": [...], "turns": [...], "speakers": 2, "text": "...", "elapsed": 1.23}
+        {"segments": [...], "turns": [...], "speakers": 2, "text": "...", "elapsed": 1.23, "model": "turbo"}
     """
     refusal = diarization_refusal()
     if refusal is not None:
@@ -437,8 +507,8 @@ def transcribe_by_speaker():
     bio, filename = upload
     size_kb = len(bio.getvalue()) // 1024
 
-    language, refusal = resolve_request_language()
-    if refusal is not None:
+    spec, language, refusal = resolve_request_options()
+    if spec is None:
         return refusal
 
     wav_bio = convert_upload(bio)
@@ -455,7 +525,7 @@ def transcribe_by_speaker():
         return build_error_response("Diarization failed", 500)
 
     try:
-        segments = run_transcription(wav_bio, language)
+        segments = run_transcription(wav_bio, language, spec)
     except queue.Empty:
         logger.warning("[%s] Model pool exhausted: %s", get_request_id(), model_pool.get_pool_status())
         return build_error_response("Service Unavailable", 503)
@@ -469,10 +539,11 @@ def transcribe_by_speaker():
     elapsed = time.monotonic() - start_time
     speakers = align.count_speakers(attributed)
     logger.info(
-        "[%s] Transcript %s (%dkb) - %d segments, %d speakers (%.2fs)",
+        "[%s] Transcript %s (%dkb) model=%s - %d segments, %d speakers (%.2fs)",
         get_request_id(),
         filename,
         size_kb,
+        spec["id"],
         len(attributed),
         speakers,
         elapsed,
@@ -487,10 +558,28 @@ def transcribe_by_speaker():
                 # their leading space, so this reproduces exactly what /api/stt would return.
                 "text": "".join(segment["text"] for segment in segments).strip(),
                 "elapsed": round(elapsed, 3),
+                "model": spec["id"],
             }
         ),
         200,
     )
+
+
+def resolve_job_options(mode: str) -> tuple[dict[str, Any] | None, str | None, Any]:
+    """Resolve a job's model and language the way the endpoint its mode stands in for does.
+
+    `text` and `speakers` transcribe, so like /api/stt and /api/transcript they take `model` and
+    have the language checked against that model. `turns` transcribes nothing: like /api/diarize
+    it reads no `model`, and its language is only checked for being a language at all, as every
+    job's was before models were selectable. Returns (spec, language, None), the spec None for
+    `turns`, or (None, None, the 400 to answer).
+    """
+    if mode != "turns":
+        return resolve_request_options()
+    language, error = backends.resolve_language_code(read_language_argument(), registry.get_default_spec())
+    if error is not None:
+        return None, None, build_error_response(error, 400)
+    return None, language, None
 
 
 def job_view(job: dict[str, Any]) -> dict[str, Any]:
@@ -501,6 +590,7 @@ def job_view(job: dict[str, Any]) -> dict[str, Any]:
             "id",
             "status",
             "mode",
+            "model",
             "language",
             "filename",
             "size",
@@ -522,8 +612,10 @@ def submit_job():
 
     The same body shapes as /api/stt, up to JOB_MAX_CONTENT_LENGTH_MB. `mode` is `text` (the
     default), `speakers` (the /api/transcript result) or `turns` (the /api/diarize result);
-    `language` as everywhere else. The upload is written to disk as it arrives, never held whole
-    in memory. Returns 202 with the job record and a Location to poll.
+    `model` and `language` as on the endpoint the mode stands in for. A job that transcribes
+    keeps the model it was accepted for, named in its record: it runs on that model and on no
+    other. The upload is written to disk as it arrives, never held whole in memory. Returns 202
+    with the job record and a Location to poll.
     """
     mode = (request.args.get("mode") or request.form.get("mode") or "text").strip().lower()
     if mode not in jobs.MODES:
@@ -532,7 +624,7 @@ def submit_job():
         refusal = diarization_refusal()
         if refusal is not None:
             return refusal
-    language, refusal = resolve_request_language()
+    spec, language, refusal = resolve_job_options(mode)
     if refusal is not None:
         return refusal
     if "file" in request.files:
@@ -553,7 +645,7 @@ def submit_job():
 
     else:
         return build_error_response("No audio data", 400)
-    job = jobs.create_job(save_input, filename, mode, language)
+    job = jobs.create_job(save_input, filename, mode, language, spec["id"] if spec is not None else None)
     return jsonify(job_view(job)), 202, {"Location": f"{JOBS_PATH}/{job['id']}"}
 
 
@@ -650,7 +742,7 @@ def run_server() -> None:
 
 
 def main():
-    """Entry point: fill the model pool, then serve."""
+    """Entry point: fill every model's pool, then serve."""
     model_pool.init_model_pool()
     model_pool.init_diarizer_pool()
     if config.SPEECH_GATE:

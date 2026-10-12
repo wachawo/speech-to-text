@@ -24,7 +24,7 @@ import uuid
 from typing import Any
 
 # Local imports
-from libs import config, longform, metrics
+from libs import config, longform, metrics, registry
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +96,11 @@ def update_job(job: dict[str, Any], **changes) -> dict[str, Any]:
     return job
 
 
-def create_job(save_input, filename: str, mode: str, language: str | None) -> dict[str, Any]:
-    """Accept a job: `save_input(path)` writes the upload to disk, then the job is queued."""
+def create_job(save_input, filename: str, mode: str, language: str | None, model: str | None) -> dict[str, Any]:
+    """Accept a job: `save_input(path)` writes the upload to disk, then the job is queued.
+
+    `model` is the id of the model the job transcribes with, None for a mode that transcribes nothing.
+    """
     job_id = uuid.uuid4().hex[:JOB_ID_LENGTH]
     os.makedirs(job_path(job_id), exist_ok=True)
     try:
@@ -106,6 +109,7 @@ def create_job(save_input, filename: str, mode: str, language: str | None) -> di
             "id": job_id,
             "status": "queued",
             "mode": mode,
+            "model": model,
             "language": language,
             "filename": filename,
             "size": os.path.getsize(job_path(job_id, INPUT_NAME)),
@@ -254,13 +258,22 @@ def run_job(job: dict[str, Any], descriptor: int) -> None:
             metrics.JOBS.labels(status="failed").inc()
             return
         update_job(job, status="running", started=started, attempts=attempts + 1)
+        # The model the job was accepted for, never whichever is the default now: its language was
+        # checked against that one. A record with none - a turns job, which transcribes nothing, or
+        # one written before jobs named their model - gets the default.
+        spec, unused_error = registry.resolve_request_model(job.get("model"))
+        if spec is None:
+            logger.warning("[%s] Job needs model %s, which is not loaded any more", job_id, job.get("model"))
+            update_job(job, status="failed", error=registry.MODEL_NOT_LOADED, finished=time.time())
+            metrics.JOBS.labels(status="failed").inc()
+            return
         if not os.path.exists(job_path(job_id, AUDIO_NAME)) and not decode_to_wav(
             job_path(job_id, INPUT_NAME), job_path(job_id, AUDIO_NAME)
         ):
             update_job(job, status="failed", error="Invalid audio data", finished=time.time())
             metrics.JOBS.labels(status="failed").inc()
             return
-        result = longform.run(job["mode"], job_path(job_id, AUDIO_NAME), job["language"], job_id)
+        result = longform.run(job["mode"], job_path(job_id, AUDIO_NAME), job["language"], job_id, spec)
         write_json(job_path(job_id, RESULT_NAME), result)
         update_job(job, status="done", finished=time.time(), seconds=result.get("seconds"), error=None)
         metrics.JOBS.labels(status="done").inc()

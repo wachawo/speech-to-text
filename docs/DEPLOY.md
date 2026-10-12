@@ -37,6 +37,7 @@ Both come from `docker-compose.yml` (GPU) or `docker-compose-cpu.yml`. `libs/`, 
    | `WHISPER_MODEL`                   | `turbo` is the best all-round choice on a GPU                         |
    | `DIARIZE`, `DIARIZE_ENABLED`      | build and run switches for diarization                                |
    | `PARAKEET`, `STT_BACKEND`         | build and run switches for Parakeet                                   |
+   | `STT_MODELS`, `STT_DEFAULT_MODEL` | several models side by side, each request picking one; give every entry an explicit `@N`, and count on the GPU memory of every worker times the sum of the pools |
    | `STT_WWW_PORT`, `STT_WWW_TLS_PORT`| the web UI ports                                                      |
    | `STT_UID`, `STT_GID`              | the host user that should own `models/`, `logs/`, `recs/` (`id -u`, `id -g`) |
 
@@ -108,23 +109,23 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:$STT_WWW_PORT/
 
 ### Jobs
 
-`POST /api/jobs` stores each job under `JOBS_DIR`, which compose puts in `./recs/jobs` on the host. The directory holds the upload until the job has run, then only the record and the result. Finished jobs are removed after `JOB_RETENTION_HOURS` (24). Jobs survive a restart: one that was running when the server stopped runs again from the start.
+`POST /api/jobs` stores each job under `JOBS_DIR`, which compose puts in `./recs/jobs` on the host. The directory holds the upload until the job has run, then only the record and the result. Finished jobs are removed after `JOB_RETENTION_HOURS` (24). Jobs survive a restart: one that was running when the server stopped runs again from the start. A job keeps the model it was accepted for, so one whose model the restart unloaded - after a change to `STT_MODELS`, `STT_BACKEND`, `WHISPER_MODEL` or `PARAKEET_MODEL` - fails as `Model not loaded` and has to be sent again.
 
 Leave `OMP_NUM_THREADS=1` as the compose file sets it. The voice detector runs on the CPU, and with torch's default thread count it ran eight times slower on the GB10 host.
 
 ### Monitoring
 
 - `GET /api/health` is what the container healthcheck calls: the process is up and how many model instances are free.
-- `GET /api/health?deep=1` runs one second of silence through every loaded model and answers `503` when one fails. It needs a token when `STT_TOKENS` is set.
+- `GET /api/health?deep=1` runs one second of silence through every loaded model, one at a time, reports each one by its id under `deep.models` and answers `503` when one fails. It needs a token when `STT_TOKENS` is set.
 - `GET /metrics` on `STT_PORT` is the Prometheus endpoint (`stt_www` does not proxy it). The metrics to alert on:
-  - `stt_pool_available` at 0 for long;
+  - `stt_pool_available` (the default model) at 0 for long, or `stt_model_pool_available` for any one model, labelled with its id and backend; with `STT_TOKENS` set, only a scrape that sends a token (`authorization` in the Prometheus scrape config) gets those series;
   - `stt_errors_total` growing in any category;
   - `stt_stream_skipped_seconds_total` growing, which means live sessions fall behind.
   - `stt_jobs_total{status="failed"}` growing.
 
 ### Several workers
 
-`python3 stt_server.py` is one process with `STT_POOL_SIZE` models. For several processes, run gunicorn instead (`command:` in the compose file):
+`python3 stt_server.py` is one process with each model's pool: `STT_POOL_SIZE` instances of the single model, or the `@N` of every `STT_MODELS` entry. For several processes, run gunicorn instead (`command:` in the compose file):
 
 ```bash
 GUNICORN_WORKERS=2 GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker gunicorn --config gu.py stt_server:asgi_app
