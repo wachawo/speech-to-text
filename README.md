@@ -299,6 +299,8 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `STT_HOST`              | `0.0.0.0`               | server bind address                                 |
 | `STT_PORT`              | `5099`                  | server port                                         |
 | `STT_POOL_SIZE`         | `8`                     | instances per model; the default for an `STT_MODELS` entry without `@pool` |
+| `STT_QUEUE_TIMEOUT`     | `120`                   | seconds a synchronous request waits for a free instance of its model before `503` |
+| `STT_KEEPALIVE_SECONDS` | `5`                     | seconds an idle HTTP connection stays open (uvicorn; gunicorn `keepalive`) |
 | `STT_TOKENS`            | (empty)                 | comma-separated valid tokens; empty disables auth   |
 | `STT_DEBUG`             | `false`                 | Flask debug mode                                     |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | max upload size in MB; a larger body returns `413`  |
@@ -309,6 +311,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `LOG_ACCESS`            | `false`                 | log uvicorn access lines                            |
 | `WHISPER_MODEL`         | `small.en`              | Whisper model name (e.g. `small.en`, `turbo`) when `STT_MODELS` is empty |
 | `WHISPER_LANGUAGE`      | `en`                    | default language of every Whisper model             |
+| `WHISPER_BEAM_SIZE`     | `1`                     | Whisper beam width; `1` is greedy, a wider beam is slower and slightly more accurate |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | model cache directory (`/opt/models` in Docker)     |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda`, or `auto`                             |
 | `STT_BACKEND`           | `whisper`               | transcription backend when `STT_MODELS` is empty: `whisper` or `parakeet` |

@@ -272,6 +272,8 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `STT_HOST`              | `0.0.0.0`               | Bind-Adresse des Servers                            |
 | `STT_PORT`              | `5099`                  | Server-Port                                         |
 | `STT_POOL_SIZE`         | `8`                     | Instanzen pro Modell; Standard für einen `STT_MODELS`-Eintrag ohne `@pool` |
+| `STT_QUEUE_TIMEOUT`     | `120`                   | Sekunden, die eine synchrone Anfrage auf eine freie Instanz ihres Modells wartet, bevor `503` kommt |
+| `STT_KEEPALIVE_SECONDS` | `5`                     | Sekunden, die eine ungenutzte HTTP-Verbindung offen bleibt (uvicorn; gunicorn `keepalive`) |
 | `STT_TOKENS`            | (empty)                 | kommagetrennte gültige Tokens; leer deaktiviert Auth |
 | `STT_DEBUG`             | `false`                 | Flask-Debug-Modus                                   |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | maximale Upload-Größe in MB; ein größerer Body gibt `413` zurück |
@@ -282,6 +284,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `LOG_ACCESS`            | `false`                 | uvicorn-Access-Zeilen protokollieren                |
 | `WHISPER_MODEL`         | `small.en`              | Whisper-Modellname (z. B. `small.en`, `turbo`), wenn `STT_MODELS` leer ist |
 | `WHISPER_LANGUAGE`      | `en`                    | Standardsprache jedes Whisper-Modells |
+| `WHISPER_BEAM_SIZE`     | `1`                     | Beam-Breite von Whisper; `1` ist greedy, ein breiterer Beam ist langsamer und etwas genauer |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | Verzeichnis des Modell-Caches (`/opt/models` in Docker) |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda` oder `auto`                            |
 | `STT_BACKEND`           | `whisper`               | Transkriptions-Backend: `whisper` oder `parakeet`, wenn `STT_MODELS` leer ist |

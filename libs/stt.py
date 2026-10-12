@@ -173,10 +173,12 @@ def decode_buffer(
 ) -> dict:
     """Run the one decode every public function here shares and return whisper's raw result.
 
-    Seeded and greedy, so the same audio always produces the same output. Kept in one place so
-    /api/stt and /api/transcript cannot drift apart: an edit to these settings changes both or
-    neither. Without an explicit `model` one is loaded on the spot, which is slow - the server
-    passes an instance borrowed from the pool.
+    Seeded, at temperature 0 and with a beam of WHISPER_BEAM_SIZE (1, greedy, unless configured),
+    so the same audio always produces the same output: a wider beam searches more hypotheses but
+    still picks among them deterministically. Kept in one place so /api/stt and /api/transcript
+    cannot drift apart: an edit to these settings changes both or neither. Without an explicit
+    `model` one is loaded on the spot, which is slow - the server passes an instance borrowed
+    from the pool.
     """
     if model is None:
         model = get_model(device=device)
@@ -188,7 +190,7 @@ def decode_buffer(
         language=normalize_language(language),
         task="transcribe",
         temperature=0.0,
-        beam_size=1,
+        beam_size=config.WHISPER_BEAM_SIZE,
         best_of=1,
         condition_on_previous_text=False,
     )
@@ -217,7 +219,7 @@ def get_stt_result(
     A 16 kHz mono buffer (what the server always sends) skips the resampling
     step. Without an explicit `model` one is loaded on the spot, which is slow -
     the server passes an instance borrowed from the pool. Decoding is seeded and
-    greedy so the same audio always produces the same text.
+    deterministic, so the same audio always produces the same text.
 
     `language` is the code whisper detected or was told. An English-only checkpoint always
     decodes English, even when it was handed another code, so it honestly reports `en`.

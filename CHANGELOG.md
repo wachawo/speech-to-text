@@ -3,6 +3,20 @@
 ### [Unreleased]
 
 #### Added
+- **Settings for a short-phrase instance.** A synchronous upload that already is a
+  RIFF/WAVE file of 16 kHz mono 16-bit PCM is passed on as it is instead of being decoded
+  and re-exported by pydub, which cost 70 ms per phrase; any other format, rate or width
+  goes through pydub as before, and nothing new is resampled. `WHISPER_BEAM_SIZE` (default
+  1, today's greedy decode) sets the beam of the one seeded Whisper decode, which stays at
+  temperature 0 and deterministic. `STT_QUEUE_TIMEOUT` (default 120 s, fractions allowed)
+  is how long `/api/stt` and `/api/transcript` wait for a free instance of their model
+  before the 503; jobs, the live stream and the diarizer keep their own waits.
+  `STT_KEEPALIVE_SECONDS` (default 5) is uvicorn's idle keep-alive and gunicorn's
+  `keepalive`, which the UvicornWorker reads (gunicorn's own default was 2; sync workers
+  keep no connection alive). The synchronous path keeps audio and text off the log and the
+  disk: the speech gate logs a dropped segment's speech share and length instead of its
+  words, and a multipart upload over 500 KB is held in memory rather than spooled to a
+  temporary file (jobs still write theirs to `JOBS_DIR`, by design).
 - **Several pre-loaded transcription models, chosen per request.** `STT_MODELS` lists
   them as `backend:model[@pool]` entries, for example
   `whisper:turbo@2,whisper:small.en@1,parakeet:nvidia/parakeet-tdt-0.6b-v3@1`, each with

@@ -272,6 +272,8 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `STT_HOST`              | `0.0.0.0`               | サーバーのバインドアドレス                            |
 | `STT_PORT`              | `5099`                  | サーバーのポート                                     |
 | `STT_POOL_SIZE`         | `8`                     | モデルごとのインスタンス数。`@pool` のない `STT_MODELS` エントリのデフォルト |
+| `STT_QUEUE_TIMEOUT`     | `120`                   | 同期リクエストが `503` を返す前に、モデルの空きインスタンスを待つ秒数 |
+| `STT_KEEPALIVE_SECONDS` | `5`                     | アイドル状態の HTTP 接続を開いたままにする秒数（uvicorn、gunicorn の `keepalive`） |
 | `STT_TOKENS`            | （空）                   | カンマ区切りの有効なトークン。空にすると認証を無効化     |
 | `STT_DEBUG`             | `false`                 | Flask のデバッグモード                               |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | アップロードの最大サイズ（MB）。これを超えるボディは `413` を返す |
@@ -282,6 +284,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `LOG_ACCESS`            | `false`                 | uvicorn のアクセスログを記録する                      |
 | `WHISPER_MODEL`         | `small.en`              | Whisper モデル名（例: `small.en`、`turbo`）（`STT_MODELS` が空の場合） |
 | `WHISPER_LANGUAGE`      | `en`                    | すべての Whisper モデルのデフォルト言語 |
+| `WHISPER_BEAM_SIZE`     | `1`                     | Whisper のビーム幅。`1` は貪欲法で、広いビームほど遅く、わずかに精度が上がる |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | モデルキャッシュのディレクトリ（Docker では `/opt/models`） |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`、`cuda`、または `auto`                         |
 | `STT_BACKEND`           | `whisper`               | 文字起こしのバックエンド: `whisper` または `parakeet`（`STT_MODELS` が空の場合） |

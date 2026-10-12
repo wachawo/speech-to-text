@@ -135,7 +135,7 @@ def get_model(device: str | None = None, model_name: str | None = None) -> Any:
 def read_mono_16k(bio: io.BytesIO) -> np.ndarray:
     """Decode a WAV buffer into the mono float32 waveform the processor accepts.
 
-    Refuses another sampling rate rather than resampling: libs/audio.py already exports 16 kHz
+    Refuses another sampling rate rather than resampling: libs/audio.py already hands on 16 kHz
     mono for every request, so a mismatch means the caller skipped it.
     """
     data, sample_rate = sf.read(bio)

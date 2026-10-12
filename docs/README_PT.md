@@ -272,6 +272,8 @@ O `.env` é carregado tanto pelo servidor quanto pelo cliente através do `pytho
 | `STT_HOST`              | `0.0.0.0`               | endereço de bind do servidor                        |
 | `STT_PORT`              | `5099`                  | porta do servidor                                   |
 | `STT_POOL_SIZE`         | `8`                     | instâncias por modelo; padrão de uma entrada de `STT_MODELS` sem `@pool` |
+| `STT_QUEUE_TIMEOUT`     | `120`                   | segundos que uma requisição síncrona espera por uma instância livre do seu modelo antes de `503` |
+| `STT_KEEPALIVE_SECONDS` | `5`                     | segundos que uma conexão HTTP ociosa fica aberta (uvicorn; `keepalive` do gunicorn) |
 | `STT_TOKENS`            | (vazio)                 | tokens válidos separados por vírgula; vazio desativa a autenticação |
 | `STT_DEBUG`             | `false`                 | modo de depuração do Flask                          |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | tamanho máximo de upload em MB; um corpo maior retorna `413` |
@@ -282,6 +284,7 @@ O `.env` é carregado tanto pelo servidor quanto pelo cliente através do `pytho
 | `LOG_ACCESS`            | `false`                 | registrar as linhas de acesso do uvicorn           |
 | `WHISPER_MODEL`         | `small.en`              | nome do modelo Whisper (ex.: `small.en`, `turbo`) quando `STT_MODELS` está vazio |
 | `WHISPER_LANGUAGE`      | `en`                    | idioma padrão de todos os modelos Whisper |
+| `WHISPER_BEAM_SIZE`     | `1`                     | largura do beam do Whisper; `1` é guloso, um beam mais largo é mais lento e um pouco mais preciso |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | diretório de cache de modelos (`/opt/models` no Docker) |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda` ou `auto`                             |
 | `STT_BACKEND`           | `whisper`               | backend de transcrição: `whisper` ou `parakeet` quando `STT_MODELS` está vazio |

@@ -15,6 +15,7 @@ from typing import Any, cast
 import numpy as np
 from flask import Flask, g, has_request_context, jsonify, request
 from flask_cors import CORS
+from werkzeug.formparser import FormDataParser
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Local imports
@@ -45,6 +46,23 @@ JOBS_PATH = "/api/jobs"
 
 # Paths whose access log is demoted to DEBUG so healthchecks and scrapes do not flood the log.
 QUIET_PATHS = ("/api/health", "/metrics")
+
+
+def keep_upload_in_memory(total_content_length, content_type, filename, content_length=None) -> io.BytesIO:
+    """Werkzeug stream factory that holds a multipart file part in memory, whatever its size.
+
+    None of the arguments is needed, and none is spelled `unused_`: werkzeug passes them by name.
+    """
+    return io.BytesIO()
+
+
+class MemoryFormDataParser(FormDataParser):
+    """A form parser that never spools an uploaded file to disk, as werkzeug's default does past 500 KB."""
+
+    def __init__(self, *args, **kwargs):
+        """Swap in the in-memory stream factory; every other limit stays the request's own."""
+        kwargs["stream_factory"] = keep_upload_in_memory
+        super().__init__(*args, **kwargs)
 
 
 def create_app() -> Flask:
@@ -88,6 +106,9 @@ def before_request():
     # A job exists for recordings too long for a synchronous request, so it takes far larger files.
     if request.path == JOBS_PATH and request.method == "POST":
         request.max_content_length = config.JOB_MAX_CONTENT_LENGTH_MB * 1024 * 1024
+    else:
+        # A synchronous upload never touches the disk; MAX_CONTENT_LENGTH_MB bounds the memory it takes.
+        request.form_data_parser_class = MemoryFormDataParser
 
 
 @app.after_request
@@ -357,7 +378,7 @@ def transcribe():
         return build_error_response("Invalid audio data", 400)
 
     try:
-        model = model_pool.acquire_model(model_id=spec["id"])
+        model = model_pool.acquire_request_model(model_id=spec["id"])
     except queue.Empty:
         logger.warning("[%s] Model pool exhausted: %s", get_request_id(), model_pool.get_pool_status())
         return build_error_response("Service Unavailable", 503)
@@ -465,7 +486,7 @@ def run_diarization(wav_bio):
 
 def run_transcription(wav_bio, language, spec):
     """Transcribe the buffer with an instance of the chosen model, releasing it before anything else runs."""
-    model = model_pool.acquire_model(model_id=spec["id"])
+    model = model_pool.acquire_request_model(model_id=spec["id"])
     try:
         wav_bio.seek(0)
         return backends.transcriber_for_backend(spec["backend"]).get_stt_segments(wav_bio, model=model, language=language)
@@ -738,6 +759,7 @@ def run_server() -> None:
         log_level=config.LOG_LEVEL.lower(),
         log_config=logs.build_uvicorn_log_config(),
         access_log=config.LOG_ACCESS,
+        timeout_keep_alive=config.STT_KEEPALIVE_SECONDS,
     )
 
 

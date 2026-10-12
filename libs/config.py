@@ -92,6 +92,14 @@ STT_DEBUG = os.getenv("STT_DEBUG", "false").lower() in TRUE_VALUES
 # Number of instances pre-loaded into a model's pool at startup: the pool of the single model
 # when STT_MODELS is empty, and the default for an STT_MODELS entry without its own @pool.
 MODEL_POOL_SIZE = int(os.getenv("STT_POOL_SIZE", "8"))
+# Seconds a synchronous HTTP transcription request waits for a free instance of its model before it
+# is answered 503. Background jobs, the live stream and the diarizer keep their own waits.
+STT_QUEUE_TIMEOUT = float(os.getenv("STT_QUEUE_TIMEOUT", "120"))
+if STT_QUEUE_TIMEOUT < 0:
+    raise ValueError("STT_QUEUE_TIMEOUT must be 0 or more seconds")
+# Seconds an idle HTTP connection is kept open for the client's next request: uvicorn's
+# timeout_keep_alive and gunicorn's keepalive. 5 is uvicorn's own default.
+STT_KEEPALIVE_SECONDS = int(os.getenv("STT_KEEPALIVE_SECONDS", "5"))
 
 # Static-token auth - an empty set means "auth disabled, allow all" (trusted deployment).
 STT_TOKENS: set[str] = {t.strip() for t in os.getenv("STT_TOKENS", "").split(",") if t.strip()}
@@ -114,6 +122,11 @@ WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small.en").lower()
 WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", "en").lower()
 WHISPER_DOWNLOAD_ROOT = os.getenv("WHISPER_DOWNLOAD_ROOT", "models")
 COMPUTE_TYPE = os.getenv("COMPUTE_TYPE", "auto").lower()
+# Beam width of the one seeded Whisper decode. 1 is the greedy decode every deployment has always
+# had; a wider beam costs latency for a little accuracy and is just as deterministic.
+WHISPER_BEAM_SIZE = int(os.getenv("WHISPER_BEAM_SIZE", "1"))
+if WHISPER_BEAM_SIZE < 1:
+    raise ValueError("WHISPER_BEAM_SIZE must be 1 or more")
 
 # Which backend transcribes when STT_MODELS is empty. With STT_MODELS set it is ignored.
 STT_BACKEND = os.getenv("STT_BACKEND", "whisper").strip().lower()

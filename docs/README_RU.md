@@ -272,6 +272,8 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `STT_HOST`              | `0.0.0.0`               | адрес привязки сервера                              |
 | `STT_PORT`              | `5099`                  | порт сервера                                        |
 | `STT_POOL_SIZE`         | `8`                     | экземпляров на модель; значение по умолчанию для записи `STT_MODELS` без `@pool` |
+| `STT_QUEUE_TIMEOUT`     | `120`                   | сколько секунд синхронный запрос ждёт свободный экземпляр своей модели до ответа `503` |
+| `STT_KEEPALIVE_SECONDS` | `5`                     | сколько секунд простаивающее HTTP-соединение остаётся открытым (uvicorn; `keepalive` gunicorn) |
 | `STT_TOKENS`            | (пусто)                 | допустимые токены через запятую; пусто отключает авторизацию |
 | `STT_DEBUG`             | `false`                 | режим отладки Flask                                 |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | максимальный размер загрузки в МБ; большее тело возвращает `413` |
@@ -282,6 +284,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `LOG_ACCESS`            | `false`                 | логировать строки доступа uvicorn                   |
 | `WHISPER_MODEL`         | `small.en`              | имя модели Whisper (например, `small.en`, `turbo`), если `STT_MODELS` пуст |
 | `WHISPER_LANGUAGE`      | `en`                    | язык по умолчанию для всех моделей Whisper |
+| `WHISPER_BEAM_SIZE`     | `1`                     | ширина луча (beam) Whisper; `1` - жадный поиск, более широкий луч медленнее и чуть точнее |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | каталог кеша моделей (`/opt/models` в Docker)       |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda` или `auto`                             |
 | `STT_BACKEND`           | `whisper`               | бэкенд транскрипции: `whisper` или `parakeet`, если `STT_MODELS` пуст |

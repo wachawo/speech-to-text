@@ -14,7 +14,8 @@ from libs import backends, config, diarize, registry
 
 logger = logging.getLogger(__name__)
 
-# How long a request waits for a free model before the pool is declared exhausted.
+# How long background work - a job's piece, a live phrase - waits for a free model before the pool is
+# declared exhausted. A synchronous HTTP request waits STT_QUEUE_TIMEOUT instead; see acquire_request_model.
 MODEL_ACQUIRE_TIMEOUT = 120
 
 # The diarizer gets a much shorter bound. Transcription is minutes of work, so waiting for it
@@ -128,7 +129,7 @@ def count_waiting(kind: str, change: int) -> None:
         WAITING[kind] = WAITING.get(kind, 0) + change
 
 
-def acquire_model(*, model_id: str, timeout: int = MODEL_ACQUIRE_TIMEOUT) -> Any:
+def acquire_model(*, model_id: str, timeout: float = MODEL_ACQUIRE_TIMEOUT) -> Any:
     """Take an instance of one model out of its pool; raises queue.Empty when none frees up in time.
 
     While it blocks the caller is counted under that pool's kind, so background work borrowing the
@@ -140,6 +141,16 @@ def acquire_model(*, model_id: str, timeout: int = MODEL_ACQUIRE_TIMEOUT) -> Any
         return get_model_pool(model_id).get(timeout=timeout)
     finally:
         count_waiting(kind, -1)
+
+
+def acquire_request_model(*, model_id: str) -> Any:
+    """Take an instance for a synchronous HTTP request, waiting at most STT_QUEUE_TIMEOUT seconds.
+
+    Every route that answers a transcription in its own response borrows through here, so one
+    setting decides how long such a client waits before its 503. It is counted as a waiter like any
+    other caller, so background work keeps stepping aside for it.
+    """
+    return acquire_model(model_id=model_id, timeout=config.STT_QUEUE_TIMEOUT)
 
 
 def yield_to_waiters(kind: str) -> None:

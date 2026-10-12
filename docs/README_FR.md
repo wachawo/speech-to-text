@@ -272,6 +272,8 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `STT_HOST`              | `0.0.0.0`               | adresse d'écoute du serveur                          |
 | `STT_PORT`              | `5099`                  | port du serveur                                      |
 | `STT_POOL_SIZE`         | `8`                     | instances par modèle ; valeur par défaut d'une entrée `STT_MODELS` sans `@pool` |
+| `STT_QUEUE_TIMEOUT`     | `120`                   | secondes pendant lesquelles une requête synchrone attend une instance libre de son modèle avant `503` |
+| `STT_KEEPALIVE_SECONDS` | `5`                     | secondes pendant lesquelles une connexion HTTP inactive reste ouverte (uvicorn ; `keepalive` de gunicorn) |
 | `STT_TOKENS`            | (vide)                  | jetons valides séparés par des virgules ; vide désactive l'authentification |
 | `STT_DEBUG`             | `false`                 | mode debug de Flask                                  |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | taille maximale d'envoi en Mo ; un corps plus grand renvoie `413` |
@@ -282,6 +284,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `LOG_ACCESS`            | `false`                 | journaliser les lignes d'accès uvicorn               |
 | `WHISPER_MODEL`         | `small.en`              | nom du modèle Whisper (par ex. `small.en`, `turbo`) lorsque `STT_MODELS` est vide |
 | `WHISPER_LANGUAGE`      | `en`                    | langue par défaut de chaque modèle Whisper |
+| `WHISPER_BEAM_SIZE`     | `1`                     | largeur du faisceau (beam) de Whisper ; `1` est glouton, un faisceau plus large est plus lent et un peu plus précis |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | répertoire de cache des modèles (`/opt/models` dans Docker) |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda` ou `auto`                              |
 | `STT_BACKEND`           | `whisper`               | backend de transcription : `whisper` ou `parakeet` lorsque `STT_MODELS` est vide |
