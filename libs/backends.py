@@ -34,6 +34,11 @@ UNSUPPORTED_LANGUAGE = "Unsupported language"
 # silently); this guards any caller that does.
 UNKNOWN_BACKENDS_LOGGED: set[str] = set()
 
+# (model id, code) pairs already warned about by is_unlisted_language_forgiven. The leniency is
+# applied per request, and a client that sends the same code on every call would otherwise cost a
+# WARNING per call where the server used to log nothing.
+FORGIVEN_LANGUAGES_LOGGED: set[tuple[str, str]] = set()
+
 
 def transcriber_name() -> str:
     """The configured backend name, falling back to the default when it names nothing real."""
@@ -86,6 +91,14 @@ def resolve_language_code(language: str | None, spec: dict[str, Any]) -> tuple[s
     return code, None
 
 
+def record_forgiven_language(model_id: str, code: str) -> bool:
+    """Note that this model was handed this code outside its list; True only the first time in this process."""
+    if (model_id, code) in FORGIVEN_LANGUAGES_LOGGED:
+        return False
+    FORGIVEN_LANGUAGES_LOGGED.add((model_id, code))
+    return True
+
+
 def is_unlisted_language_forgiven(code: str, spec: dict[str, Any], languages: list[str]) -> bool:
     """Whether a request that did not choose its model may hand this model a code outside its list.
 
@@ -93,14 +106,16 @@ def is_unlisted_language_forgiven(code: str, spec: dict[str, Any], languages: li
     checkpoint has always been handed any known code and quietly decoded English, and the
     response says `en`. A checkpoint whose name matches no known one (a fine-tune at
     `/models/my-large-v3-finetune.pt`) has a list that is only a guess from that name, so the
-    code is passed on rather than refused on the guess.
+    code is passed on rather than refused on the guess. Either is logged once per model and code.
     """
     if len(languages) == 1:
-        logger.warning("Model %s knows only %s; transcribing a %s request anyway", spec["id"], languages[0], code)
+        if record_forgiven_language(spec["id"], code):
+            logger.warning("Model %s knows only %s; transcribing a %s request anyway", spec["id"], languages[0], code)
         return True
     known_models = transcriber_for_backend(spec["backend"]).list_known_models()
     if spec["id"].lower() not in known_models:
-        logger.warning("Model %s is no known checkpoint, so its languages are a guess; passing %s on", spec["id"], code)
+        if record_forgiven_language(spec["id"], code):
+            logger.warning("Model %s is no known checkpoint, so its languages are a guess; passing %s on", spec["id"], code)
         return True
     return False
 

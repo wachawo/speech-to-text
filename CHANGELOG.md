@@ -283,7 +283,9 @@
   message without `model` is checked exactly as before. Only a checkpoint whose list is
   certain refuses it: a file path whose name matches no known checkpoint (a fine-tune at
   `/models/my-large-v3-finetune.pt`) still has any known code passed on when the request
-  names no model, because its list is only guessed from the name.
+  names no model, because its list is only guessed from the name. Both that case and an
+  English-only model handed another code are logged once per model and code, not on every
+  request.
 - **The container stops cleanly.** `entrypoint.sh` ran the server under `/bin/sh -c` without
   `exec`, so the shell stayed PID 1, never forwarded SIGTERM, and every stop and redeploy
   waited out Docker's 10 s grace period and then SIGKILLed the server with requests in flight
