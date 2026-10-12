@@ -6,7 +6,7 @@ import io
 import logging
 
 # Local imports
-from tests.helpers import REQ_ID_RE
+from tests.helpers import assert_error_shape
 
 
 def test_404_shape(client):
@@ -15,8 +15,7 @@ def test_404_shape(client):
     assert resp.status_code == 404
     body = resp.get_json()
     assert body["error"] == "Not Found"
-    assert REQ_ID_RE.match(body["request_id"])
-    assert set(body.keys()) == {"error", "request_id"}
+    assert_error_shape(body)
 
 
 def test_405_shape(client):
@@ -25,8 +24,7 @@ def test_405_shape(client):
     assert resp.status_code == 405
     body = resp.get_json()
     assert body["error"] == "Method Not Allowed"
-    assert REQ_ID_RE.match(body["request_id"])
-    assert set(body.keys()) == {"error", "request_id"}
+    assert_error_shape(body)
 
 
 def test_405_names_the_allowed_methods(client):
