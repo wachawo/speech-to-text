@@ -388,6 +388,11 @@
   speaker decision since it started; what no phrase can still ask about is now dropped.
 
 #### Changed
+- **`stt_pool_pool_size` is now `stt_pool_size`.** The unlabelled pool gauges in `/metrics`
+  were named `stt_pool_` plus the pool status key, which doubled the word: the default model's
+  size is now `stt_pool_size` and the diarizer's `stt_pool_diarize_size` (was
+  `stt_pool_diarize_pool_size`). `stt_pool_available` and `stt_pool_diarize_available` keep
+  their names. Dashboards and alerts that read the old names need updating.
 - **The compose files take `STT_POOL_SIZE` from `.env`.** Both pinned `STT_POOL_SIZE: "1"`
   in `environment:`, which overrides `env_file:`, so the value in `.env` was silently
   ignored; it is now `"${STT_POOL_SIZE:-1}"`. A host whose `.env` sets it gets that many
