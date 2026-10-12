@@ -35,8 +35,8 @@ silero-vad>=6.2
 soundfile>=0.12.1
 
 # Utilities
-python-dotenv>=1.2.3
+python-dotenv>=1.2.4
 requests>=2.34.2
-websockets>=13.0
+websockets>=17.2
 prometheus-client>=0.20
 uvicorn-worker>=0.3

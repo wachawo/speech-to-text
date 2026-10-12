@@ -38,9 +38,9 @@ dependencies = [
     "uvicorn[standard]>=0.29.0",
     "gunicorn>=26.2.0",
     "pydub>=0.25.1",
-    "python-dotenv>=1.2.3",
+    "python-dotenv>=1.2.4",
     "requests>=2.34.2",
-    "websockets>=13.0",
+    "websockets>=17.2",
     "prometheus-client>=0.20",
     "uvicorn-worker>=0.3",
 ]
@@ -60,7 +60,7 @@ whisper = [
 # It is an add-on to `whisper`, not a standalone install: torch comes with that one.
 #   pip install "speech-to-text[whisper,diarize]"
 diarize = [
-    "transformers>=5.18.0",
+    "transformers>=5.19.0",
     "soundfile>=0.12.1",
     # The checkpoint's feature extractor requires it; transformers does not install it.
     "librosa>=0.11.0",
@@ -68,7 +68,7 @@ diarize = [
 # The Parakeet transcription backend: parakeet_tdt ships in released transformers.
 # An add-on rather than a standalone install, like `diarize`: torch comes with `whisper`.
 parakeet = [
-    "transformers>=5.18.0",
+    "transformers>=5.19.0",
     "soundfile>=0.12.1",
     "librosa>=0.11.0",
 ]
