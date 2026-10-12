@@ -4,7 +4,7 @@ Conventions and context for anyone working in this repository, human or tooling.
 
 ## What this is
 
-A single-process Flask + uvicorn HTTP service wrapping `openai-whisper` for speech-to-text, with a browser UI in `www/` served by its own nginx container. No database, no background worker - just `stt_server.py` (app wiring, routes, entry point), `stt_client.py` (a CLI that POSTs files to it), `gu.py` (Gunicorn config and hooks) and the `libs/` package holding everything else: `config.py`, `logs.py`, `errors.py`, `auth.py`, `audio.py`, `model_pool.py`, `registry.py`, `catalog.py`, `backends.py`, `stt.py`, `parakeet.py`, `align.py`, `diarize.py`, `speech_gate.py`, `live.py`, `stream.py`, `url_source.py`, `jobs.py`, `longform.py`, `metrics.py`.
+A single-process Flask + uvicorn HTTP service wrapping `openai-whisper` and NVIDIA Parakeet for speech-to-text, with a browser UI in `www/` served by its own nginx container. No database and no worker process of its own - background jobs run on a thread inside each server process - just `stt_server.py` (app wiring, routes, entry point), `stt_client.py` (a CLI that POSTs files to it), `gu.py` (Gunicorn config and hooks) and the `libs/` package holding everything else: `config.py`, `logs.py`, `errors.py`, `auth.py`, `audio.py`, `model_pool.py`, `registry.py`, `catalog.py`, `backends.py`, `stt.py`, `parakeet.py`, `align.py`, `diarize.py`, `speech_gate.py`, `live.py`, `stream.py`, `url_source.py`, `jobs.py`, `longform.py`, `metrics.py`.
 
 ## Architecture
 
