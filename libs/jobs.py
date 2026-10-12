@@ -51,7 +51,6 @@ RESULT_NAME = "result.json"
 LOCK_NAME = "job.lock"
 
 WAKE = threading.Event()
-STOP = threading.Event()
 WORKER: dict[str, Any] = {"thread": None, "cleaned": 0.0}
 
 
@@ -311,7 +310,7 @@ def remove_expired(now: float | None = None) -> int:
 def run_pending() -> int:
     """Run every job that can be claimed right now; the number run. The worker loop's one step."""
     count = 0
-    while not STOP.is_set():
+    while True:
         claimed = claim_next()
         if claimed is None:
             return count
@@ -321,14 +320,13 @@ def run_pending() -> int:
         if job["status"] == "queued":
             # Back in the queue because no model was free: it is still the oldest, and claiming it
             # at once would only start the same work over.
-            STOP.wait(POLL_SECONDS)
-    return count
+            time.sleep(POLL_SECONDS)
 
 
 def work_forever() -> None:
     """The worker thread: run what is queued, clean up now and then, sleep until woken or polled."""
     os.makedirs(config.JOBS_DIR, exist_ok=True)
-    while not STOP.is_set():
+    while True:
         try:
             run_pending()
             if time.time() - WORKER["cleaned"] > CLEANUP_SECONDS:
