@@ -162,9 +162,20 @@ def new_stream_state() -> dict:
     back a caller trimming its buffer may go. `activity` holds the per-frame speaker decisions so
     far, one bool array of shape `(frames, 8)` per chunk, at one frame every 10 ms; `frames` counts
     every frame ever emitted, so after trim_activity has dropped chunks from the front, the first
-    one kept starts at frame `frames` minus the frames still held.
+    one kept starts at frame `frames` minus the frames still held. `ready_at` is how many samples
+    must have arrived before the next chunk can be diarized; only the processor knows the chunk
+    sizes, so it stays 0 until the diarizer has been asked once.
     """
-    return {"cache": None, "first": True, "frame": 0, "next_start": 0, "activity": [], "frames": 0, "finished": False}
+    return {
+        "cache": None,
+        "first": True,
+        "frame": 0,
+        "next_start": 0,
+        "ready_at": 0,
+        "activity": [],
+        "frames": 0,
+        "finished": False,
+    }
 
 
 def advance_stream(state: dict, read_samples, total_samples: int, diarizer, until: int, final: bool) -> None:
@@ -174,7 +185,9 @@ def advance_stream(state: dict, read_samples, total_samples: int, diarizer, unti
     have arrived. Chunks have fixed sizes set by the processor's streaming mode; the first one is
     shorter because its analysis windows are centered. With `final` the stream is over and the
     remainder goes in as the last chunk, which the model scores without look-ahead. Stops once the
-    emitted frames cover `until` samples, so a caller asks for no more work than it needs.
+    emitted frames cover `until` samples, so a caller asks for no more work than it needs. Leaves
+    `ready_at` at the end of the next chunk, so a caller can tell without a diarizer in hand
+    whether another one has arrived.
     """
     import torch
 
@@ -189,6 +202,7 @@ def advance_stream(state: dict, read_samples, total_samples: int, diarizer, unti
             end = start + processor.num_samples_per_audio_chunk
         last = end > total_samples
         if last and not final:
+            state["ready_at"] = end
             return
         samples = read_samples(start, min(end, total_samples))
         # A remainder shorter than one analysis window yields no encoder frame at all, and the
@@ -211,6 +225,7 @@ def advance_stream(state: dict, read_samples, total_samples: int, diarizer, unti
         state["frames"] += active.shape[0]
         state["frame"] += processor.num_mel_frames_per_step
         state["next_start"] = max(0, processor.audio_chunk_start(state["frame"]))
+        state["ready_at"] = processor.audio_chunk_start(state["frame"]) + processor.num_samples_per_audio_chunk
         state["first"] = False
         state["finished"] = last
 

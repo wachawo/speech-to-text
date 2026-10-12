@@ -217,9 +217,15 @@ async def report_progress(session: dict[str, Any], send_event) -> None:
 
 
 async def ingest_audio(session: dict[str, Any], data: bytes, send_event) -> None:
-    """Add PCM to the session, queue the utterances it closes, and report progress."""
+    """Add PCM to the session, queue the utterances it closes, and report progress.
+
+    The worker is also woken when the audio completes another diarizer step inside an open
+    phrase, so it can look for a speaker change there.
+    """
     stream.append_samples(session["buffer"], np.frombuffer(data, dtype="<i2"))
     queue_utterances(session)
+    if is_diarizer_step_ready(session):
+        session["wake"].set()
     await report_progress(session, send_event)
 
 
@@ -363,26 +369,52 @@ async def process_utterance(session: dict[str, Any], utterance: dict[str, int]) 
     return stream.attribute_live_segments(segments, diarize.stream_turns(diarization, start, end), session["spec"])
 
 
+def is_diarizer_step_ready(session: dict[str, Any]) -> bool:
+    """Whether a phrase is open and enough audio has arrived for the diarizer's next step.
+
+    Decided from the state the last diarizer call left, without borrowing one, so the pool is
+    asked at most once per step of new audio. Before any call the step size is unknown and the
+    answer is no: the first idle catch-up or phrase borrows the diarizer anyway and learns it.
+    Without diarization, or with no phrase open, there is no speaker change to look for.
+    """
+    diarization = session["diarization"]
+    if diarization is None or diarization["finished"] or not session["segmenter"]["in_speech"]:
+        return False
+    if not diarization["ready_at"]:
+        return False
+    total = session["buffer"]["total"]
+    # The second test is the diarizer's own stopping rule: frames that already cover the audio
+    # would make the call a no-op, and the worker would ask again at once.
+    covered = diarization["frames"] * diarize.STREAM_FRAME_SECONDS * stream.SAMPLE_RATE
+    return total >= diarization["ready_at"] and covered < total
+
+
 def split_at_handover(session: dict[str, Any]) -> None:
     """Close the phrase in progress where the diarizer says the speaker changed.
 
     The pause detector alone waits for 0.6 s of silence, and people answering each other often
     leave less, so in a lively dialog a phrase could run for several turns and arrive seconds late.
-    Runs after catch_up, when the diarizer is as current as the audio allows.
+    Runs after catch_up, when the diarizer is as current as the audio allows: as soon as a phrase
+    is open and the diarizer has a new step of audio, and after IDLE_SECONDS with nothing to do.
+    Every handover the frames already cover is cut in one call - after a burst of several seconds
+    there can be more than one - and each cut moves the phrase start forward, so the loop ends.
     """
     segmenter = session["segmenter"]
     diarization = session["diarization"]
     if diarization is None or not segmenter["in_speech"]:
         return
-    start = segmenter["speech_start"] / stream.SAMPLE_RATE
     end = diarization["frames"] * diarize.STREAM_FRAME_SECONDS
-    handover = diarize.find_handover(diarization, start, end)
-    if handover is None:
-        return
-    utterance = stream.cut_utterance(segmenter, int(handover * stream.SAMPLE_RATE))
-    if utterance:
-        session["pending"].append(utterance)
-        session["wake"].set()
+    while segmenter["in_speech"]:
+        speech_start = segmenter["speech_start"]
+        handover = diarize.find_handover(diarization, speech_start / stream.SAMPLE_RATE, end)
+        if handover is None:
+            return
+        utterance = stream.cut_utterance(segmenter, int(handover * stream.SAMPLE_RATE))
+        if utterance:
+            session["pending"].append(utterance)
+            session["wake"].set()
+        if segmenter["speech_start"] == speech_start:
+            return
 
 
 async def catch_up(session: dict[str, Any]) -> None:
@@ -414,6 +446,10 @@ async def run_worker(session: dict[str, Any], send_event) -> str | None:
                 continue
             if session["final"]:
                 return None
+            if is_diarizer_step_ready(session):
+                # A new step inside an open phrase: the handover is looked for now, not after idling.
+                await catch_up(session)
+                continue
             session["wake"].clear()
             try:
                 await asyncio.wait_for(session["wake"].wait(), timeout=IDLE_SECONDS)
