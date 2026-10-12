@@ -391,6 +391,14 @@
   speaker decision since it started; what no phrase can still ask about is now dropped.
 
 #### Changed
+- **A live phrase is cut at a speaker change as soon as the diarizer can see it.** With
+  `diarize` on, the open phrase used to be checked for a handover only after the worker had
+  had nothing to transcribe for a second, so in a dense dialog, where people answer each other
+  in less than the 0.6 s pause that ends a phrase, each phrase arrived about 2 s after it ended
+  in the audio (3 s at worst). The check now runs every time another diarizer step of audio
+  (about 0.72 s) has arrived inside an open phrase, still borrowing the diarizer once per step
+  and releasing it at once. What counts as a handover is unchanged, and so is a session
+  without `diarize`.
 - **`stt_pool_pool_size` is now `stt_pool_size`.** The unlabelled pool gauges in `/metrics`
   were named `stt_pool_` plus the pool status key, which doubled the word: the default model's
   size is now `stt_pool_size` and the diarizer's `stt_pool_diarize_size` (was

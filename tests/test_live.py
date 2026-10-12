@@ -641,13 +641,14 @@ def test_a_diarized_session_attributes_segments_from_the_turns_so_far(monkeypatc
     diarizers: queue.Queue = queue.Queue()
     diarizers.put("diarizer-sentinel")
     monkeypatch.setattr(model_pool, "DIARIZER_POOL", diarizers)
-    state = {"finished": False, "next_start": 0}
+    state = {"finished": False, "next_start": 0, "ready_at": 0, "frames": 0}
     advanced = []
     windows = []
 
     def record_advance(diarization, buffer, until, final):
-        """Stand in for stream.advance_diarization and record how far it was asked to go."""
+        """Stand in for stream.advance_diarization, record how far it was asked to go, and want a second more."""
         advanced.append((diarization, until, final))
+        diarization["ready_at"] = buffer["total"] + RATE
 
     def answer_turns(diarization, start, end):
         """Speaker 1 throughout, with speaker 0 cutting in: the phrase belongs to 1 and is overlapped."""
@@ -656,9 +657,14 @@ def test_a_diarized_session_attributes_segments_from_the_turns_so_far(monkeypatc
 
     monkeypatch.setattr(stream, "new_diarization", lambda: state)
     monkeypatch.setattr(stream, "advance_diarization", record_advance)
-    monkeypatch.setattr(
-        live, "diarize", types.SimpleNamespace(stream_turns=answer_turns, trim_activity=lambda state, keep_from: None)
+    # The open phrase is checked for a handover at every diarizer step; this test has none.
+    fake_diarize = types.SimpleNamespace(
+        stream_turns=answer_turns,
+        trim_activity=lambda state, keep_from: None,
+        find_handover=lambda state, start, end: None,
+        STREAM_FRAME_SECONDS=0.01,
     )
+    monkeypatch.setattr(live, "diarize", fake_diarize)
 
     result = run_stream([build_connect(), build_start(diarize=True), *build_audio(build_speech()), build_stop()])
     assert read_events(result)[0]["diarize"] is True
