@@ -16,7 +16,9 @@
   keep no connection alive). The synchronous path keeps audio and text off the log and the
   disk: the speech gate logs a dropped segment's speech share and length instead of its
   words, and a multipart upload over 500 KB is held in memory rather than spooled to a
-  temporary file (jobs still write theirs to `JOBS_DIR`, by design).
+  temporary file (jobs still write theirs to `JOBS_DIR`, by design). `docs/DEPLOY.md`
+  describes a second instance for short phrases, with the latencies, error rates and GPU
+  memory of each model measured on one GB10.
 - **Several pre-loaded transcription models, chosen per request.** `STT_MODELS` lists
   them as `backend:model[@pool]` entries, for example
   `whisper:turbo@2,whisper:small.en@1,parakeet:nvidia/parakeet-tdt-0.6b-v3@1`, each with
