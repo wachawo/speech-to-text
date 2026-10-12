@@ -761,7 +761,7 @@ def transcribe_openai():
         filename,
         size_kb,
         spec["id"],
-        result["language"],
+        result["language_code"],
         options["response_format"],
         len(result["text"]),
         time.monotonic() - start_time,

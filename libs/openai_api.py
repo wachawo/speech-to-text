@@ -4,6 +4,7 @@
 
 import io
 import logging
+import re
 from typing import Any
 
 import soundfile as sf
@@ -27,6 +28,10 @@ TIMESTAMP_GRANULARITIES = ("segment",)
 
 # Both spellings of the list field: OpenAI's SDKs send `timestamp_granularities[]`.
 GRANULARITY_FIELDS = ("timestamp_granularities[]", "timestamp_granularities")
+
+# Whisper's special tokens (`<|endoftext|>`, `<|en|>`, `<|0.00|>`): its tokenizer refuses to encode
+# them in a prompt, which would fail the decode as a 500 for what is the client's input.
+SPECIAL_TOKEN_PATTERN = re.compile(r"<\|[^|]*\|>")
 
 
 def read_temperature_refusal(raw: str | None) -> Any:
@@ -67,6 +72,8 @@ def read_transcription_options(form: Any) -> tuple[dict[str, Any] | None, Any]:
     if refusal is not None:
         return None, refusal
     prompt = (form.get("prompt") or "").strip() or None
+    if prompt is not None and SPECIAL_TOKEN_PATTERN.search(prompt):
+        return None, build_openai_error_response("Invalid prompt", 400, param="prompt")
     return {"response_format": response_format, "prompt": prompt}, None
 
 
@@ -118,7 +125,7 @@ def read_language_name(spec: dict[str, Any], code: str | None) -> str | None:
 
 
 def transcribe_wav(wav_bio: io.BytesIO, model: Any, language: str | None, spec: dict[str, Any], prompt: str | None) -> dict:
-    """One decode by the spec's backend, through the speech gate, as `{text, language, duration, segments}`.
+    """One decode by the spec's backend, through the speech gate, as `{text, language, language_code, duration, segments}`.
 
     The text is built as /api/stt builds it: the transcriber's own text without the gate, the
     joined texts of the segments the gate keeps with it. `segments` are Whisper's own segments
@@ -138,6 +145,7 @@ def transcribe_wav(wav_bio: io.BytesIO, model: Any, language: str | None, spec: 
     return {
         "text": text,
         "language": read_language_name(spec, result["language"]),
+        "language_code": result["language"],
         "duration": read_duration(wav_bio),
         "segments": segments,
     }
