@@ -3,12 +3,9 @@
 """GET /api/models - the capability catalogue a client reads to know what the server has."""
 
 import queue
-import re
 
 from libs import config, model_pool
-from tests.helpers import get_default_pool
-
-REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+from tests.helpers import assert_error_shape, get_default_pool
 
 
 def rows_by_backend(body):
@@ -119,8 +116,7 @@ def test_requires_a_token_when_configured(client, monkeypatch):
     monkeypatch.setattr(config, "STT_TOKENS", {"secret"})
     assert client.get("/api/models").status_code == 401
     body = client.get("/api/models").get_json()
-    assert set(body.keys()) == {"error", "request_id"}
-    assert REQ_ID_RE.match(body["request_id"])
+    assert_error_shape(body)
 
 
 def test_every_loaded_model_has_its_own_row(multi_client):

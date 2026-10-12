@@ -4,14 +4,11 @@
 
 import io
 import queue
-import re
 
 import pytest
 
 from libs import config, model_pool
-from tests.helpers import make_wav
-
-REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+from tests.helpers import assert_error_shape, make_wav
 
 
 def record_models(module, monkeypatch) -> list:
@@ -90,8 +87,7 @@ def test_an_unknown_model_is_a_400_that_borrows_nothing(multi_client):
     assert resp.status_code == 400
     body = resp.get_json()
     assert body["error"] == "Invalid model"
-    assert set(body) == {"error", "request_id"}
-    assert REQ_ID_RE.match(body["request_id"])
+    assert_error_shape(body)
     assert pool_sizes() == before
 
 

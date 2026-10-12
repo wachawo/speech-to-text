@@ -151,7 +151,12 @@ def test_background_work_steps_aside_for_a_waiting_request(monkeypatch):
     released.start()
     started = time.monotonic()
     model_pool.yield_to_waiters(kind)
-    assert 0.15 < time.monotonic() - started < 2.0
+    elapsed = time.monotonic() - started
+    # It waited for the waiter, which leaves at 0.2 s, and returned because it left rather than at
+    # the limit - bounded by the limit itself, not by a guess at how fast the runner is.
+    released.join()
+    assert model_pool.WAITING[kind] == 0
+    assert 0.15 < elapsed < model_pool.YIELD_LIMIT_SECONDS
     monkeypatch.setattr(model_pool, "YIELD_LIMIT_SECONDS", 0.1)
     model_pool.count_waiting(kind, 1)
     started = time.monotonic()

@@ -4,9 +4,9 @@
 
 import io
 import logging
-import re
 
-REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+# Local imports
+from tests.helpers import REQ_ID_RE
 
 
 def test_404_shape(client):

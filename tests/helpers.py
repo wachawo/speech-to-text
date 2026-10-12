@@ -4,6 +4,7 @@
 
 import io
 import queue
+import re
 import wave
 
 import numpy as np
@@ -13,6 +14,9 @@ from libs import config, model_pool, registry
 
 # The live stream's format: signed 16-bit mono PCM at 16 kHz.
 STREAM_RATE = 16000
+
+# Every error body carries a request id of 12 lower-case hex digits.
+REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
 
 def make_wav(duration_ms: int = 100, sample_rate: int = 16000) -> bytes:
@@ -25,6 +29,12 @@ def make_wav(duration_ms: int = 100, sample_rate: int = 16000) -> bytes:
         writer.setframerate(sample_rate)
         writer.writeframes(b"\x00\x00" * n_frames)
     return buf.getvalue()
+
+
+def assert_error_shape(body):
+    """Assert the response carries exactly the generic error category and a request id."""
+    assert set(body.keys()) == {"error", "request_id"}
+    assert REQ_ID_RE.match(body["request_id"])
 
 
 def make_tone(seconds: float, amplitude: float = 0.3, frequency: float = 440.0) -> np.ndarray:

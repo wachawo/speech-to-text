@@ -3,13 +3,10 @@
 """Optional static-token auth via STT_TOKENS / Authorization: Bearer."""
 
 import io
-import re
 
 from libs import config
 from libs.auth import is_valid_token
-from tests.helpers import make_wav
-
-REQ_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+from tests.helpers import REQ_ID_RE, make_wav
 
 
 def post_audio(client, headers=None):
