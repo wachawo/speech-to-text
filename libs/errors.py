@@ -3,6 +3,7 @@
 """Uniform JSON error responses: a generic category plus the request id that finds the log line."""
 
 import logging
+import re
 import traceback
 
 import werkzeug.exceptions
@@ -12,6 +13,20 @@ from flask import Flask, g, has_request_context, jsonify, request
 from libs import config, metrics
 
 logger = logging.getLogger(__name__)
+
+# The prefix of the OpenAI-compatible routes, whose errors use OpenAI's body instead of this one.
+OPENAI_PREFIX = "/v1"
+
+# The request field each shared error category is about, for `param` in an OpenAI error body.
+OPENAI_ERROR_PARAMS = {
+    "No audio data": "file",
+    "Invalid audio data": "file",
+    "Payload Too Large": "file",
+    "Invalid model": "model",
+    "Model not loaded": "model",
+    "Invalid language": "language",
+    "Unsupported language": "language",
+}
 
 
 def get_request_id() -> str:
@@ -24,12 +39,61 @@ def get_request_id() -> str:
     return getattr(g, "request_id", "-")
 
 
+def is_openai_path(path: str) -> bool:
+    """Whether a path belongs to the OpenAI-compatible API, whose errors take OpenAI's shape."""
+    return path == OPENAI_PREFIX or path.startswith(OPENAI_PREFIX + "/")
+
+
+def is_openai_request() -> bool:
+    """Whether the current request is on an OpenAI-compatible path; False outside a request."""
+    return has_request_context() and is_openai_path(request.path)
+
+
+def build_error_code(error: str) -> str:
+    """The snake_case slug of an error category: `Invalid language` -> `invalid_language`."""
+    return "_".join(re.findall(r"[a-z0-9]+", error.lower()))
+
+
+def build_error_type(status: int) -> str:
+    """The OpenAI error type for a status: the server's own failure, a bad token, or a bad request."""
+    if status >= 500:
+        return "server_error"
+    if status == 401:
+        return "authentication_error"
+    return "invalid_request_error"
+
+
+def build_openai_error_response(error: str, status: int, param: str | None = None):
+    """Build the error body of an OpenAI-compatible route: OpenAI's `error` object around the same category.
+
+    `message` is the category /api would answer with, `code` its slug, `param` the request field
+    at fault (looked up by category when not given) and `request_id` the id that finds the log
+    line. Details never reach the client, exactly as with build_error_response.
+    """
+    metrics.count_error(error)
+    body = {
+        "error": {
+            "message": error,
+            "type": build_error_type(status),
+            "param": param if param is not None else OPENAI_ERROR_PARAMS.get(error),
+            "code": build_error_code(error),
+            "request_id": get_request_id(),
+        }
+    }
+    return jsonify(body), status
+
+
 def build_error_response(error: str, status: int, **extra):
     """Build the project-wide error body: the error category, the request id and nothing else.
 
     Details never reach the client - the full exception goes to the log under the
     same request id, so a report can be correlated without leaking internals.
+
+    On an OpenAI-compatible path (/v1) the same category goes out in OpenAI's shape instead, the
+    one documented exception to this body; `extra` is dropped there, as that shape has no room for it.
     """
+    if is_openai_request():
+        return build_openai_error_response(error, status)
     metrics.count_error(error)
     body = {"error": error, "request_id": get_request_id()}
     body.update(extra)

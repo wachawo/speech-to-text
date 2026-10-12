@@ -192,6 +192,7 @@ def get_stt_result(
     model: Any = None,
     device: str | None = None,
     language: str | None = None,
+    prompt: str | None = None,
 ) -> dict:
     """Transcribe a WAV buffer and return `{"text", "language", "segments"}` from one decode.
 
@@ -199,10 +200,13 @@ def get_stt_result(
     the model detects the language itself and takes no such argument. GET /api/models reports
     `accepts_language: false` so a caller is told rather than left to wonder. The reported
     language is always None, because the model does not say which one it detected. `segments`
-    are the words get_stt_segments returns, from the same decode.
+    are the words get_stt_segments returns, from the same decode. `prompt` is accepted and
+    ignored as well: the model takes no prompt. Its text is never logged.
     """
     if language:
         logger.debug("Parakeet detects the language itself; ignoring the requested %s", language)
+    if prompt:
+        logger.debug("Parakeet takes no prompt; ignoring the one the request carried")
     text, tokens = transcribe_tokens(bio, model=model, device=device)
     segments = group_tokens(tokens)
     logger.debug("Transcribed %d words from %d tokens", len(segments), len(tokens))

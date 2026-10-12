@@ -244,6 +244,40 @@ Fehler sind einheitlich: `error` trägt eine generische Kategorie, und `request_
 
 Wenn `STT_TOKENS` gesetzt ist, muss jede Route außer `GET /api/health` `Authorization: Bearer <token>` mitführen; dieser Endpunkt bleibt offen, damit Healthchecks weiterhin funktionieren.
 
+### OpenAI-kompatible API
+
+`POST /v1/audio/transcriptions` und `GET /v1/models` folgen der Audio-API von OpenAI, daher funktioniert jedes OpenAI-SDK, sobald seine `base_url` auf `http://<host>:<port>/v1` zeigt und sein API-Key einer der `STT_TOKENS` ist (bei ausgeschalteter Authentifizierung ein beliebiger String).
+
+```bash
+curl localhost:5099/v1/audio/transcriptions \
+  -H 'Authorization: Bearer <token>' \
+  -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
+print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
+```
+
+Die Anfrage ist `multipart/form-data` mit `file` und durchläuft genau das, was `/api/stt` tut: dasselbe Token, dieselbe Größengrenze, dieselbe Konvertierung, denselben Sprachfilter und dieselbe Wartezeit auf eine freie Instanz (`STT_QUEUE_TIMEOUT`). Ein 16-kHz-Mono-WAV mit 16-Bit-PCM wird ohne Dekodierung weitergereicht, alles andere wird wie bei `/api/stt` über pydub dekodiert und auf 16 kHz mono konvertiert.
+
+- `model` ist eine der IDs, die `GET /v1/models` auflistet (dieselben IDs wie `/api/models`), ein Alias oder ein Backend-Name, genau wie bei `/api/stt`; fehlt er oder ist er leer, gilt das Standardmodell. OpenAIs eigene Namen wie `whisper-1` werden als `Invalid model` abgelehnt.
+- `language` wird wie bei `/api/stt` gegen das gewählte Modell geprüft; Parakeet nimmt es an und ignoriert es.
+- `prompt` wird zu Whispers Initial Prompt. openai-whisper behält nur dessen letzte 223 Tokens und nutzt ihn für die ersten 30 s Audio. Parakeet nimmt keinen Prompt und ignoriert ihn. Ein Prompt mit einem Whisper-Sondertoken wie `<|endoftext|>` wird unabhängig vom Modell mit 400 abgelehnt. Der Prompt wird nie geloggt.
+- `temperature` darf nur fehlen oder `0` sein: Dekodiert wird deterministisch bei Temperatur 0.
+- `response_format` ist `json` (Standard, `{"text": ...}`), `text` (ein Klartext-Body) oder `verbose_json`; `srt` und `vtt` werden abgelehnt. `timestamp_granularities[]` darf nur `segment` anfordern.
+
+`verbose_json` enthält `task`, `language` (den vollen kleingeschriebenen Namen, den Whisper meldet, etwa `english`, oder `null` für Parakeet, das keinen meldet), `duration` in Sekunden, `text` und `segments`. Whispers Segmente sind seine eigenen, mit `id`, `seek`, `start`, `end`, `text`, `tokens`, `temperature`, `avg_logprob`, `compression_ratio` und `no_speech_prob`. Parakeet liefert ein Segment mit leeren `tokens` und den Konfidenzfeldern als `null`, weil es keine erzeugt.
+
+Fehler auf jedem `/v1`-Pfad, `401`, `404`, `405`, `413` und `500` eingeschlossen, haben die Form von OpenAI, mit derselben Kategorie als `message`; jede `/v1`-Antwort trägt außerdem die Request-ID im Header `X-Request-Id`. Fehler unter `/api/*` behalten ihre eigene Form.
+
+```json
+{ "error": { "message": "Invalid language", "type": "invalid_request_error", "param": "language",
+             "code": "invalid_language", "request_id": "a1b2c3d4e5f6" } }
+```
+
 ### CLI-Client
 
 `stt_client.py` ist ein kleiner Client zum Arbeiten mit dem Server und zum Testen. Er liest die Server-Adresse und das Token aus `STT_URL` und `STT_TOKEN`.
@@ -323,6 +357,7 @@ speech-to-text/
 │   ├── audio.py         # Upload -> Konvertierung nach 16 kHz Mono-WAV
 │   ├── model_pool.py    # ein Pool pro Transkriptionsmodell und einer für den Diarisierer
 │   ├── catalog.py       # was dieser Server kann, für GET /api/models
+│   ├── openai_api.py    # die OpenAI-kompatible /v1-API: ihre Optionen, Antworten und Modellliste
 │   ├── align.py         # verbindet Transkriptionssegmente mit Sprechbeiträgen
 │   ├── live.py          # der WebSocket /api/stream: Protokoll und Sitzungen
 │   ├── stream.py        # Kern der Live-Transkription: Pausen, Phrasen, Transkription je Phrase

@@ -244,6 +244,40 @@ curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
 
 Если задана переменная `STT_TOKENS`, каждый запрос, кроме `GET /api/health`, должен содержать `Authorization: Bearer <token>`; сам `GET /api/health` остаётся открытым, чтобы продолжали работать проверки состояния.
 
+### API, совместимый с OpenAI
+
+`POST /v1/audio/transcriptions` и `GET /v1/models` повторяют аудио-API OpenAI, поэтому любой OpenAI SDK работает, как только его `base_url` указывает на `http://<host>:<port>/v1`, а ключ API - один из `STT_TOKENS` (при выключенной авторизации - любая строка).
+
+```bash
+curl localhost:5099/v1/audio/transcriptions \
+  -H 'Authorization: Bearer <token>' \
+  -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
+print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
+```
+
+Запрос - это `multipart/form-data` с `file`, и он проходит ровно тот же путь, что и `/api/stt`: тот же токен, тот же лимит размера, то же преобразование, тот же фильтр речи и то же ожидание свободного экземпляра (`STT_QUEUE_TIMEOUT`). WAV 16 кГц, моно, 16-битный PCM передаётся без декодирования, всё остальное, как и на `/api/stt`, декодируется через pydub и преобразуется в 16 кГц моно.
+
+- `model` - один из идентификаторов, которые перечисляет `GET /v1/models` (те же, что в `/api/models`), псевдоним или имя бэкенда, ровно как в `/api/stt`; без него или с пустым значением работает модель по умолчанию. Собственные имена OpenAI вроде `whisper-1` отклоняются как `Invalid model`.
+- `language` проверяется по выбранной модели, как в `/api/stt`; Parakeet принимает его и игнорирует.
+- `prompt` становится начальной подсказкой (initial prompt) Whisper. openai-whisper оставляет только последние 223 токена и использует её для первых 30 с аудио. Parakeet подсказок не принимает и игнорирует её. Подсказка со специальным токеном Whisper, например `<|endoftext|>`, отклоняется с 400 при любой модели. Подсказка никогда не пишется в лог.
+- `temperature` может только отсутствовать или быть `0`: декодирование детерминированное, при температуре 0.
+- `response_format` - `json` (по умолчанию, `{"text": ...}`), `text` (тело простым текстом) или `verbose_json`; `srt` и `vtt` отклоняются. `timestamp_granularities[]` может запрашивать только `segment`.
+
+`verbose_json` содержит `task`, `language` (полное название языка строчными буквами, которое сообщает Whisper, например `english`, или `null` для Parakeet, который язык не сообщает), `duration` в секундах, `text` и `segments`. Сегменты Whisper - его собственные, с `id`, `seek`, `start`, `end`, `text`, `tokens`, `temperature`, `avg_logprob`, `compression_ratio` и `no_speech_prob`. Parakeet отдаёт один сегмент с пустым `tokens` и полями уверенности `null`, потому что он их не выдаёт.
+
+Ошибки на любом пути `/v1`, включая `401`, `404`, `405`, `413` и `500`, имеют форму OpenAI, с той же категорией в `message`; каждый ответ `/v1` также несёт идентификатор запроса в заголовке `X-Request-Id`. Ошибки `/api/*` сохраняют свою форму.
+
+```json
+{ "error": { "message": "Invalid language", "type": "invalid_request_error", "param": "language",
+             "code": "invalid_language", "request_id": "a1b2c3d4e5f6" } }
+```
+
 ### CLI-клиент
 
 `stt_client.py` это небольшой клиент для работы с сервером и его тестирования. Он читает адрес сервера и токен из `STT_URL` и `STT_TOKEN`.
@@ -323,6 +357,7 @@ speech-to-text/
 │   ├── audio.py         # конвертация загруженного файла в моно-WAV 16 кГц
 │   ├── model_pool.py    # по пулу на каждую модель распознавания и один для диаризатора
 │   ├── catalog.py       # что умеет сервер, для GET /api/models
+│   ├── openai_api.py    # OpenAI-совместимый API /v1: его параметры, ответы и список моделей
 │   ├── align.py         # соединение сегментов транскрипции с интервалами говорящих
 │   ├── live.py          # WebSocket /api/stream: протокол и сессии
 │   ├── stream.py        # ядро транскрипции в реальном времени: паузы, фразы, транскрипция по фразам

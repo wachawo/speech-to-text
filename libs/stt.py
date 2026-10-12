@@ -170,6 +170,7 @@ def decode_buffer(
     model: whisper.Whisper | None = None,
     device: str | None = None,
     language: str | None = None,
+    prompt: str | None = None,
 ) -> dict:
     """Run the one decode every public function here shares and return whisper's raw result.
 
@@ -179,6 +180,10 @@ def decode_buffer(
     cannot drift apart: an edit to these settings changes both or neither. Without an explicit
     `model` one is loaded on the spot, which is slow - the server passes an instance borrowed
     from the pool.
+
+    `prompt` is whisper's `initial_prompt`: text the decoder takes as what was said before. whisper
+    keeps only its last 223 tokens (half the text context, minus one), and with
+    condition_on_previous_text off it conditions the first 30 s window alone.
     """
     if model is None:
         model = get_model(device=device)
@@ -193,6 +198,7 @@ def decode_buffer(
         beam_size=config.WHISPER_BEAM_SIZE,
         best_of=1,
         condition_on_previous_text=False,
+        initial_prompt=prompt or None,
     )
 
 
@@ -208,13 +214,42 @@ def build_segments(result: dict) -> list[dict]:
     ]
 
 
+def build_segment_details(result: dict) -> list[dict]:
+    """The segments of a decode with every field whisper reports for them, as plain JSON values.
+
+    What the OpenAI-compatible `verbose_json` answer carries. Kept apart from build_segments, so
+    /api/transcript, jobs and the live stream go on sending exactly the fields they always did.
+    """
+    return [
+        {
+            "id": int(segment["id"]),
+            "seek": int(segment["seek"]),
+            "start": float(segment["start"]),
+            "end": float(segment["end"]),
+            "text": segment["text"],
+            "tokens": [int(token) for token in segment["tokens"]],
+            "temperature": float(segment["temperature"]),
+            "avg_logprob": float(segment["avg_logprob"]),
+            "compression_ratio": float(segment["compression_ratio"]),
+            "no_speech_prob": float(segment["no_speech_prob"]),
+        }
+        for segment in result["segments"]
+    ]
+
+
+def get_language_name(code: str | None) -> str | None:
+    """The lower-case English name whisper gives a language code (`en` -> `english`), or None."""
+    return LANGUAGES.get(code) if code else None
+
+
 def get_stt_result(
     bio: io.BytesIO,
     model: whisper.Whisper | None = None,
     device: str | None = None,
     language: str | None = None,
+    prompt: str | None = None,
 ) -> dict:
-    """Transcribe a WAV buffer and return `{"text", "language", "segments"}` from one decode.
+    """Transcribe a WAV buffer and return `{"text", "language", "segments", "segment_details"}` from one decode.
 
     A 16 kHz mono buffer (what the server always sends) skips the resampling
     step. Without an explicit `model` one is loaded on the spot, which is slow -
@@ -224,16 +259,18 @@ def get_stt_result(
     `language` is the code whisper detected or was told. An English-only checkpoint always
     decodes English, even when it was handed another code, so it honestly reports `en`.
     `segments` are what get_stt_segments returns, so a caller that needs the text, the language
-    and the segments runs the model once.
+    and the segments runs the model once. `segment_details` are the same segments with every
+    field whisper reports (see build_segment_details). `prompt` is whisper's `initial_prompt`;
+    see decode_buffer.
     """
     if model is None:
         model = get_model(device=device)
-    result = decode_buffer(bio, model=model, device=device, language=language)
+    result = decode_buffer(bio, model=model, device=device, language=language, prompt=prompt)
     text = result["text"].strip()
     detected = result.get("language") if model.is_multilingual else "en"
     segments = build_segments(result)
     logger.debug("Transcribed %d chars in %d segments (language %s)", len(text), len(segments), detected)
-    return {"text": text, "language": detected, "segments": segments}
+    return {"text": text, "language": detected, "segments": segments, "segment_details": build_segment_details(result)}
 
 
 def get_stt_bio(

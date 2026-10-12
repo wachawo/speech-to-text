@@ -16,8 +16,11 @@ logger = logging.getLogger(__name__)
 # list_known_models - so callers resolve the MODULE and then call it by name. A dispatcher that
 # resolved the function instead would silently defeat every test that patches
 # `stt.get_stt_result`. get_stt_result returns {text, language, segments} from one decode, so a
-# caller that needs both the text and the segments never runs the model twice. WORD_SEGMENTS is
-# optional: a module that sets it returns words from get_stt_segments, not phrases.
+# caller that needs both the text and the segments never runs the model twice; it also takes an
+# optional `prompt`, which only Whisper uses. WORD_SEGMENTS is optional: a module that sets it
+# returns words from get_stt_segments, not phrases. So are `segment_details` in get_stt_result's
+# answer and get_language_name, which only Whisper has: it reports per-segment confidence and the
+# language it detected, Parakeet neither.
 TRANSCRIBERS: dict[str, ModuleType] = {"whisper": stt, "parakeet": parakeet}
 
 DEFAULT_TRANSCRIBER = "whisper"

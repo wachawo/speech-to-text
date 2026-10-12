@@ -244,6 +244,40 @@ Os erros são uniformes: `error` carrega uma categoria genérica e `request_id` 
 
 Quando `STT_TOKENS` está definido, toda rota exceto `GET /api/health` precisa enviar `Authorization: Bearer <token>`; ela permanece aberta para que os healthchecks continuem funcionando.
 
+### API compatível com a OpenAI
+
+`POST /v1/audio/transcriptions` e `GET /v1/models` seguem a API de áudio da OpenAI, então qualquer SDK da OpenAI funciona assim que seu `base_url` aponta para `http://<host>:<port>/v1` e sua chave de API é um dos `STT_TOKENS` (qualquer string com a autenticação desligada).
+
+```bash
+curl localhost:5099/v1/audio/transcriptions \
+  -H 'Authorization: Bearer <token>' \
+  -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
+print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
+```
+
+A requisição é `multipart/form-data` com `file` e passa exatamente pelo mesmo caminho de `/api/stt`: o mesmo token, o mesmo limite de tamanho, a mesma conversão, o mesmo filtro de fala e a mesma espera por uma instância livre (`STT_QUEUE_TIMEOUT`). Um WAV PCM de 16 bits, mono, 16 kHz é repassado sem decodificação, todo o resto é decodificado e convertido para 16 kHz mono pelo pydub, como em `/api/stt`.
+
+- `model` é um dos ids listados por `GET /v1/models` (os mesmos de `/api/models`), um alias ou um nome de backend, exatamente como em `/api/stt`; ausente ou vazio, vale o modelo padrão. Os nomes próprios da OpenAI, como `whisper-1`, são recusados com `Invalid model`.
+- `language` é verificado contra o modelo escolhido como em `/api/stt`; o Parakeet o aceita e o ignora.
+- `prompt` vira o prompt inicial do Whisper. O openai-whisper mantém apenas os últimos 223 tokens e o usa nos primeiros 30 s de áudio. O Parakeet não aceita prompt e o ignora. Um prompt com um token especial do Whisper como `<|endoftext|>` é recusado com um 400, qualquer que seja o modelo. O prompt nunca é registrado no log.
+- `temperature` só pode estar ausente ou valer `0`: a decodificação é determinística na temperatura 0.
+- `response_format` é `json` (o padrão, `{"text": ...}`), `text` (um corpo de texto puro) ou `verbose_json`; `srt` e `vtt` são recusados. `timestamp_granularities[]` só pode pedir `segment`.
+
+`verbose_json` traz `task`, `language` (o nome completo em minúsculas que o Whisper informa, como `english`, ou `null` para o Parakeet, que não informa nenhum), `duration` em segundos, `text` e `segments`. Os segmentos do Whisper são os dele, com `id`, `seek`, `start`, `end`, `text`, `tokens`, `temperature`, `avg_logprob`, `compression_ratio` e `no_speech_prob`. O Parakeet devolve um segmento com `tokens` vazio e os campos de confiança em `null`, porque não produz nenhum.
+
+Os erros em qualquer caminho `/v1`, incluindo `401`, `404`, `405`, `413` e `500`, seguem o formato da OpenAI, com a mesma categoria em `message`; toda resposta de `/v1` também traz o id da requisição no cabeçalho `X-Request-Id`. Os erros de `/api/*` mantêm o próprio formato.
+
+```json
+{ "error": { "message": "Invalid language", "type": "invalid_request_error", "param": "language",
+             "code": "invalid_language", "request_id": "a1b2c3d4e5f6" } }
+```
+
 ### Cliente CLI
 
 O `stt_client.py` é um pequeno cliente para trabalhar com o servidor e testá-lo. Ele lê o endereço do servidor e o token de `STT_URL` e `STT_TOKEN`.
@@ -323,6 +357,7 @@ speech-to-text/
 │   ├── audio.py         # upload -> 16 kHz mono WAV conversion
 │   ├── model_pool.py    # a pool per transcription model, and one for the diarizer
 │   ├── catalog.py       # what the server can do, for GET /api/models
+│   ├── openai_api.py    # the OpenAI-compatible /v1 API: its options, answers and model list
 │   ├── align.py         # joins transcription segments to speaker turns
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription

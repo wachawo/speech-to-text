@@ -52,12 +52,12 @@ def fake_get_stt_segments(bio, model=None, device=None, language=None):
     ]
 
 
-def fake_get_stt_result(bio, model=None, device=None, language=None):
+def fake_get_stt_result(bio, model=None, device=None, language=None, prompt=None):
     """Stand in for stt.get_stt_result(): fixed text, the stub phrases, and the language Whisper would report.
 
     An English-only checkpoint reports `en` whatever it was told; otherwise autodetect reports
     `en` and an explicit code is reported back as given. The segments are what the speech gate
-    filters on /api/stt.
+    filters on /api/stt. `prompt` is taken, like the real module's, and changes nothing here.
     """
     segments = fake_get_stt_segments(bio, model=model, device=device, language=language)
     if read_stub_model_name(model).endswith(".en") or language in (None, "auto"):
@@ -204,8 +204,11 @@ def fake_parakeet_get_stt_segments(bio, model=None, device=None, language=None):
     ]
 
 
-def fake_parakeet_get_stt_result(bio, model=None, device=None, language=None):
-    """Stand in for parakeet.get_stt_result(): its own text and words, and no language, as the model reports none."""
+def fake_parakeet_get_stt_result(bio, model=None, device=None, language=None, prompt=None):
+    """Stand in for parakeet.get_stt_result(): its own text and words, and no language, as the model reports none.
+
+    `prompt` is accepted and ignored, as the real module does.
+    """
     segments = fake_parakeet_get_stt_segments(bio, model=model, device=device, language=language)
     return {"text": "parakeet transcription", "language": None, "segments": segments}
 

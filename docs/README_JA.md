@@ -244,6 +244,40 @@ curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
 
 `STT_TOKENS` が設定されている場合、`GET /api/health` を除くすべてのルートは `Authorization: Bearer <token>` を伴う必要があります。`GET /api/health` は開いたままなので、ヘルスチェックは引き続き機能します。
 
+### OpenAI 互換 API
+
+`POST /v1/audio/transcriptions` と `GET /v1/models` は OpenAI の音声 API に従っているので、`base_url` を `http://<host>:<port>/v1` に向け、API キーを `STT_TOKENS` のいずれか（認証が無効なら任意の文字列）にすれば、どの OpenAI SDK でも動作します。
+
+```bash
+curl localhost:5099/v1/audio/transcriptions \
+  -H 'Authorization: Bearer <token>' \
+  -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
+print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
+```
+
+リクエストは `file` を含む `multipart/form-data` で、`/api/stt` とまったく同じ処理を通ります。同じトークン、同じサイズ上限、同じ変換、同じ音声ゲート、そして空きインスタンスを待つ同じ待機（`STT_QUEUE_TIMEOUT`）です。16 kHz、モノラル、16 ビット PCM の WAV はデコードせずにそのまま渡され、それ以外は `/api/stt` と同じく pydub でデコードされ、16 kHz モノラルに変換されます。
+
+- `model` は `GET /v1/models` が列挙する ID（`/api/models` と同じ ID）、エイリアス、またはバックエンド名で、`/api/stt` とまったく同じです。省略または空ならデフォルトモデルが使われます。`whisper-1` のような OpenAI 独自の名前は `Invalid model` として拒否されます。
+- `language` は `/api/stt` と同様に選ばれたモデルに対して検証されます。Parakeet は受け付けて無視します。
+- `prompt` は Whisper の initial prompt になります。openai-whisper はその末尾 223 トークンだけを保持し、音声の最初の 30 秒にのみ使います。Parakeet はプロンプトを受け取らず、無視します。`<|endoftext|>` のような Whisper の特殊トークンを含むプロンプトは、モデルにかかわらず 400 で拒否されます。プロンプトがログに記録されることはありません。
+- `temperature` は省略するか `0` でなければなりません。デコードは温度 0 で決定的に行われます。
+- `response_format` は `json`（デフォルト、`{"text": ...}`）、`text`（プレーンテキストの本文）、`verbose_json` のいずれかです。`srt` と `vtt` は拒否されます。`timestamp_granularities[]` で指定できるのは `segment` だけです。
+
+`verbose_json` には `task`、`language`（Whisper が報告する小文字の完全な言語名、例えば `english`。言語を報告しない Parakeet では `null`）、秒単位の `duration`、`text`、`segments` が含まれます。Whisper のセグメントは Whisper 自身のもので、`id`、`seek`、`start`、`end`、`text`、`tokens`、`temperature`、`avg_logprob`、`compression_ratio`、`no_speech_prob` を持ちます。Parakeet は信頼度の値を出さないため、`tokens` が空で信頼度フィールドが `null` のセグメントを 1 つ返します。
+
+すべての `/v1` パスのエラーは、`401`、`404`、`405`、`413`、`500` も含めて OpenAI の形式になり、`message` には同じカテゴリが入ります。すべての `/v1` レスポンスは `X-Request-Id` ヘッダーにリクエスト ID も載せます。`/api/*` のエラーは従来の形式のままです。
+
+```json
+{ "error": { "message": "Invalid language", "type": "invalid_request_error", "param": "language",
+             "code": "invalid_language", "request_id": "a1b2c3d4e5f6" } }
+```
+
 ### CLI クライアント
 
 `stt_client.py` は、サーバーの操作とテストのための小さなクライアントです。サーバーアドレスとトークンを `STT_URL` と `STT_TOKEN` から読み取ります。
@@ -323,6 +357,7 @@ speech-to-text/
 │   ├── audio.py         # upload -> 16 kHz mono WAV conversion
 │   ├── model_pool.py    # a pool per transcription model, and one for the diarizer
 │   ├── catalog.py       # what the server can do, for GET /api/models
+│   ├── openai_api.py    # the OpenAI-compatible /v1 API: its options, answers and model list
 │   ├── align.py         # joins transcription segments to speaker turns
 │   ├── live.py          # the /api/stream websocket: protocol and sessions
 │   ├── stream.py        # live transcription core: pauses, phrases, per-phrase transcription
