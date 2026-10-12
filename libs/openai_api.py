@@ -11,7 +11,7 @@ import soundfile as sf
 from flask import jsonify
 
 # Local imports
-from libs import backends, config, registry, speech_gate
+from libs import backends, config, metrics, registry, speech_gate
 from libs.errors import build_openai_error_response, get_request_id
 
 logger = logging.getLogger(__name__)
@@ -131,9 +131,10 @@ def transcribe_wav(wav_bio: io.BytesIO, model: Any, language: str | None, spec: 
     joined texts of the segments the gate keeps with it. `segments` are Whisper's own segments
     with every field it reports, or for a backend that reports none one segment made of its words.
     """
-    result = backends.transcriber_for_backend(spec["backend"]).get_stt_result(
-        wav_bio, model=model, language=language, prompt=prompt
-    )
+    with metrics.measure_inference(spec["id"], spec["backend"]):
+        result = backends.transcriber_for_backend(spec["backend"]).get_stt_result(
+            wav_bio, model=model, language=language, prompt=prompt
+        )
     details = result.get("segment_details")
     segments = result["segments"] if details is None else details
     text = result["text"]
