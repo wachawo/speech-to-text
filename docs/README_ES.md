@@ -272,6 +272,8 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `STT_HOST`              | `0.0.0.0`               | dirección de escucha del servidor                  |
 | `STT_PORT`              | `5099`                  | puerto del servidor                                |
 | `STT_POOL_SIZE`         | `8`                     | instancias por modelo; valor por defecto de una entrada de `STT_MODELS` sin `@pool` |
+| `STT_QUEUE_TIMEOUT`     | `120`                   | segundos que una petición síncrona espera una instancia libre de su modelo antes de `503` |
+| `STT_KEEPALIVE_SECONDS` | `5`                     | segundos que una conexión HTTP inactiva permanece abierta (uvicorn; `keepalive` de gunicorn) |
 | `STT_TOKENS`            | (vacío)                 | tokens válidos separados por comas; vacío desactiva la autenticación |
 | `STT_DEBUG`             | `false`                 | modo de depuración de Flask                        |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | tamaño máximo de subida en MB; un cuerpo mayor devuelve `413` |
@@ -282,6 +284,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `LOG_ACCESS`            | `false`                 | registrar las líneas de acceso de uvicorn          |
 | `WHISPER_MODEL`         | `small.en`              | nombre del modelo Whisper (p. ej. `small.en`, `turbo`) cuando `STT_MODELS` está vacío |
 | `WHISPER_LANGUAGE`      | `en`                    | idioma por defecto de todos los modelos Whisper |
+| `WHISPER_BEAM_SIZE`     | `1`                     | anchura del haz (beam) de Whisper; `1` es voraz, un haz más ancho es más lento y algo más preciso |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | directorio de caché del modelo (`/opt/models` en Docker) |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda` o `auto`                             |
 | `STT_BACKEND`           | `whisper`               | backend de transcripción: `whisper` o `parakeet` cuando `STT_MODELS` está vacío |

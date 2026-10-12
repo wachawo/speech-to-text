@@ -203,7 +203,10 @@ def keep_spoken(
     for segment in segments:
         share = speech_share(segment, ranges, duration)
         if share < MIN_SPEECH_SHARE or is_credit_line(segment["text"]):
-            logger.info("[%s] Dropped as not spoken (speech %.0f%%): %r", request_id, share * 100, segment["text"].strip()[:80])
+            # The share and the length, never the words: a transcript must not reach the log.
+            logger.info(
+                "[%s] Dropped as not spoken (speech %.0f%%, %d chars)", request_id, share * 100, len(segment["text"].strip())
+            )
             metrics.DROPPED_SEGMENTS.inc()
             continue
         kept.append(segment)

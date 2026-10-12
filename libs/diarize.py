@@ -104,7 +104,7 @@ def get_diarizer(model_id: str | None = None, device: str | None = None):
 def read_mono_16k(bio: io.BytesIO) -> np.ndarray:
     """Decode a WAV buffer into the mono float32 waveform the diarizer accepts.
 
-    Refuses any other sampling rate rather than resampling: libs/audio.py already exports
+    Refuses any other sampling rate rather than resampling: libs/audio.py already hands on
     16 kHz mono for every request, so a mismatch here means the caller skipped it, and
     silently fixing that would hide the real mistake.
     """

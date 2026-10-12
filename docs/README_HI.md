@@ -272,6 +272,8 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `STT_HOST`              | `0.0.0.0`               | सर्वर बाइंड पता                                      |
 | `STT_PORT`              | `5099`                  | सर्वर पोर्ट                                          |
 | `STT_POOL_SIZE`         | `8`                     | प्रति मॉडल इंस्टेंस; बिना `@pool` वाली `STT_MODELS` प्रविष्टि का डिफ़ॉल्ट |
+| `STT_QUEUE_TIMEOUT`     | `120`                   | `503` से पहले एक सिंक्रोनस अनुरोध अपने मॉडल के खाली इंस्टेंस का कितने सेकंड इंतज़ार करता है |
+| `STT_KEEPALIVE_SECONDS` | `5`                     | निष्क्रिय HTTP कनेक्शन कितने सेकंड खुला रहता है (uvicorn; gunicorn का `keepalive`) |
 | `STT_TOKENS`            | (खाली)                  | अल्पविराम से अलग किए गए मान्य टोकन; खाली होने पर auth निष्क्रिय |
 | `STT_DEBUG`             | `false`                 | Flask डिबग मोड                                      |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | MB में अधिकतम अपलोड आकार; बड़ा बॉडी `413` लौटाता है   |
@@ -282,6 +284,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `LOG_ACCESS`            | `false`                 | uvicorn एक्सेस लाइनें लॉग करें                       |
 | `WHISPER_MODEL`         | `small.en`              | Whisper मॉडल नाम (जैसे `small.en`, `turbo`) (जब `STT_MODELS` खाली हो) |
 | `WHISPER_LANGUAGE`      | `en`                    | हर Whisper मॉडल की डिफ़ॉल्ट भाषा |
+| `WHISPER_BEAM_SIZE`     | `1`                     | Whisper की बीम चौड़ाई; `1` ग्रीडी है, चौड़ी बीम धीमी और थोड़ी अधिक सटीक है |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | मॉडल कैश डायरेक्टरी (Docker में `/opt/models`)        |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda`, या `auto`                             |
 | `STT_BACKEND`           | `whisper`               | ट्रांसक्रिप्शन बैकएंड: `whisper` या `parakeet` (जब `STT_MODELS` खाली हो) |

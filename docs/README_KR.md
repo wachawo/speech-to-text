@@ -272,6 +272,8 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `STT_HOST`              | `0.0.0.0`               | 서버 바인드 주소                                   |
 | `STT_PORT`              | `5099`                  | 서버 포트                                          |
 | `STT_POOL_SIZE`         | `8`                     | 모델당 인스턴스 수, `@pool`이 없는 `STT_MODELS` 항목의 기본값 |
+| `STT_QUEUE_TIMEOUT`     | `120`                   | 동기 요청이 `503`을 받기 전에 모델의 빈 인스턴스를 기다리는 초 |
+| `STT_KEEPALIVE_SECONDS` | `5`                     | 유휴 HTTP 연결을 열어 두는 초(uvicorn, gunicorn `keepalive`) |
 | `STT_TOKENS`            | (비어 있음)             | 쉼표로 구분된 유효 토큰, 비어 있으면 인증 비활성화 |
 | `STT_DEBUG`             | `false`                 | Flask 디버그 모드                                  |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | 최대 업로드 크기(MB), 더 큰 본문은 `413` 반환      |
@@ -282,6 +284,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `LOG_ACCESS`            | `false`                 | uvicorn 액세스 로그 기록                           |
 | `WHISPER_MODEL`         | `small.en`              | Whisper 모델 이름(예: `small.en`, `turbo`)(`STT_MODELS`가 비어 있을 때) |
 | `WHISPER_LANGUAGE`      | `en`                    | 모든 Whisper 모델의 기본 언어 |
+| `WHISPER_BEAM_SIZE`     | `1`                     | Whisper 빔 너비. `1`은 탐욕 탐색이며, 넓은 빔은 느리지만 조금 더 정확함 |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | 모델 캐시 디렉터리(Docker에서는 `/opt/models`)     |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda`, 또는 `auto`                         |
 | `STT_BACKEND`           | `whisper`               | 전사 백엔드: `whisper` 또는 `parakeet`(`STT_MODELS`가 비어 있을 때) |

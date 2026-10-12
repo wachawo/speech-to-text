@@ -3,6 +3,23 @@
 ### [Unreleased]
 
 #### Added
+- **Settings for a short-phrase instance.** A synchronous upload that already is a
+  RIFF/WAVE file of 16 kHz mono 16-bit PCM is passed on as it is instead of being decoded
+  and re-exported by pydub, which cost 70 ms per phrase; any other format, rate or width
+  goes through pydub as before, and nothing new is resampled. `WHISPER_BEAM_SIZE` (default
+  1, today's greedy decode) sets the beam of the one seeded Whisper decode, which stays at
+  temperature 0 and deterministic. `STT_QUEUE_TIMEOUT` (default 120 s, fractions allowed)
+  is how long `/api/stt` and `/api/transcript` wait for a free instance of their model
+  before the 503; jobs, the live stream and the diarizer keep their own waits.
+  `STT_KEEPALIVE_SECONDS` (default 5) is uvicorn's idle keep-alive and gunicorn's
+  `keepalive`, which the UvicornWorker reads (gunicorn's own default was 2; sync workers
+  keep no connection alive). The synchronous path keeps audio and text off the log: the speech
+  gate logs a dropped segment's speech share and length instead of its words. A multipart
+  upload over 500 KB is held in memory rather than spooled to a temporary file (jobs still
+  write theirs to `JOBS_DIR`, by design); an upload that still needs decoding is buffered
+  by ffmpeg in an unlinked file under `TMPDIR`, which a tmpfs at `/tmp` keeps in memory. `docs/DEPLOY.md`
+  describes a second instance for short phrases, with the latencies, error rates and GPU
+  memory of each model measured on one GB10.
 - **Several pre-loaded transcription models, chosen per request.** `STT_MODELS` lists
   them as `backend:model[@pool]` entries, for example
   `whisper:turbo@2,whisper:small.en@1,parakeet:nvidia/parakeet-tdt-0.6b-v3@1`, each with
@@ -352,6 +369,11 @@
   speaker decision since it started; what no phrase can still ask about is now dropped.
 
 #### Changed
+- **The compose files take `STT_POOL_SIZE` from `.env`.** Both pinned `STT_POOL_SIZE: "1"`
+  in `environment:`, which overrides `env_file:`, so the value in `.env` was silently
+  ignored; it is now `"${STT_POOL_SIZE:-1}"`. A host whose `.env` sets it gets that many
+  instances per model on the next recreate, so check the value first: `.env.example` said
+  8 and now says 1.
 - **`libs.model_pool` keeps one pool per model.** The module attribute `MODEL_POOL` is
   replaced by `MODEL_POOLS`, a dict of queues keyed by model id, and `init_model_pool()`
   no longer takes a `size` argument: each model's size comes from its `STT_MODELS` entry

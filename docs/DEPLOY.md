@@ -135,6 +135,129 @@ GUNICORN_WORKERS=2 GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker gunicorn -
 - **Each worker loads its own models.** Two workers need twice the GPU memory.
 - **Every worker keeps its own metrics,** so a scrape sees one worker at a time.
 
+### A second instance for short phrases
+
+A client that sends short phrases - 1 to 3 s of 16 kHz mono 16-bit PCM WAV, one multipart request each, waiting for every answer - is best served by a second `stt_server` with settings of its own: one instance per model, a short wait for a busy model, connections kept open. It runs from the image the main compose file built, on another port, and the main instance is not touched: other container, other compose project, other port, other jobs directory.
+
+1. **Its env file,** `.env.short` next to `.env`. `.gitignore` already covers it, and it is not loaded by the main instance:
+
+   ```bash
+   STT_PORT=5061
+   STT_TOKENS=<a token of its own>
+   # One instance per model: a second one of the same model adds no throughput (see below).
+   # The Parakeet entry needs an image built with PARAKEET=true.
+   STT_MODELS=whisper:turbo@1,parakeet:nvidia/parakeet-tdt-0.6b-v3@1
+   STT_DEFAULT_MODEL=
+   WHISPER_LANGUAGE=en
+   WHISPER_BEAM_SIZE=1
+   # A busy model answers 503 after this long instead of queueing the phrase for two minutes.
+   STT_QUEUE_TIMEOUT=0.3
+   # Longer than the client's longest pause between phrases, so it keeps one connection.
+   STT_KEEPALIVE_SECONDS=30
+   SPEECH_GATE=false
+   DIARIZE_ENABLED=false
+   # Its own jobs: two servers sharing a directory would claim each other's jobs.
+   JOBS_DIR=/opt/recs/jobs-short
+   HF_HUB_OFFLINE=1
+   # The same values as in .env: the entrypoint chowns the shared models/, logs/ and recs/ to them.
+   STT_UID=1000
+   STT_GID=1000
+   ```
+
+   `SPEECH_GATE=false` is a setting of this instance only; the code default stays on. Without the gate Whisper answers "Thank you." on silence and on noise, while Parakeet returns empty text on non-speech, so a client of this instance has to expect that.
+
+2. **Its compose file,** `docker-compose.short.yml` next to `docker-compose.yml`. It is kept on the host and is not part of the repository, so `git status` lists it as untracked:
+
+   ```yaml
+   name: stt_short
+
+   services:
+     stt_short:
+       image: stt_server_gpu         # built by docker-compose.yml; this file builds nothing
+       pull_policy: never
+       container_name: stt_short
+       hostname: stt_short
+       restart: unless-stopped
+       env_file:
+         - .env.short
+       environment:
+         TZ: America/New_York
+         WHISPER_DOWNLOAD_ROOT: "/opt/models"
+         PARAKEET_DOWNLOAD_ROOT: "/opt/models"
+         DIARIZE_DOWNLOAD_ROOT: "/opt/models"
+         OMP_NUM_THREADS: "1"
+         MKL_NUM_THREADS: "1"
+         NVIDIA_VISIBLE_DEVICES: "all"
+         NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
+         COMPUTE_TYPE: "cuda"
+       ports:
+         - "5061:5061"
+       volumes:
+         - /etc/localtime:/etc/localtime:ro
+         - /etc/timezone:/etc/timezone:ro
+         - ./stt_server.py:/opt/stt_server.py:ro
+         - ./gu.py:/opt/gu.py:ro
+         - ./libs:/opt/libs:ro
+         - ./models:/opt/models
+         - ./logs:/opt/logs
+         - ./recs:/opt/recs
+       # An upload pydub has to decode is buffered by ffmpeg in a file under /tmp; this keeps it in memory.
+       tmpfs:
+         - /tmp
+       devices:
+         - "nvidia.com/gpu=all"
+       logging:
+         driver: "json-file"
+         options:
+           max-size: "128m"
+           max-file: "3"
+       entrypoint: ["/opt/entrypoint.sh"]
+       healthcheck:
+         test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5061/api/health')"]
+         interval: 30s
+         timeout: 10s
+         retries: 3
+         start_period: 120s
+       command:
+         - "python3 stt_server.py"
+   ```
+
+   The top-level `name` makes it a compose project of its own, so `docker compose up -d` in the main project neither recreates nor removes it as an orphan.
+
+3. **Start it,** and after each update of the main instance restart it too, since it runs the same code and image:
+
+   ```bash
+   docker compose -f docker-compose.short.yml up -d
+   docker compose -f docker-compose.short.yml restart stt_short    # after a code-only update
+   curl -s -H "Authorization: Bearer <token>" "localhost:5061/api/health"
+   curl -s -H "Authorization: Bearer <token>" -F file=@phrase.wav -F model=parakeet "localhost:5061/api/stt"
+   ```
+
+Why these settings:
+
+- **`python3 stt_server.py`, not gunicorn sync workers.** One process holds one instance of each model and serves requests from a thread pool. Sync workers load the models once per worker and close the connection after every response, so a client would open a new connection for every phrase.
+- **16 kHz mono 16-bit PCM WAV is passed straight to the model.** The server reads its header and skips decoding; any other format or rate goes through pydub and ffmpeg, which cost 70 ms per phrase (81 ms p95): over a third of Whisper turbo's model time and nearly all of Parakeet's. The server does no resampling of its own for this path: the client sends 16 kHz.
+- **`/tmp` is a tmpfs.** A 16 kHz mono 16-bit PCM WAV is never written anywhere. Any other upload is decoded by ffmpeg, which reads it through its `cache:` protocol and so copies it into a temporary file under `/tmp` while it decodes; on a tmpfs that copy stays in memory.
+- **One instance per model.** A second instance of the same model on the same GPU added no throughput and doubled the time of every phrase: the two take turns on the same GPU.
+- **`STT_QUEUE_TIMEOUT` well under a second.** With one instance, a phrase that finds the model busy waits for at most that long and then gets `503`, which the client can retry or count, instead of waiting behind a burst. 0.3 s is one or two phrases of Whisper turbo at beam 1.
+
+Measured on 2026-10-12 on one NVIDIA GB10 with 240 phrases of LibriSpeech read speech, 1.3 to 3.5 s each; latency is model time only, without HTTP and without audio conversion:
+
+| Model             | Beam | p50     | p95     | WER  | GPU memory |
+| ----------------- | ---- | ------- | ------- | ---- | ---------- |
+| Whisper turbo     | 1    | 0.189 s | 0.219 s | 4.8% | 3.3 GB     |
+| Whisper turbo     | 5    | 0.252 s | 0.305 s | 4.6% | 3.3 GB     |
+| Whisper large-v3  | 1    | 0.453 s | 0.589 s | 6.5% | 6.3 GB     |
+| Whisper large-v3  | 5    | 0.848 s | 1.191 s | 6.1% | 6.3 GB     |
+| Parakeet v3       | -    | 0.078 s | 0.098 s | 3.2% | 2.5 GB     |
+
+| Two instances of one model instead of one | Throughput, two vs one  | Per-phrase latency |
+| ----------------------------------------- | ----------------------- | ------------------ |
+| Whisper turbo, beam 5                     | 3.9 vs 4.0 phrases/s    | doubled            |
+| Parakeet v3                               | 12.7 vs 12.5 phrases/s  | doubled            |
+
+Read speech is the easy case: phone audio, accents and noise are likely to raise every error rate, and the ranking between the models may differ on them. The GPU memory adds to that of the main instance and of every other model on the same GPU.
+
 ### Dependencies
 
 `constraints.txt` holds every package version the GPU image resolved. All `pip install` steps in the Dockerfiles run with `-c constraints.txt`, so a rebuild installs the versions that were tested instead of whatever PyPI has that day. After a dependency change has been built and verified, freeze it with `make constraints` and commit the result.

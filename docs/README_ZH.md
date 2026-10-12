@@ -272,6 +272,8 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `STT_HOST`              | `0.0.0.0`               | 服务器绑定地址                                     |
 | `STT_PORT`              | `5099`                  | 服务器端口                                         |
 | `STT_POOL_SIZE`         | `8`                     | 每个模型的实例数；没有 `@pool` 的 `STT_MODELS` 条目的默认值 |
+| `STT_QUEUE_TIMEOUT`     | `120`                   | 同步请求在返回 `503` 之前等待其模型空闲实例的秒数 |
+| `STT_KEEPALIVE_SECONDS` | `5`                     | 空闲 HTTP 连接保持打开的秒数（uvicorn；gunicorn 的 `keepalive`） |
 | `STT_TOKENS`            | （空）                  | 逗号分隔的有效令牌；为空则禁用鉴权                 |
 | `STT_DEBUG`             | `false`                 | Flask 调试模式                                     |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | 最大上传大小（MB）；更大的请求体返回 `413`         |
@@ -282,6 +284,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `LOG_ACCESS`            | `false`                 | 记录 uvicorn 访问日志行                            |
 | `WHISPER_MODEL`         | `small.en`              | Whisper 模型名称（例如 `small.en`、`turbo`）（`STT_MODELS` 为空时） |
 | `WHISPER_LANGUAGE`      | `en`                    | 所有 Whisper 模型的默认语言 |
+| `WHISPER_BEAM_SIZE`     | `1`                     | Whisper 的束宽（beam）；`1` 为贪心解码，更宽的束更慢、略更准确 |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | 模型缓存目录（Docker 中为 `/opt/models`）          |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`、`cuda` 或 `auto`                            |
 | `STT_BACKEND`           | `whisper`               | 转录后端：`whisper` 或 `parakeet`（`STT_MODELS` 为空时） |

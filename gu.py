@@ -38,6 +38,9 @@ control_socket_disable = True
 # Timeouts
 timeout = 600  # model loading + inference can be slow
 graceful_timeout = 120
+# Seconds an idle connection stays open for the next request. The UvicornWorker reads it as its
+# timeout_keep_alive; sync workers close every connection after one response and ignore it.
+keepalive = stt_config.STT_KEEPALIVE_SECONDS
 
 
 def on_starting(server):

@@ -21,7 +21,9 @@ services:
       TZ: America/New_York
       STT_HOST: "0.0.0.0"
       STT_PORT: "${STT_PORT:-5099}"
-      STT_POOL_SIZE: "1"
+      # One instance per model unless .env says otherwise. Interpolated rather than pinned: a value
+      # in this block overrides env_file, so a literal here would silently ignore STT_POOL_SIZE in .env.
+      STT_POOL_SIZE: "${STT_POOL_SIZE:-1}"
       STT_DEBUG: "false"
       # 100 MB covers about 50 minutes of 16 kHz WAV and hours of compressed audio; .env overrides it.
       MAX_CONTENT_LENGTH_MB: "${MAX_CONTENT_LENGTH_MB:-100}"
@@ -43,8 +45,9 @@ services:
       # STT_BACKEND selects the transcriber when STT_MODELS is empty; parakeet needs a
       # PARAKEET=true image. STT_MODELS and STT_DEFAULT_MODEL, which load several models side
       # by side, are deliberately NOT set here: they come from .env through env_file, which this
-      # block would override. An STT_MODELS entry without @pool gets STT_POOL_SIZE, pinned to 1
-      # above; several large models also take longer to load than the healthcheck start_period.
+      # block would override. An STT_MODELS entry without @pool gets STT_POOL_SIZE, 1 above
+      # unless .env sets it; several large models also take longer to load than the healthcheck
+      # start_period.
       STT_BACKEND: "${STT_BACKEND:-whisper}"
       PARAKEET_DOWNLOAD_ROOT: "/opt/models"
       DIARIZE_POOL_SIZE: "1"

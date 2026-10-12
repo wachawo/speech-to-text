@@ -172,6 +172,6 @@ def test_backend_receives_the_converted_wav_and_the_pooled_diarizer(diarize_clie
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
-    # convert_to_wav always exports RIFF, whatever the upload claimed to be.
+    # convert_to_wav always hands on a RIFF WAV, whatever the upload claimed to be.
     assert seen["header"] == b"RIFF"
     assert seen["diarizer"] == "diarizer-sentinel"
