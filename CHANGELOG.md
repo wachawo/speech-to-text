@@ -30,6 +30,14 @@
   by ffmpeg in an unlinked file under `TMPDIR`, which a tmpfs at `/tmp` keeps in memory. `docs/DEPLOY.md`
   describes a second instance for short phrases, with the latencies, error rates and GPU
   memory of each model measured on one GB10.
+- **Per-model latency in `/metrics`.** `stt_model_inference_seconds` (`model`, `backend`)
+  times every model call that transcribes, for a request, a live phrase or a job's piece
+  alike; `stt_model_wait_seconds` (`model`) times every wait for a free instance and
+  `stt_model_wait_timeouts_total` (`model`) counts the waits that ran out, the 503 after
+  `STT_QUEUE_TIMEOUT` among them. The buckets are fine below one second (0.05 to 0.5 s in
+  eight steps) for short phrases and reach 120 s. Like the per-model pool gauges, with
+  `STT_TOKENS` set these series are only in a scrape that sends a valid token. Every
+  existing metric keeps its name and labels.
 - **Several pre-loaded transcription models, chosen per request.** `STT_MODELS` lists
   them as `backend:model[@pool]` entries, for example
   `whisper:turbo@2,whisper:small.en@1,parakeet:nvidia/parakeet-tdt-0.6b-v3@1`, each with
