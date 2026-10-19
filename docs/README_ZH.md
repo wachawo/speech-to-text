@@ -77,12 +77,12 @@ GPU 构建需要主机上安装 `nvidia-container-toolkit`。首次运行会将 
 服务器启动后，检查其状态并发送音频文件进行转录。
 
 ```bash
-curl localhost:5099/api/health
+curl localhost:5061/api/health
 
-curl -X POST localhost:5099/api/stt \
+curl -X POST localhost:5061/api/stt \
   -F file=@speech.mp3
 
-curl -X POST 'localhost:5099/api/stt?language=ru' \
+curl -X POST 'localhost:5061/api/stt?language=ru' \
   -H 'Content-Type: audio/wav' \
   --data-binary @speech.wav
 ```
@@ -104,7 +104,7 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 `POST /api/stt` 接受名为 `file` 的 `multipart/form-data` 字段，或一个原始的 `audio/*` 请求体。可选的 `model`（查询字符串或表单字段）从已加载的模型中选择一个：可以是它的 id、别名（`large-v3-turbo`、`parakeet-tdt-0.6b-v3`）、`backend:model` 形式，或者只写后端名称；后端名称表示默认模型（如果它属于该后端），否则表示该后端的第一个模型。不带 `model` 时由默认模型处理。可选的 `language`（查询字符串或表单字段）会为该请求覆盖服务器默认值；`auto` 表示自动检测。成功时返回文本、耗时秒数、执行转录的模型以及语言：即 Whisper 检测到或使用的代码（仅英语模型始终为 `en`），Parakeet 不报告语言，因此为 `null`。
 
 ```bash
-curl -X POST 'localhost:5099/api/stt?model=turbo&language=en' -F file=@speech.mp3
+curl -X POST 'localhost:5061/api/stt?model=turbo&language=en' -F file=@speech.mp3
 ```
 
 ```json
@@ -128,7 +128,7 @@ Parakeet 只接受代码，不接受英文名称，而且可能在不作任何�
 `GET /api/models` 会报告本服务器所具备的能力，因此客户端无需猜测。每个已加载的模型都有自己的一行，没有加载任何模型的转录后端（`selectable: false`）和说话人分离器也各有一行。每一行都带有自己的语言列表，因为这些集合确实不同，合并后的列表对任何一个模型单独来看都是错误的。
 
 ```bash
-curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
+curl -H 'Authorization: Bearer <token>' localhost:5061/api/models
 ```
 
 ```json
@@ -161,7 +161,7 @@ python3 stt_client.py --list
 `POST /api/diarize` 回答的是**谁在什么时候说话**，仅此而已：它返回带说话人编号的时间区间，而绝不返回文本。除非在以 `DIARIZE=true` 构建的镜像上设置了 `DIARIZE_ENABLED`，否则该接口处于关闭状态，并返回 `503`。
 
 ```bash
-curl -X POST localhost:5099/api/diarize -F file=@meeting.wav
+curl -X POST localhost:5061/api/diarize -F file=@meeting.wav
 ```
 
 ```json
@@ -178,7 +178,7 @@ curl -X POST localhost:5099/api/diarize -F file=@meeting.wav
 `POST /api/transcript` 回答的是**谁说了什么**：它对同一段音频同时运行说话人分离和转录，并按时间将二者连接起来。它需要启用说话人分离，否则返回 `503`。它接受与 `/api/stt` 相同的 `model` 和 `language`，并在 `model` 中给出执行转录的模型。
 
 ```bash
-curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
+curl -X POST localhost:5061/api/transcript -F file=@meeting.wav
 ```
 
 ```json
@@ -200,8 +200,8 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 **长录音通过任务处理。** `POST /api/jobs` 接受与 `/api/stt` 相同的请求体形式，上限为 `JOB_MAX_CONTENT_LENGTH_MB`（1 GB），另加一个 `mode`：`text`（默认）、`speakers`（即 `/api/transcript` 的结果）或 `turns`（即 `/api/diarize` 的结果）。它会立即返回 `202`，附带任务的 id 和一个用于轮询的 `Location`：
 
 ```bash
-curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
-curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+curl -F file=@meeting.mp3 'localhost:5061/api/jobs?mode=speakers&language=ru'
+curl localhost:5061/api/jobs/1f0c3a9e7d2b4c85
 ```
 
 ```json
@@ -249,7 +249,7 @@ curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
 `POST /v1/audio/transcriptions` 和 `GET /v1/models` 遵循 OpenAI 的音频 API，因此只要把 `base_url` 指向 `http://<host>:<port>/v1`，并把 API 密钥设为 `STT_TOKENS` 之一（关闭鉴权时可以是任意字符串），任何 OpenAI SDK 都能使用。
 
 ```bash
-curl localhost:5099/v1/audio/transcriptions \
+curl localhost:5061/v1/audio/transcriptions \
   -H 'Authorization: Bearer <token>' \
   -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
 ```
@@ -257,7 +257,7 @@ curl localhost:5099/v1/audio/transcriptions \
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
+client = OpenAI(base_url="http://localhost:5061/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
@@ -304,7 +304,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | 变量                    | 默认值                  | 用途                                               |
 | ----------------------- | ----------------------- | -------------------------------------------------- |
 | `STT_HOST`              | `0.0.0.0`               | 服务器绑定地址                                     |
-| `STT_PORT`              | `5099`                  | 服务器端口                                         |
+| `STT_PORT`              | `5061`                  | 服务器端口                                         |
 | `STT_POOL_SIZE`         | `8`                     | 每个模型的实例数；没有 `@pool` 的 `STT_MODELS` 条目的默认值 |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | 同步请求在返回 `503` 之前等待其模型空闲实例的秒数 |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | 空闲 HTTP 连接保持打开的秒数（uvicorn；gunicorn 的 `keepalive`） |
@@ -339,7 +339,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `HF_HUB_OFFLINE`        | `0`                     | 模型缓存完成后设为 `1`：启动时不再请求 hub          |
 | `STT_WWW_PORT`          | `8080`                  | Web 界面的 http 端口（compose）                     |
 | `STT_WWW_TLS_PORT`      | `8443`                  | Web 界面的 https 端口（compose）                    |
-| `STT_URL`               | `http://localhost:5099` | 客户端：服务器基础 URL                             |
+| `STT_URL`               | `http://localhost:5061` | 客户端：服务器基础 URL                             |
 | `STT_TOKEN`             | （空）                  | 客户端：发送给服务器的 bearer 令牌                 |
 
 ### 项目结构

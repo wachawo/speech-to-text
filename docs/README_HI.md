@@ -77,12 +77,12 @@ GPU बिल्ड को होस्ट पर `nvidia-container-toolkit` क
 सर्वर चालू होने के बाद, इसकी स्थिति जाँचें और ट्रांसक्रिप्शन के लिए एक ऑडियो फ़ाइल भेजें।
 
 ```bash
-curl localhost:5099/api/health
+curl localhost:5061/api/health
 
-curl -X POST localhost:5099/api/stt \
+curl -X POST localhost:5061/api/stt \
   -F file=@speech.mp3
 
-curl -X POST 'localhost:5099/api/stt?language=ru' \
+curl -X POST 'localhost:5061/api/stt?language=ru' \
   -H 'Content-Type: audio/wav' \
   --data-binary @speech.wav
 ```
@@ -104,7 +104,7 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 `POST /api/stt` या तो `file` नाम का `multipart/form-data` फ़ील्ड या कच्चा `audio/*` बॉडी स्वीकार करता है। वैकल्पिक `model` (क्वेरी स्ट्रिंग या फ़ॉर्म फ़ील्ड) लोड किए गए मॉडलों में से एक चुनता है: उसका id, कोई उपनाम (`large-v3-turbo`, `parakeet-tdt-0.6b-v3`), `backend:model` रूप, या केवल बैकएंड का नाम, जिसका अर्थ है डिफ़ॉल्ट मॉडल यदि वह उसी बैकएंड का है, अन्यथा उस बैकएंड का पहला मॉडल। `model` न होने पर डिफ़ॉल्ट मॉडल उत्तर देता है। वैकल्पिक `language` (क्वेरी स्ट्रिंग या फ़ॉर्म फ़ील्ड) उस अनुरोध के लिए सर्वर के डिफ़ॉल्ट को बदल देता है; `auto` अपने आप पहचान करता है। सफल होने पर यह टेक्स्ट, बीते हुए सेकंड, ट्रांसक्राइब करने वाला मॉडल और भाषा लौटाता है: वह कोड जो Whisper ने पहचाना या इस्तेमाल किया (केवल-अंग्रेज़ी मॉडल के लिए हमेशा `en`), या Parakeet के लिए `null`, जो भाषा नहीं बताता।
 
 ```bash
-curl -X POST 'localhost:5099/api/stt?model=turbo&language=en' -F file=@speech.mp3
+curl -X POST 'localhost:5061/api/stt?model=turbo&language=en' -F file=@speech.mp3
 ```
 
 ```json
@@ -128,7 +128,7 @@ Parakeet केवल कोड स्वीकार करता है, अ�
 `GET /api/models` बताता है कि यह सर्वर क्या-क्या रखता है, ताकि क्लाइंट को अनुमान न लगाना पड़े। हर लोड किए गए मॉडल की अपनी पंक्ति होती है, और ऐसा ही हर उस ट्रांसक्राइबर का जिसका कोई मॉडल लोड नहीं (`selectable: false`) और डायराइज़र का भी। हर पंक्ति अपनी भाषा सूची लाती है, क्योंकि ये समूह सचमुच अलग हैं और मिलाई गई सूची अपने आप में हर मॉडल के लिए ग़लत होगी।
 
 ```bash
-curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
+curl -H 'Authorization: Bearer <token>' localhost:5061/api/models
 ```
 
 ```json
@@ -161,7 +161,7 @@ python3 stt_client.py --list
 `POST /api/diarize` केवल यह उत्तर देता है कि **कौन कब बोला**, और कुछ नहीं: यह स्पीकर संख्या के साथ समय-अंतराल लौटाता है, कभी टेक्स्ट नहीं। यह तब तक बंद रहता है जब तक `DIARIZE=true` के साथ बनाई गई इमेज पर `DIARIZE_ENABLED` सेट न हो; अन्यथा यह `503` लौटाता है।
 
 ```bash
-curl -X POST localhost:5099/api/diarize -F file=@meeting.wav
+curl -X POST localhost:5061/api/diarize -F file=@meeting.wav
 ```
 
 ```json
@@ -178,7 +178,7 @@ curl -X POST localhost:5099/api/diarize -F file=@meeting.wav
 `POST /api/transcript` यह उत्तर देता है कि **किसने क्या कहा**: यह एक ही ऑडियो पर डायराइज़ेशन और ट्रांसक्रिप्शन दोनों चलाता है और उन्हें समय के आधार पर जोड़ता है। इसके लिए डायराइज़ेशन सक्षम होना चाहिए, अन्यथा यह `503` लौटाता है। यह `/api/stt` जैसे ही `model` और `language` स्वीकार करता है और ट्रांसक्राइब करने वाले मॉडल का नाम `model` में देता है।
 
 ```bash
-curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
+curl -X POST localhost:5061/api/transcript -F file=@meeting.wav
 ```
 
 ```json
@@ -200,8 +200,8 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 **लंबी रिकॉर्डिंग एक जॉब से होकर जाती हैं।** `POST /api/jobs` वही बॉडी रूप स्वीकार करता है जो `/api/stt`, `JOB_MAX_CONTENT_LENGTH_MB` (1 GB) तक, साथ में एक `mode`: `text` (डिफ़ॉल्ट), `speakers` (`/api/transcript` का परिणाम) या `turns` (`/api/diarize` का परिणाम)। यह तुरंत `202` के साथ जॉब की id और पोल करने के लिए एक `Location` लौटाता है:
 
 ```bash
-curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
-curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+curl -F file=@meeting.mp3 'localhost:5061/api/jobs?mode=speakers&language=ru'
+curl localhost:5061/api/jobs/1f0c3a9e7d2b4c85
 ```
 
 ```json
@@ -249,7 +249,7 @@ curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
 `POST /v1/audio/transcriptions` और `GET /v1/models` OpenAI की ऑडियो API का पालन करते हैं, इसलिए कोई भी OpenAI SDK तब काम करता है जब उसका `base_url` `http://<host>:<port>/v1` की ओर इशारा करे और उसकी API key `STT_TOKENS` में से एक हो (auth बंद होने पर कोई भी स्ट्रिंग)।
 
 ```bash
-curl localhost:5099/v1/audio/transcriptions \
+curl localhost:5061/v1/audio/transcriptions \
   -H 'Authorization: Bearer <token>' \
   -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
 ```
@@ -257,7 +257,7 @@ curl localhost:5099/v1/audio/transcriptions \
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
+client = OpenAI(base_url="http://localhost:5061/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
@@ -304,7 +304,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | Variable                | Default                 | उद्देश्य                                             |
 | ----------------------- | ----------------------- | --------------------------------------------------- |
 | `STT_HOST`              | `0.0.0.0`               | सर्वर बाइंड पता                                      |
-| `STT_PORT`              | `5099`                  | सर्वर पोर्ट                                          |
+| `STT_PORT`              | `5061`                  | सर्वर पोर्ट                                          |
 | `STT_POOL_SIZE`         | `8`                     | प्रति मॉडल इंस्टेंस; बिना `@pool` वाली `STT_MODELS` प्रविष्टि का डिफ़ॉल्ट |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | `503` से पहले एक सिंक्रोनस अनुरोध अपने मॉडल के खाली इंस्टेंस का कितने सेकंड इंतज़ार करता है |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | निष्क्रिय HTTP कनेक्शन कितने सेकंड खुला रहता है (uvicorn; gunicorn का `keepalive`) |
@@ -339,7 +339,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `HF_HUB_OFFLINE`        | `0`                     | मॉडल कैश हो जाने पर `1`: स्टार्ट पर hub अनुरोध नहीं       |
 | `STT_WWW_PORT`          | `8080`                  | वेब UI का http पोर्ट (compose)                        |
 | `STT_WWW_TLS_PORT`      | `8443`                  | वेब UI का https पोर्ट (compose)                       |
-| `STT_URL`               | `http://localhost:5099` | क्लाइंट: सर्वर बेस URL                               |
+| `STT_URL`               | `http://localhost:5061` | क्लाइंट: सर्वर बेस URL                               |
 | `STT_TOKEN`             | (खाली)                  | क्लाइंट: सर्वर को भेजा गया बियरर टोकन                 |
 
 ### प्रोजेक्ट संरचना

@@ -4,8 +4,10 @@
 
 import io
 import logging
+import os
 import queue
 import shutil
+import tempfile
 import time
 import traceback
 import uuid
@@ -46,6 +48,8 @@ logs.setup_logging()
 logger = logging.getLogger(__name__)
 
 JOBS_PATH = "/api/jobs"
+# A job's multipart file part larger than this is spooled to a file under JOBS_DIR.
+JOB_SPOOL_BYTES = 1024 * 500
 
 # Paths whose access log is demoted to DEBUG so healthchecks and scrapes do not flood the log.
 QUIET_PATHS = ("/api/health", "/metrics")
@@ -65,6 +69,25 @@ class MemoryFormDataParser(FormDataParser):
     def __init__(self, *args, **kwargs):
         """Swap in the in-memory stream factory; every other limit stays the request's own."""
         kwargs["stream_factory"] = keep_upload_in_memory
+        super().__init__(*args, **kwargs)
+
+
+def spool_upload_in_jobs_dir(**unused_part_details) -> tempfile.SpooledTemporaryFile:
+    """Werkzeug stream factory that spools a job's multipart file part under JOBS_DIR, not TMPDIR.
+
+    The same 500 KB threshold as werkzeug's default. A job upload may be gigabytes, and /tmp in the
+    container is a tmpfs, so spooling it there would hold the whole recording in memory.
+    """
+    os.makedirs(config.JOBS_DIR, exist_ok=True)
+    return tempfile.SpooledTemporaryFile(max_size=JOB_SPOOL_BYTES, mode="rb+", dir=config.JOBS_DIR)
+
+
+class JobFormDataParser(FormDataParser):
+    """A form parser that spools an uploaded job recording next to where it will be stored."""
+
+    def __init__(self, *args, **kwargs):
+        """Swap in the JOBS_DIR stream factory; every other limit stays the request's own."""
+        kwargs["stream_factory"] = spool_upload_in_jobs_dir
         super().__init__(*args, **kwargs)
 
 
@@ -118,6 +141,7 @@ def before_request():
     # A job exists for recordings too long for a synchronous request, so it takes far larger files.
     if request.path == JOBS_PATH and request.method == "POST":
         request.max_content_length = config.JOB_MAX_CONTENT_LENGTH_MB * 1024 * 1024
+        request.form_data_parser_class = JobFormDataParser
     else:
         # A synchronous upload is not spooled to disk; MAX_CONTENT_LENGTH_MB bounds the memory it takes.
         request.form_data_parser_class = MemoryFormDataParser

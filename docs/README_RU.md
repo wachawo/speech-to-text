@@ -77,12 +77,12 @@ docker compose -f docker-compose-cpu.yml up --build    # CPU only
 Когда сервер запущен, проверьте его статус и отправьте аудиофайл на транскрипцию.
 
 ```bash
-curl localhost:5099/api/health
+curl localhost:5061/api/health
 
-curl -X POST localhost:5099/api/stt \
+curl -X POST localhost:5061/api/stt \
   -F file=@speech.mp3
 
-curl -X POST 'localhost:5099/api/stt?language=ru' \
+curl -X POST 'localhost:5061/api/stt?language=ru' \
   -H 'Content-Type: audio/wav' \
   --data-binary @speech.wav
 ```
@@ -104,7 +104,7 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 `POST /api/stt` принимает поле `file` в формате `multipart/form-data` либо сырое тело `audio/*`. Необязательный параметр `model` (в строке запроса или как поле формы) выбирает одну из загруженных моделей: её id, алиас (`large-v3-turbo`, `parakeet-tdt-0.6b-v3`), форму `backend:model` или просто имя бэкенда, которое означает модель по умолчанию, если она принадлежит этому бэкенду, а иначе первую модель этого бэкенда. Без `model` отвечает модель по умолчанию. Необязательный параметр `language` (в строке запроса или как поле формы) переопределяет язык сервера по умолчанию для конкретного запроса; значение `auto` включает автоопределение. При успехе возвращаются текст, затраченное время в секундах, модель, которая распознавала, и язык: код, который Whisper определил или использовал (для англоязычной модели всегда `en`), либо `null` для Parakeet, который его не сообщает.
 
 ```bash
-curl -X POST 'localhost:5099/api/stt?model=turbo&language=en' -F file=@speech.mp3
+curl -X POST 'localhost:5061/api/stt?model=turbo&language=en' -F file=@speech.mp3
 ```
 
 ```json
@@ -128,7 +128,7 @@ Parakeet принимает только коды, а не английские 
 `GET /api/models` сообщает, что умеет этот сервер, чтобы клиенту не приходилось угадывать. У каждой загруженной модели своя строка, как и у каждого распознавателя без загруженных моделей (`selectable: false`) и у диаризатора. Каждая строка приносит свой список языков, потому что наборы действительно расходятся, и объединённый список был бы неверен для каждой модели по отдельности.
 
 ```bash
-curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
+curl -H 'Authorization: Bearer <token>' localhost:5061/api/models
 ```
 
 ```json
@@ -161,7 +161,7 @@ python3 stt_client.py --list
 `POST /api/diarize` отвечает на вопрос **кто и когда говорил**, и только на него: он возвращает временные интервалы с номером говорящего, но никогда не текст. Эндпоинт выключен, пока не задана переменная `DIARIZE_ENABLED` в образе, собранном с `DIARIZE=true`; иначе он отвечает `503`.
 
 ```bash
-curl -X POST localhost:5099/api/diarize -F file=@meeting.wav
+curl -X POST localhost:5061/api/diarize -F file=@meeting.wav
 ```
 
 ```json
@@ -178,7 +178,7 @@ curl -X POST localhost:5099/api/diarize -F file=@meeting.wav
 `POST /api/transcript` отвечает на вопрос **кто что сказал**: он прогоняет по одному и тому же аудио диаризацию и транскрипцию и соединяет их по времени. Ему нужна включённая диаризация, иначе он отвечает `503`. Он принимает те же `model` и `language`, что и `/api/stt`, и называет в `model` модель, которая распознавала.
 
 ```bash
-curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
+curl -X POST localhost:5061/api/transcript -F file=@meeting.wav
 ```
 
 ```json
@@ -200,8 +200,8 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 **Длинные записи идут через задание.** `POST /api/jobs` принимает тело в тех же формах, что и `/api/stt`, размером до `JOB_MAX_CONTENT_LENGTH_MB` (1 ГБ), а также `mode`: `text` (по умолчанию), `speakers` (результат `/api/transcript`) или `turns` (результат `/api/diarize`). Он сразу отвечает `202` с идентификатором задания и заголовком `Location`, который нужно опрашивать:
 
 ```bash
-curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
-curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+curl -F file=@meeting.mp3 'localhost:5061/api/jobs?mode=speakers&language=ru'
+curl localhost:5061/api/jobs/1f0c3a9e7d2b4c85
 ```
 
 ```json
@@ -249,7 +249,7 @@ curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
 `POST /v1/audio/transcriptions` и `GET /v1/models` повторяют аудио-API OpenAI, поэтому любой OpenAI SDK работает, как только его `base_url` указывает на `http://<host>:<port>/v1`, а ключ API - один из `STT_TOKENS` (при выключенной авторизации - любая строка).
 
 ```bash
-curl localhost:5099/v1/audio/transcriptions \
+curl localhost:5061/v1/audio/transcriptions \
   -H 'Authorization: Bearer <token>' \
   -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
 ```
@@ -257,7 +257,7 @@ curl localhost:5099/v1/audio/transcriptions \
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
+client = OpenAI(base_url="http://localhost:5061/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
@@ -304,7 +304,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | Переменная              | По умолчанию            | Назначение                                          |
 | ----------------------- | ----------------------- | --------------------------------------------------- |
 | `STT_HOST`              | `0.0.0.0`               | адрес привязки сервера                              |
-| `STT_PORT`              | `5099`                  | порт сервера                                        |
+| `STT_PORT`              | `5061`                  | порт сервера                                        |
 | `STT_POOL_SIZE`         | `8`                     | экземпляров на модель; значение по умолчанию для записи `STT_MODELS` без `@pool` |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | сколько секунд синхронный запрос ждёт свободный экземпляр своей модели до ответа `503` |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | сколько секунд простаивающее HTTP-соединение остаётся открытым (uvicorn; `keepalive` gunicorn) |
@@ -339,7 +339,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `HF_HUB_OFFLINE`        | `0`                     | `1`, когда модели уже в кеше: никаких запросов к хабу при старте |
 | `STT_WWW_PORT`          | `8080`                  | http-порт веб-интерфейса (compose)                  |
 | `STT_WWW_TLS_PORT`      | `8443`                  | https-порт веб-интерфейса (compose)                 |
-| `STT_URL`               | `http://localhost:5099` | клиент: базовый URL сервера                         |
+| `STT_URL`               | `http://localhost:5061` | клиент: базовый URL сервера                         |
 | `STT_TOKEN`             | (пусто)                 | клиент: bearer-токен, отправляемый на сервер        |
 
 ### Структура проекта

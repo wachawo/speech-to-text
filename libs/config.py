@@ -86,7 +86,7 @@ LOG_ACCESS = os.getenv("LOG_ACCESS", "false").lower() in TRUE_VALUES
 
 # HTTP server
 STT_HOST = os.getenv("STT_HOST", "0.0.0.0")
-STT_PORT = int(os.getenv("STT_PORT", "5099"))
+STT_PORT = int(os.getenv("STT_PORT", "5061"))
 STT_DEBUG = os.getenv("STT_DEBUG", "false").lower() in TRUE_VALUES
 
 # Number of instances pre-loaded into a model's pool at startup: the pool of the single model
@@ -164,7 +164,7 @@ JOB_MAX_CONTENT_LENGTH_MB = int(os.getenv("JOB_MAX_CONTENT_LENGTH_MB", "1024"))
 JOB_RETENTION_HOURS = float(os.getenv("JOB_RETENTION_HOURS", "24"))
 
 # CLI client
-STT_URL = os.getenv("STT_URL", "http://localhost:5099")
+STT_URL = os.getenv("STT_URL", "http://localhost:5061")
 STT_TOKEN = os.getenv("STT_TOKEN", "").strip()
 
 

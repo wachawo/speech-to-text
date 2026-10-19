@@ -77,12 +77,12 @@ GPU 빌드는 호스트에 `nvidia-container-toolkit`가 필요합니다. 첫 �
 서버가 올라오면 상태를 확인하고 전사할 오디오 파일을 보냅니다.
 
 ```bash
-curl localhost:5099/api/health
+curl localhost:5061/api/health
 
-curl -X POST localhost:5099/api/stt \
+curl -X POST localhost:5061/api/stt \
   -F file=@speech.mp3
 
-curl -X POST 'localhost:5099/api/stt?language=ru' \
+curl -X POST 'localhost:5061/api/stt?language=ru' \
   -H 'Content-Type: audio/wav' \
   --data-binary @speech.wav
 ```
@@ -104,7 +104,7 @@ curl -X POST 'localhost:5099/api/stt?language=ru' \
 `POST /api/stt`는 `file`이라는 이름의 `multipart/form-data` 필드나 원시 `audio/*` 본문을 받습니다. 선택 사항인 `model`(쿼리 문자열 또는 폼 필드)은 로드된 모델 중 하나를 고릅니다. id, 별칭(`large-v3-turbo`, `parakeet-tdt-0.6b-v3`), `backend:model` 형식, 또는 백엔드 이름만 쓸 수 있으며, 백엔드 이름은 기본 모델이 그 백엔드에 속하면 기본 모델을, 아니면 그 백엔드의 첫 번째 모델을 뜻합니다. `model`이 없으면 기본 모델이 응답합니다. 선택 사항인 `language`(쿼리 문자열 또는 폼 필드)는 해당 요청에 한해 서버 기본값을 덮어쓰며, `auto`는 자동 감지합니다. 성공하면 텍스트, 경과 시간(초), 전사한 모델, 언어를 반환합니다. 언어는 Whisper가 감지했거나 사용한 코드(영어 전용 모델은 항상 `en`)이고, 언어를 보고하지 않는 Parakeet은 `null`입니다.
 
 ```bash
-curl -X POST 'localhost:5099/api/stt?model=turbo&language=en' -F file=@speech.mp3
+curl -X POST 'localhost:5061/api/stt?model=turbo&language=en' -F file=@speech.mp3
 ```
 
 ```json
@@ -128,7 +128,7 @@ Parakeet은 영어 이름이 아니라 코드만 받으며, 확신하지 못하�
 `GET /api/models`는 이 서버가 갖춘 것을 보고하므로 클라이언트가 추측할 필요가 없습니다. 로드된 각 모델은 자기 행을 가지며, 아무것도 로드되지 않은 전사 백엔드(`selectable: false`)와 화자 분리기도 마찬가지입니다. 각 행은 자체 언어 목록을 가지는데, 집합이 실제로 서로 다르고 합친 목록은 어느 모델에 대해서도 틀리기 때문입니다.
 
 ```bash
-curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
+curl -H 'Authorization: Bearer <token>' localhost:5061/api/models
 ```
 
 ```json
@@ -161,7 +161,7 @@ python3 stt_client.py --list
 `POST /api/diarize`는 **누가 언제 말했는지**만 답하며, 그 외에는 아무것도 반환하지 않습니다. 화자 번호가 붙은 시간 구간을 돌려줄 뿐, 텍스트는 절대 반환하지 않습니다. `DIARIZE=true`로 빌드한 이미지에서 `DIARIZE_ENABLED`가 설정되어 있지 않으면 비활성 상태이며, 그 경우 `503`을 반환합니다.
 
 ```bash
-curl -X POST localhost:5099/api/diarize -F file=@meeting.wav
+curl -X POST localhost:5061/api/diarize -F file=@meeting.wav
 ```
 
 ```json
@@ -178,7 +178,7 @@ curl -X POST localhost:5099/api/diarize -F file=@meeting.wav
 `POST /api/transcript`는 **누가 무엇을 말했는지**에 답합니다. 같은 오디오에 대해 화자 분리와 전사를 모두 수행한 뒤 시간을 기준으로 둘을 결합합니다. 화자 분리가 활성화되어 있어야 하며, 그렇지 않으면 `503`을 반환합니다. `/api/stt`와 같은 `model`과 `language`를 받으며, 전사한 모델을 `model`로 알려 줍니다.
 
 ```bash
-curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
+curl -X POST localhost:5061/api/transcript -F file=@meeting.wav
 ```
 
 ```json
@@ -200,8 +200,8 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 **긴 녹음은 작업으로 처리합니다.** `POST /api/jobs`는 `/api/stt`와 같은 형태의 본문을 `JOB_MAX_CONTENT_LENGTH_MB`(1 GB)까지 받으며, 여기에 `mode`를 더합니다. `text`(기본값), `speakers`(`/api/transcript` 결과), `turns`(`/api/diarize` 결과) 중 하나입니다. 응답은 곧바로 `202`로 오며, 작업 id와 폴링할 `Location`이 함께 옵니다.
 
 ```bash
-curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
-curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+curl -F file=@meeting.mp3 'localhost:5061/api/jobs?mode=speakers&language=ru'
+curl localhost:5061/api/jobs/1f0c3a9e7d2b4c85
 ```
 
 ```json
@@ -249,7 +249,7 @@ curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
 `POST /v1/audio/transcriptions`와 `GET /v1/models`는 OpenAI의 오디오 API를 따르므로, `base_url`을 `http://<host>:<port>/v1`로 지정하고 API 키를 `STT_TOKENS` 중 하나(인증이 꺼져 있으면 아무 문자열)로 두면 어떤 OpenAI SDK든 동작합니다.
 
 ```bash
-curl localhost:5099/v1/audio/transcriptions \
+curl localhost:5061/v1/audio/transcriptions \
   -H 'Authorization: Bearer <token>' \
   -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
 ```
@@ -257,7 +257,7 @@ curl localhost:5099/v1/audio/transcriptions \
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
+client = OpenAI(base_url="http://localhost:5061/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
@@ -304,7 +304,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | 변수                    | 기본값                  | 용도                                               |
 | ----------------------- | ----------------------- | -------------------------------------------------- |
 | `STT_HOST`              | `0.0.0.0`               | 서버 바인드 주소                                   |
-| `STT_PORT`              | `5099`                  | 서버 포트                                          |
+| `STT_PORT`              | `5061`                  | 서버 포트                                          |
 | `STT_POOL_SIZE`         | `8`                     | 모델당 인스턴스 수, `@pool`이 없는 `STT_MODELS` 항목의 기본값 |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | 동기 요청이 `503`을 받기 전에 모델의 빈 인스턴스를 기다리는 초 |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | 유휴 HTTP 연결을 열어 두는 초(uvicorn, gunicorn `keepalive`) |
@@ -339,7 +339,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `HF_HUB_OFFLINE`        | `0`                     | 모델이 캐시된 뒤 `1`: 시작 시 허브 요청 없음        |
 | `STT_WWW_PORT`          | `8080`                  | 웹 UI http 포트(compose)                            |
 | `STT_WWW_TLS_PORT`      | `8443`                  | 웹 UI https 포트(compose)                           |
-| `STT_URL`               | `http://localhost:5099` | 클라이언트: 서버 기본 URL                          |
+| `STT_URL`               | `http://localhost:5061` | 클라이언트: 서버 기본 URL                          |
 | `STT_TOKEN`             | (비어 있음)             | 클라이언트: 서버로 전송되는 베어러 토큰            |
 
 ### 프로젝트 구조

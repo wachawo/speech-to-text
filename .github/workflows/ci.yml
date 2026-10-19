@@ -66,4 +66,4 @@ jobs:
       - name: Build the web UI image
         run: docker build -f Dockerfile-www -t stt_www:ci .
       - name: Check the rendered nginx config
-        run: docker run --rm -e STT_UPSTREAM=127.0.0.1:5099 -e STT_WWW_TLS_PORT=8443 stt_www:ci nginx -t
+        run: docker run --rm -e STT_UPSTREAM=127.0.0.1:5061 -e STT_WWW_TLS_PORT=8443 stt_www:ci nginx -t

@@ -77,12 +77,12 @@ Os navegadores só entregam dispositivos de áudio a uma página segura, então,
 Assim que o servidor estiver no ar, verifique o seu status e envie um arquivo de áudio para transcrição.
 
 ```bash
-curl localhost:5099/api/health
+curl localhost:5061/api/health
 
-curl -X POST localhost:5099/api/stt \
+curl -X POST localhost:5061/api/stt \
   -F file=@speech.mp3
 
-curl -X POST 'localhost:5099/api/stt?language=ru' \
+curl -X POST 'localhost:5061/api/stt?language=ru' \
   -H 'Content-Type: audio/wav' \
   --data-binary @speech.wav
 ```
@@ -104,7 +104,7 @@ O `GET /metrics` expõe métricas do Prometheus: requisições por rota e status
 O `POST /api/stt` aceita um campo `multipart/form-data` chamado `file` ou um corpo `audio/*` bruto. Um `model` opcional (na query string ou como campo de formulário) escolhe um dos modelos carregados: seu id, um alias (`large-v3-turbo`, `parakeet-tdt-0.6b-v3`), a forma `backend:model` ou apenas o nome de um backend, que significa o modelo padrão se ele pertencer a esse backend e, caso contrário, o primeiro modelo desse backend. Sem `model`, responde o modelo padrão. Um `language` opcional (na query string ou como campo de formulário) substitui o padrão do servidor para aquela requisição; `auto` ativa a detecção automática. Em caso de sucesso, retorna o texto, os segundos decorridos, o modelo que transcreveu e o idioma: o código que o Whisper detectou ou usou (sempre `en` em um modelo só de inglês), ou `null` no Parakeet, que não o informa.
 
 ```bash
-curl -X POST 'localhost:5099/api/stt?model=turbo&language=en' -F file=@speech.mp3
+curl -X POST 'localhost:5061/api/stt?model=turbo&language=en' -F file=@speech.mp3
 ```
 
 ```json
@@ -128,7 +128,7 @@ Os erros `400` dessas duas opções são `Invalid model` (nenhum backend conhece
 O `GET /api/models` informa o que este servidor oferece, para que um cliente não precise adivinhar. Cada modelo carregado tem sua própria linha, assim como cada transcritor sem nada carregado (`selectable: false`) e o diarizador. Cada linha traz sua própria lista de idiomas, porque os conjuntos realmente divergem e uma lista combinada estaria errada para cada modelo isoladamente.
 
 ```bash
-curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
+curl -H 'Authorization: Bearer <token>' localhost:5061/api/models
 ```
 
 ```json
@@ -161,7 +161,7 @@ python3 stt_client.py --list
 O `POST /api/diarize` responde **quem falou quando**, e nada além disso: ele retorna intervalos de tempo com um número de locutor, nunca texto. Ele fica desativado a menos que `DIARIZE_ENABLED` esteja definido em uma imagem construída com `DIARIZE=true`; caso contrário, ele responde `503`.
 
 ```bash
-curl -X POST localhost:5099/api/diarize -F file=@meeting.wav
+curl -X POST localhost:5061/api/diarize -F file=@meeting.wav
 ```
 
 ```json
@@ -178,7 +178,7 @@ Nenhum dos dois backends lida com sobreposição. O modelo da NVIDIA que lida co
 O `POST /api/transcript` responde **quem disse o quê**: ele executa a diarização e a transcrição sobre o mesmo áudio e as une pelo tempo. Ele precisa que a diarização esteja ativada; caso contrário, responde `503`. Ele aceita os mesmos `model` e `language` do `/api/stt` e informa em `model` o modelo que transcreveu.
 
 ```bash
-curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
+curl -X POST localhost:5061/api/transcript -F file=@meeting.wav
 ```
 
 ```json
@@ -200,8 +200,8 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 **Gravações longas passam por um job.** O `POST /api/jobs` aceita os mesmos formatos de corpo que o `/api/stt`, até `JOB_MAX_CONTENT_LENGTH_MB` (1 GB), além de um `mode`: `text` (o padrão), `speakers` (o resultado do `/api/transcript`) ou `turns` (o resultado do `/api/diarize`). Ele responde `202` na hora, com o id do job e um `Location` para consultar:
 
 ```bash
-curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
-curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+curl -F file=@meeting.mp3 'localhost:5061/api/jobs?mode=speakers&language=ru'
+curl localhost:5061/api/jobs/1f0c3a9e7d2b4c85
 ```
 
 ```json
@@ -249,7 +249,7 @@ Quando `STT_TOKENS` está definido, toda rota exceto `GET /api/health` precisa e
 `POST /v1/audio/transcriptions` e `GET /v1/models` seguem a API de áudio da OpenAI, então qualquer SDK da OpenAI funciona assim que seu `base_url` aponta para `http://<host>:<port>/v1` e sua chave de API é um dos `STT_TOKENS` (qualquer string com a autenticação desligada).
 
 ```bash
-curl localhost:5099/v1/audio/transcriptions \
+curl localhost:5061/v1/audio/transcriptions \
   -H 'Authorization: Bearer <token>' \
   -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
 ```
@@ -257,7 +257,7 @@ curl localhost:5099/v1/audio/transcriptions \
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
+client = OpenAI(base_url="http://localhost:5061/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
@@ -304,7 +304,7 @@ O `.env` é carregado tanto pelo servidor quanto pelo cliente através do `pytho
 | Variável                | Padrão                  | Finalidade                                          |
 | ----------------------- | ----------------------- | --------------------------------------------------- |
 | `STT_HOST`              | `0.0.0.0`               | endereço de bind do servidor                        |
-| `STT_PORT`              | `5099`                  | porta do servidor                                   |
+| `STT_PORT`              | `5061`                  | porta do servidor                                   |
 | `STT_POOL_SIZE`         | `8`                     | instâncias por modelo; padrão de uma entrada de `STT_MODELS` sem `@pool` |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | segundos que uma requisição síncrona espera por uma instância livre do seu modelo antes de `503` |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | segundos que uma conexão HTTP ociosa fica aberta (uvicorn; `keepalive` do gunicorn) |
@@ -339,7 +339,7 @@ O `.env` é carregado tanto pelo servidor quanto pelo cliente através do `pytho
 | `HF_HUB_OFFLINE`        | `0`                     | `1` depois que os modelos estão em cache: nenhuma requisição ao hub na inicialização |
 | `STT_WWW_PORT`          | `8080`                  | porta http da interface web (compose)               |
 | `STT_WWW_TLS_PORT`      | `8443`                  | porta https da interface web (compose)              |
-| `STT_URL`               | `http://localhost:5099` | cliente: URL base do servidor                       |
+| `STT_URL`               | `http://localhost:5061` | cliente: URL base do servidor                       |
 | `STT_TOKEN`             | (vazio)                 | cliente: token bearer enviado ao servidor           |
 
 ### Estrutura do projeto

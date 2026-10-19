@@ -21,7 +21,7 @@ body:
       label: Steps to reproduce
       description: The request that triggers it, with the file format and any options. Remove tokens before pasting.
       placeholder: |
-        curl -F file=@sample.wav 'http://localhost:5099/api/stt?language=en'
+        curl -F file=@sample.wav 'http://localhost:5061/api/stt?language=en'
     validations:
       required: true
   - type: textarea

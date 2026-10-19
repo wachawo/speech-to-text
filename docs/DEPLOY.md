@@ -6,7 +6,7 @@ How to run the service on a GPU host with Docker, update it, and roll it back. T
 
 | Container    | Image            | Port (default)  | Role                                                     |
 | ------------ | ---------------- | --------------- | -------------------------------------------------------- |
-| `stt_server` | `stt_server_gpu` | `STT_PORT` 5099 | the API: `/api/*`, the `/api/stream` websocket, models   |
+| `stt_server` | `stt_server_gpu` | `STT_PORT` 5061 | the API: `/api/*`, the `/api/stream` websocket, models   |
 | `stt_www`    | `stt_www`        | 8080, 8443      | nginx: the web UI, `/api/` passed through, https for devices |
 
 Both come from `docker-compose.yml` (GPU) or `docker-compose-cpu.yml`. `libs/`, `stt_server.py`, `stt_client.py`, `gu.py` and `www/` are bind-mounted, so a change to the code or the UI does not need a rebuild.
@@ -135,114 +135,19 @@ GUNICORN_WORKERS=2 GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker gunicorn -
 - **Each worker loads its own models.** Two workers need twice the GPU memory.
 - **Every worker keeps its own metrics,** so a scrape sees one worker at a time.
 
-### A second instance for short phrases
+### Short phrases and choosing models
 
-A client that sends short phrases - 1 to 3 s of 16 kHz mono 16-bit PCM WAV, one multipart request each, waiting for every answer - is best served by a second `stt_server` with settings of its own: one instance per model, a short wait for a busy model, connections kept open. It runs from the image the main compose file built, on another port, and the main instance is not touched: other container, other compose project, other port, other jobs directory.
+The same server answers short phrases - 1 to 3 s of audio, one request each, the client waiting for every answer - on the same routes as everything else, `/v1/audio/transcriptions` included: a client built on an OpenAI SDK points its `base_url` at `http://<host>:$STT_PORT/v1` (see "OpenAI-compatible API" in the README). What decides how fast they come back:
 
-1. **Its env file,** `.env.short` next to `.env`. `.gitignore` already covers it, and it is not loaded by the main instance:
-
-   ```bash
-   STT_PORT=5061
-   STT_TOKENS=<a token of its own>
-   # One instance per model: a second one of the same model adds no throughput (see below).
-   # The Parakeet entry needs an image built with PARAKEET=true.
-   STT_MODELS=whisper:turbo@1,parakeet:nvidia/parakeet-tdt-0.6b-v3@1
-   STT_DEFAULT_MODEL=
-   WHISPER_LANGUAGE=en
-   WHISPER_BEAM_SIZE=1
-   # A busy model answers 503 after this long instead of queueing the phrase for two minutes.
-   STT_QUEUE_TIMEOUT=0.3
-   # Longer than the client's longest pause between phrases, so it keeps one connection.
-   STT_KEEPALIVE_SECONDS=30
-   SPEECH_GATE=false
-   DIARIZE_ENABLED=false
-   # Its own jobs: two servers sharing a directory would claim each other's jobs.
-   JOBS_DIR=/opt/recs/jobs-short
-   HF_HUB_OFFLINE=1
-   # The same values as in .env: the entrypoint chowns the shared models/, logs/ and recs/ to them.
-   STT_UID=1000
-   STT_GID=1000
-   ```
-
-   `SPEECH_GATE=false` is a setting of this instance only; the code default stays on. Without the gate Whisper answers "Thank you." on silence and on noise, while Parakeet returns empty text on non-speech, so a client of this instance has to expect that.
-
-2. **Its compose file,** `docker-compose.short.yml` next to `docker-compose.yml`. It is kept on the host and is not part of the repository, so `git status` lists it as untracked:
-
-   ```yaml
-   name: stt_short
-
-   services:
-     stt_short:
-       image: stt_server_gpu         # built by docker-compose.yml; this file builds nothing
-       pull_policy: never
-       container_name: stt_short
-       hostname: stt_short
-       restart: unless-stopped
-       env_file:
-         - .env.short
-       environment:
-         TZ: America/New_York
-         WHISPER_DOWNLOAD_ROOT: "/opt/models"
-         PARAKEET_DOWNLOAD_ROOT: "/opt/models"
-         DIARIZE_DOWNLOAD_ROOT: "/opt/models"
-         OMP_NUM_THREADS: "1"
-         MKL_NUM_THREADS: "1"
-         NVIDIA_VISIBLE_DEVICES: "all"
-         NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
-         COMPUTE_TYPE: "cuda"
-       ports:
-         - "5061:5061"
-       volumes:
-         - /etc/localtime:/etc/localtime:ro
-         - /etc/timezone:/etc/timezone:ro
-         - ./stt_server.py:/opt/stt_server.py:ro
-         - ./gu.py:/opt/gu.py:ro
-         - ./libs:/opt/libs:ro
-         - ./models:/opt/models
-         - ./logs:/opt/logs
-         - ./recs:/opt/recs
-       # An upload pydub has to decode is buffered by ffmpeg in a file under /tmp; this keeps it in memory.
-       tmpfs:
-         - /tmp
-       devices:
-         - "nvidia.com/gpu=all"
-       logging:
-         driver: "json-file"
-         options:
-           max-size: "128m"
-           max-file: "3"
-       entrypoint: ["/opt/entrypoint.sh"]
-       healthcheck:
-         test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5061/api/health')"]
-         interval: 30s
-         timeout: 10s
-         retries: 3
-         start_period: 120s
-       command:
-         - "python3 stt_server.py"
-   ```
-
-   The top-level `name` makes it a compose project of its own, so `docker compose up -d` in the main project neither recreates nor removes it as an orphan.
-
-3. **Start it,** and after each update of the main instance restart it too, since it runs the same code and image:
-
-   ```bash
-   docker compose -f docker-compose.short.yml up -d
-   docker compose -f docker-compose.short.yml restart stt_short    # after a code-only update
-   curl -s -H "Authorization: Bearer <token>" "localhost:5061/api/health"
-   curl -s -H "Authorization: Bearer <token>" -F file=@phrase.wav -F model=parakeet "localhost:5061/api/stt"
-   curl -s -H "Authorization: Bearer <token>" -F file=@phrase.wav -F model=parakeet "localhost:5061/v1/audio/transcriptions"
-   ```
-
-   A client built on an OpenAI SDK points its `base_url` at `http://<host>:5061/v1`; see "OpenAI-compatible API" in the README.
-
-Why these settings:
-
-- **`python3 stt_server.py`, not gunicorn sync workers.** One process holds one instance of each model and serves requests from a thread pool. Sync workers load the models once per worker and close the connection after every response, so a client would open a new connection for every phrase.
-- **16 kHz mono 16-bit PCM WAV is passed straight to the model.** The server reads its header and skips decoding; any other format or rate goes through pydub and ffmpeg, which cost 70 ms per phrase (81 ms p95): over a third of Whisper turbo's model time and nearly all of Parakeet's. The client sends 16 kHz, so nothing is resampled on this path; another rate would be resampled by pydub at that cost.
-- **`/tmp` is a tmpfs.** A 16 kHz mono 16-bit PCM WAV is never written anywhere. Any other upload is decoded by ffmpeg, which reads it through its `cache:` protocol and so copies it into a temporary file under `/tmp` while it decodes; on a tmpfs that copy stays in memory.
-- **One instance per model.** A second instance of the same model on the same GPU added no throughput and doubled the time of every phrase: the two take turns on the same GPU.
-- **`STT_QUEUE_TIMEOUT` well under a second.** With one instance, a phrase that finds the model busy waits for at most that long and then gets `503`, which the client can retry or count, instead of waiting behind a burst. 0.3 s is one or two phrases of Whisper turbo at beam 1.
+- **16 kHz mono 16-bit PCM WAV is passed straight to the model.** The server reads its header and skips decoding; any other format or rate goes through pydub and ffmpeg, which cost 70 ms per phrase (81 ms p95): over a third of Whisper turbo's model time and nearly all of Parakeet's. A client that sends 16 kHz has nothing resampled; another rate is resampled by pydub at that cost.
+- **`/tmp` is a tmpfs** in both compose files. A 16 kHz mono 16-bit PCM WAV is never written anywhere. Any other upload is decoded by ffmpeg, which reads it through its `cache:` protocol and so copies it into a temporary file under `/tmp` while it decodes; on a tmpfs that copy stays in memory. A job upload, which may be far larger, is spooled under `JOBS_DIR` instead.
+- **Connections are kept open.** `python3 stt_server.py` and the `UvicornWorker` keep an idle connection for `STT_KEEPALIVE_SECONDS`; set it longer than a client's longest pause between phrases and the client keeps one connection. gunicorn's sync workers close the connection after every response, so there every phrase opens a new one.
+- **One instance per model.** Two instances of the same model on the same GPU added no throughput and doubled the time of every phrase (see below): the two take turns on the same GPU. Give every `STT_MODELS` entry `@1` unless a measurement on your GPU says otherwise.
+- **`STT_QUEUE_TIMEOUT` is how long a request waits for a busy model.** The default, 120 s, suits uploads of whole recordings. Well under a second suits phrases that are worthless late: a phrase that finds its model busy waits at most that long and then gets `503`, which the client can retry or count, instead of waiting behind a burst; 0.3 s is one or two phrases of Whisper turbo at beam 1. It applies to every synchronous route that transcribes, so a long upload that finds its model busy is refused just as quickly; jobs, the live stream and the diarizer keep their own waits.
+- **`WHISPER_BEAM_SIZE`** is 1 by default. 5 lowered the error rate a little and cost about a third more time (see below); both are deterministic.
+- **Several models side by side.** `STT_MODELS=whisper:turbo@1,parakeet:nvidia/parakeet-tdt-0.6b-v3@1` (the Parakeet entry needs an image built with `PARAKEET=true`) loads both, and each request picks one with `model`. Parakeet was the fastest and the most accurate below, but it takes no `language` and can drop the minority language of a mixed recording; Whisper with an explicit `language` does not.
+- **The speech gate is on by default, on every route.** It costs a voice detector pass per request and removes what Whisper invents on silence, tone and music. With `SPEECH_GATE=false` Whisper answers "Thank you." on silence and on noise, while Parakeet returns empty text on non-speech, so a client has to expect that.
+- **Diarization runs only where it is asked for** (`/api/transcript`, `/api/diarize`, `speakers` and `turns` jobs, a live session with `diarize`). Turned on, it costs `/api/stt` nothing but the GPU memory of the diarizer.
 
 Measured on 2026-10-12 on one NVIDIA GB10 with 240 phrases of LibriSpeech read speech, 1.3 to 3.5 s each; latency is model time only, without HTTP and without audio conversion:
 
@@ -259,7 +164,7 @@ Measured on 2026-10-12 on one NVIDIA GB10 with 240 phrases of LibriSpeech read s
 | Whisper turbo, beam 5                     | 3.9 vs 4.0 phrases/s    | doubled            |
 | Parakeet v3                               | 12.7 vs 12.5 phrases/s  | doubled            |
 
-Read speech is the easy case: phone audio, accents and noise are likely to raise every error rate, and the ranking between the models may differ on them. The GPU memory adds to that of the main instance and of every other model on the same GPU.
+Read speech is the easy case: phone audio, accents and noise are likely to raise every error rate, and the ranking between the models may differ on them. GPU memory adds up over every model the server loads, times the number of workers, and is shared with every other process on the same GPU.
 
 ### Dependencies
 

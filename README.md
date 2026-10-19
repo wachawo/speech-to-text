@@ -104,12 +104,12 @@ Browsers hand audio devices only to a secure page, so over the network DEVICE wo
 Once the server is up, check its status and send an audio file for transcription.
 
 ```bash
-curl localhost:5099/api/health
+curl localhost:5061/api/health
 
-curl -X POST localhost:5099/api/stt \
+curl -X POST localhost:5061/api/stt \
   -F file=@speech.mp3
 
-curl -X POST 'localhost:5099/api/stt?language=ru' \
+curl -X POST 'localhost:5061/api/stt?language=ru' \
   -H 'Content-Type: audio/wav' \
   --data-binary @speech.wav
 ```
@@ -131,7 +131,7 @@ With `STT_TOKENS` set, `default_model` and `models` are only included in the ans
 `POST /api/stt` accepts a `multipart/form-data` field named `file`, or a raw `audio/*` body. An optional `model` (query string or form field) picks one of the loaded models: its id, an alias (`large-v3-turbo`, `parakeet-tdt-0.6b-v3`), the `backend:model` form, or a bare backend name, which means the default model if it belongs to that backend and otherwise that backend's first model. Without `model` the default model serves. An optional `language` (query string or form field) overrides the server default for that request; `auto` autodetects. On success it returns the text, the elapsed seconds, the model that transcribed and the language: the code Whisper detected or used (always `en` for an English-only model), or `null` for Parakeet, which does not report it.
 
 ```bash
-curl -X POST 'localhost:5099/api/stt?model=turbo&language=en' -F file=@speech.mp3
+curl -X POST 'localhost:5061/api/stt?model=turbo&language=en' -F file=@speech.mp3
 ```
 
 ```json
@@ -155,7 +155,7 @@ The `400` errors for these two options are `Invalid model` (no backend knows the
 `GET /api/models` reports what this server carries, so a client does not have to guess. Each loaded model has its own row, and so does each transcriber with nothing loaded (`selectable: false`) and the diarizer. Every row brings its own language list, because the sets genuinely diverge and a merged list would be wrong for every model on its own.
 
 ```bash
-curl -H 'Authorization: Bearer <token>' localhost:5099/api/models
+curl -H 'Authorization: Bearer <token>' localhost:5061/api/models
 ```
 
 ```json
@@ -188,7 +188,7 @@ python3 stt_client.py --list
 `POST /api/diarize` answers **who spoke when**, and nothing else: it returns time ranges with a speaker number, never text. It is off unless `DIARIZE_ENABLED` is set on an image built with `DIARIZE=true`; otherwise it answers `503`.
 
 ```bash
-curl -X POST localhost:5099/api/diarize -F file=@meeting.wav
+curl -X POST localhost:5061/api/diarize -F file=@meeting.wav
 ```
 
 ```json
@@ -205,7 +205,7 @@ Neither backend is overlap-aware. NVIDIA's overlap-aware model ships only as a N
 `POST /api/transcript` answers **who said what**: it runs diarization and transcription over the same audio and joins them by time. It needs diarization enabled, and otherwise answers `503`. It takes the same `model` and `language` as `/api/stt` and names the model that transcribed in `model`.
 
 ```bash
-curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
+curl -X POST localhost:5061/api/transcript -F file=@meeting.wav
 ```
 
 ```json
@@ -227,8 +227,8 @@ curl -X POST localhost:5099/api/transcript -F file=@meeting.wav
 **Long recordings go through a job.** `POST /api/jobs` takes the same body shapes as `/api/stt`, up to `JOB_MAX_CONTENT_LENGTH_MB` (1 GB), plus a `mode`: `text` (the default), `speakers` (the `/api/transcript` result) or `turns` (the `/api/diarize` result). It answers `202` at once with the job's id and a `Location` to poll:
 
 ```bash
-curl -F file=@meeting.mp3 'localhost:5099/api/jobs?mode=speakers&language=ru'
-curl localhost:5099/api/jobs/1f0c3a9e7d2b4c85
+curl -F file=@meeting.mp3 'localhost:5061/api/jobs?mode=speakers&language=ru'
+curl localhost:5061/api/jobs/1f0c3a9e7d2b4c85
 ```
 
 ```json
@@ -276,7 +276,7 @@ When `STT_TOKENS` is set, every route except `GET /api/health` must carry `Autho
 `POST /v1/audio/transcriptions` and `GET /v1/models` follow OpenAI's audio API, so any OpenAI SDK works once its `base_url` points at `http://<host>:<port>/v1` and its API key is one of `STT_TOKENS` (any string while auth is off).
 
 ```bash
-curl localhost:5099/v1/audio/transcriptions \
+curl localhost:5061/v1/audio/transcriptions \
   -H 'Authorization: Bearer <token>' \
   -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
 ```
@@ -284,7 +284,7 @@ curl localhost:5099/v1/audio/transcriptions \
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:5099/v1", api_key="<token>")
+client = OpenAI(base_url="http://localhost:5061/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
@@ -331,7 +331,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | Variable                | Default                 | Purpose                                             |
 | ----------------------- | ----------------------- | --------------------------------------------------- |
 | `STT_HOST`              | `0.0.0.0`               | server bind address                                 |
-| `STT_PORT`              | `5099`                  | server port                                         |
+| `STT_PORT`              | `5061`                  | server port                                         |
 | `STT_POOL_SIZE`         | `8`                     | instances per model; the default for an `STT_MODELS` entry without `@pool` |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | seconds a synchronous request waits for a free instance of its model before `503` |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | seconds an idle HTTP connection stays open (uvicorn; gunicorn `keepalive`) |
@@ -366,7 +366,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `HF_HUB_OFFLINE`        | `0`                     | `1` once the models are cached: no hub requests on start |
 | `STT_WWW_PORT`          | `8080`                  | web UI http port (compose)                          |
 | `STT_WWW_TLS_PORT`      | `8443`                  | web UI https port (compose)                         |
-| `STT_URL`               | `http://localhost:5099` | client: server base URL                             |
+| `STT_URL`               | `http://localhost:5061` | client: server base URL                             |
 | `STT_TOKEN`             | (empty)                 | client: bearer token sent to the server             |
 
 ### Project structure
