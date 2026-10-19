@@ -399,6 +399,8 @@
 - **`/tmp` in the server container is a tmpfs.** Both compose files mount one for
   `stt_server`, so an upload that ffmpeg has to decode, which it copies into a temporary
   file under `/tmp` for the length of the decode, stays in memory and never reaches the disk.
+  A multipart job upload over 500 KB is spooled under `JOBS_DIR` instead of `/tmp`, so a
+  long recording is not held in memory while it arrives.
 - **A live phrase is cut at a speaker change as soon as the diarizer can see it.** With
   `diarize` on, the open phrase used to be checked for a handover only after the worker had
   had nothing to transcribe for a second, so in a dense dialog, where people answer each other

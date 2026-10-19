@@ -53,7 +53,8 @@ services:
     # An upload pydub has to decode is copied by ffmpeg into an unlinked file under /tmp while it
     # decodes; a tmpfs keeps that copy in memory. Nothing else here has to survive a restart: the
     # model weights go to /opt/models, and /tmp holds only numba's cache and the other caches under
-    # XDG_CACHE_HOME (both set by the image) and gu.py's model-load lock.
+    # XDG_CACHE_HOME (both set by the image) and gu.py's model-load lock. A job's upload, which may
+    # be gigabytes, is spooled under JOBS_DIR rather than here.
     tmpfs:
       - /tmp
     sysctls:
