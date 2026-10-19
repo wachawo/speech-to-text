@@ -392,10 +392,19 @@
   speaker decision since it started; what no phrase can still ask about is now dropped.
 
 #### Changed
-- **The default port is 5061 (was 5099).** It is the default of `STT_PORT` and of the
-  client's `STT_URL` (`http://localhost:5061`), and of the port the compose files publish,
+- **The default API port is 5051 (was 5099).** It is the default of `STT_PORT` and of the
+  client's `STT_URL` (`http://localhost:5051`), and of the port the compose files publish,
   check and pass to `stt_www`. A deployment that relied on the old default sets
   `STT_PORT=5099` in `.env`, and a client that relied on it sets `STT_URL`.
+- **The web UI has one port, https by default.** `stt_www` listens on `STT_WWW_PORT`
+  (default 5053, was 8080 for http and 8443 for https) and `STT_WWW_SCHEME` says what it
+  speaks: `https`, the default, or `http`; any other value stops the container rather than
+  serve the UI in the clear by mistake. On https a plain `http://` request to the port is
+  redirected to https, and the self-signed certificate is minted as before; on http none is
+  made, and the DEVICE tab says that audio devices need https. `STT_WWW_TLS_PORT` and
+  `/ui-config.json` are gone. The docker healthcheck asks a listener of its own on the
+  container's loopback, so it works in both modes. A deployment that kept http on its own
+  port sets `STT_WWW_SCHEME=http`, or moves its users to the https address.
 - **`/tmp` in the server container is a tmpfs.** Both compose files mount one for
   `stt_server`, so an upload that ffmpeg has to decode, which it copies into a temporary
   file under `/tmp` for the length of the decode, stays in memory and never reaches the disk.

@@ -61,28 +61,23 @@ GPU 构建需要主机上安装 `nvidia-container-toolkit`。首次运行会将 
 
 ### Web 界面
 
-`docker compose up` 还会启动 `stt_www`，这是一个 nginx 容器，负责提供浏览器界面并将 `/api/` 转发给服务器，因此界面和 API 共用同一个地址。
+`docker compose up` 还会启动 `stt_www`，这是一个 nginx 容器，负责提供浏览器界面并将 `/api/` 转发给服务器，因此界面和 API 共用同一个地址。它只监听一个端口 `STT_WWW_PORT`（默认 `5053`），除非设置 `STT_WWW_SCHEME=http`，否则使用 https。
 
-| 监听  | 默认端口 | 设置变量           |
-| ----- | -------- | ------------------ |
-| http  | `8080`   | `STT_WWW_PORT`     |
-| https | `8443`   | `STT_WWW_TLS_PORT` |
+打开 `https://<host>:5053`。**TRANSCRIBE** 有三种来源。**FILE** 上传一个音频文件。**DEVICE** 从音频输入实时转录：可以是麦克风或耳麦；Linux 上的 `Monitor of ...` 音源，它承载通过扬声器或耳机播放的一切声音；或者在 Chromium 系浏览器中使用 `Tab or screen audio`，用于浏览器标签页中播放的声音，在操作系统允许的情况下也可以是整个系统的声音。**STREAM** 接受一个流或远程文件的地址（网络电台、HLS、RTMP、RTSP、SRT），由服务器自行读取。无论哪种方式，结果都会显示在表单下方：要么是纯文本，要么在启用说话人分离时按语句分块显示，每块带有说话人和时间，每个说话人使用各自的颜色，两人同时说话的语句会被标记出来；实时语句会在说话人停顿约一秒后出现。结果可以复制，也可以下载为 TXT 或 JSON；在你查看其他页面时，每种来源都会保留其最近一次的结果。FILE 还有一个 **Turns** 模式，即单独调用 `POST /api/diarize`：以时间线的形式画出谁在什么时候说话，每个说话人一条轨道，并标出两人同时说话的片段。加载了多个模型时（`STT_MODELS`），模式和语言旁边的模型选择框为 FILE、DEVICE 和 STREAM 这三种来源选择模型，选项来自 `GET /api/models`，语言列表随所选模型变化；Turns 不做任何转录，因此不发送模型。**MODELS** 显示 `GET /api/models` 报告的内容。设置了 `STT_TOKENS` 时，界面只会询问一次令牌，并将其保存在浏览器中。
 
-打开 `http://<host>:8080`。**TRANSCRIBE** 有三种来源。**FILE** 上传一个音频文件。**DEVICE** 从音频输入实时转录：可以是麦克风或耳麦；Linux 上的 `Monitor of ...` 音源，它承载通过扬声器或耳机播放的一切声音；或者在 Chromium 系浏览器中使用 `Tab or screen audio`，用于浏览器标签页中播放的声音，在操作系统允许的情况下也可以是整个系统的声音。**STREAM** 接受一个流或远程文件的地址（网络电台、HLS、RTMP、RTSP、SRT），由服务器自行读取。无论哪种方式，结果都会显示在表单下方：要么是纯文本，要么在启用说话人分离时按语句分块显示，每块带有说话人和时间，每个说话人使用各自的颜色，两人同时说话的语句会被标记出来；实时语句会在说话人停顿约一秒后出现。结果可以复制，也可以下载为 TXT 或 JSON；在你查看其他页面时，每种来源都会保留其最近一次的结果。FILE 还有一个 **Turns** 模式，即单独调用 `POST /api/diarize`：以时间线的形式画出谁在什么时候说话，每个说话人一条轨道，并标出两人同时说话的片段。加载了多个模型时（`STT_MODELS`），模式和语言旁边的模型选择框为 FILE、DEVICE 和 STREAM 这三种来源选择模型，选项来自 `GET /api/models`，语言列表随所选模型变化；Turns 不做任何转录，因此不发送模型。**MODELS** 显示 `GET /api/models` 报告的内容。设置了 `STT_TOKENS` 时，界面只会询问一次令牌，并将其保存在浏览器中。
-
-浏览器只会把音频设备交给安全页面，因此通过网络访问时，DEVICE 需要经由 https 监听端口使用（在 `http://localhost` 上也可以）。https 监听端口使用自签名证书，由容器在首次启动时创建于 `./data/certs`；把真正的 `stt.crt` 和 `stt.key` 放到那里即可替换它。界面没有构建步骤，也不依赖 CDN：Vue 2 及其依赖库已随项目放在 `www/vendor` 下，因此在无法访问互联网的机器上也能工作。
+浏览器只会把音频设备交给安全页面，因此通过网络访问时，DEVICE 需要 https；使用 http 时只在 `http://localhost` 上可用。使用 https 时，发往该端口的普通 `http://` 请求会被重定向到 https，容器在首次启动时会在 `./data/certs` 中创建自签名证书；把真正的 `stt.crt` 和 `stt.key` 放到那里即可替换它。界面没有构建步骤，也不依赖 CDN：Vue 2 及其依赖库已随项目放在 `www/vendor` 下，因此在无法访问互联网的机器上也能工作。
 
 ### HTTP API
 
 服务器启动后，检查其状态并发送音频文件进行转录。
 
 ```bash
-curl localhost:5061/api/health
+curl localhost:5051/api/health
 
-curl -X POST localhost:5061/api/stt \
+curl -X POST localhost:5051/api/stt \
   -F file=@speech.mp3
 
-curl -X POST 'localhost:5061/api/stt?language=ru' \
+curl -X POST 'localhost:5051/api/stt?language=ru' \
   -H 'Content-Type: audio/wav' \
   --data-binary @speech.wav
 ```
@@ -104,7 +99,7 @@ curl -X POST 'localhost:5061/api/stt?language=ru' \
 `POST /api/stt` 接受名为 `file` 的 `multipart/form-data` 字段，或一个原始的 `audio/*` 请求体。可选的 `model`（查询字符串或表单字段）从已加载的模型中选择一个：可以是它的 id、别名（`large-v3-turbo`、`parakeet-tdt-0.6b-v3`）、`backend:model` 形式，或者只写后端名称；后端名称表示默认模型（如果它属于该后端），否则表示该后端的第一个模型。不带 `model` 时由默认模型处理。可选的 `language`（查询字符串或表单字段）会为该请求覆盖服务器默认值；`auto` 表示自动检测。成功时返回文本、耗时秒数、执行转录的模型以及语言：即 Whisper 检测到或使用的代码（仅英语模型始终为 `en`），Parakeet 不报告语言，因此为 `null`。
 
 ```bash
-curl -X POST 'localhost:5061/api/stt?model=turbo&language=en' -F file=@speech.mp3
+curl -X POST 'localhost:5051/api/stt?model=turbo&language=en' -F file=@speech.mp3
 ```
 
 ```json
@@ -128,7 +123,7 @@ Parakeet 只接受代码，不接受英文名称，而且可能在不作任何�
 `GET /api/models` 会报告本服务器所具备的能力，因此客户端无需猜测。每个已加载的模型都有自己的一行，没有加载任何模型的转录后端（`selectable: false`）和说话人分离器也各有一行。每一行都带有自己的语言列表，因为这些集合确实不同，合并后的列表对任何一个模型单独来看都是错误的。
 
 ```bash
-curl -H 'Authorization: Bearer <token>' localhost:5061/api/models
+curl -H 'Authorization: Bearer <token>' localhost:5051/api/models
 ```
 
 ```json
@@ -161,7 +156,7 @@ python3 stt_client.py --list
 `POST /api/diarize` 回答的是**谁在什么时候说话**，仅此而已：它返回带说话人编号的时间区间，而绝不返回文本。除非在以 `DIARIZE=true` 构建的镜像上设置了 `DIARIZE_ENABLED`，否则该接口处于关闭状态，并返回 `503`。
 
 ```bash
-curl -X POST localhost:5061/api/diarize -F file=@meeting.wav
+curl -X POST localhost:5051/api/diarize -F file=@meeting.wav
 ```
 
 ```json
@@ -178,7 +173,7 @@ curl -X POST localhost:5061/api/diarize -F file=@meeting.wav
 `POST /api/transcript` 回答的是**谁说了什么**：它对同一段音频同时运行说话人分离和转录，并按时间将二者连接起来。它需要启用说话人分离，否则返回 `503`。它接受与 `/api/stt` 相同的 `model` 和 `language`，并在 `model` 中给出执行转录的模型。
 
 ```bash
-curl -X POST localhost:5061/api/transcript -F file=@meeting.wav
+curl -X POST localhost:5051/api/transcript -F file=@meeting.wav
 ```
 
 ```json
@@ -200,8 +195,8 @@ curl -X POST localhost:5061/api/transcript -F file=@meeting.wav
 **长录音通过任务处理。** `POST /api/jobs` 接受与 `/api/stt` 相同的请求体形式，上限为 `JOB_MAX_CONTENT_LENGTH_MB`（1 GB），另加一个 `mode`：`text`（默认）、`speakers`（即 `/api/transcript` 的结果）或 `turns`（即 `/api/diarize` 的结果）。它会立即返回 `202`，附带任务的 id 和一个用于轮询的 `Location`：
 
 ```bash
-curl -F file=@meeting.mp3 'localhost:5061/api/jobs?mode=speakers&language=ru'
-curl localhost:5061/api/jobs/1f0c3a9e7d2b4c85
+curl -F file=@meeting.mp3 'localhost:5051/api/jobs?mode=speakers&language=ru'
+curl localhost:5051/api/jobs/1f0c3a9e7d2b4c85
 ```
 
 ```json
@@ -249,7 +244,7 @@ curl localhost:5061/api/jobs/1f0c3a9e7d2b4c85
 `POST /v1/audio/transcriptions` 和 `GET /v1/models` 遵循 OpenAI 的音频 API，因此只要把 `base_url` 指向 `http://<host>:<port>/v1`，并把 API 密钥设为 `STT_TOKENS` 之一（关闭鉴权时可以是任意字符串），任何 OpenAI SDK 都能使用。
 
 ```bash
-curl localhost:5061/v1/audio/transcriptions \
+curl localhost:5051/v1/audio/transcriptions \
   -H 'Authorization: Bearer <token>' \
   -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
 ```
@@ -257,7 +252,7 @@ curl localhost:5061/v1/audio/transcriptions \
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:5061/v1", api_key="<token>")
+client = OpenAI(base_url="http://localhost:5051/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
@@ -304,7 +299,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | 变量                    | 默认值                  | 用途                                               |
 | ----------------------- | ----------------------- | -------------------------------------------------- |
 | `STT_HOST`              | `0.0.0.0`               | 服务器绑定地址                                     |
-| `STT_PORT`              | `5061`                  | 服务器端口                                         |
+| `STT_PORT`              | `5051`                  | 服务器端口                                         |
 | `STT_POOL_SIZE`         | `8`                     | 每个模型的实例数；没有 `@pool` 的 `STT_MODELS` 条目的默认值 |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | 同步请求在返回 `503` 之前等待其模型空闲实例的秒数 |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | 空闲 HTTP 连接保持打开的秒数（uvicorn；gunicorn 的 `keepalive`） |
@@ -337,9 +332,9 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `SPEECH_GATE`           | `true`                  | 丢弃无人说出的转录文本（语音检测器）                |
 | `STT_UID`, `STT_GID`    | （镜像中的 `stt`，1001） | 拥有 `models/`、`logs/`、`recs/` 的主机用户（Docker） |
 | `HF_HUB_OFFLINE`        | `0`                     | 模型缓存完成后设为 `1`：启动时不再请求 hub          |
-| `STT_WWW_PORT`          | `8080`                  | Web 界面的 http 端口（compose）                     |
-| `STT_WWW_TLS_PORT`      | `8443`                  | Web 界面的 https 端口（compose）                    |
-| `STT_URL`               | `http://localhost:5061` | 客户端：服务器基础 URL                             |
+| `STT_WWW_PORT`          | `5053`                  | Web 界面端口（compose）                            |
+| `STT_WWW_SCHEME`        | `https`                 | Web 界面协议，`https` 或 `http`（compose）           |
+| `STT_URL`               | `http://localhost:5051` | 客户端：服务器基础 URL                             |
 | `STT_TOKEN`             | （空）                  | 客户端：发送给服务器的 bearer 令牌                 |
 
 ### 项目结构

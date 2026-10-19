@@ -4,10 +4,10 @@ How to run the service on a GPU host with Docker, update it, and roll it back. T
 
 ### What runs
 
-| Container    | Image            | Port (default)  | Role                                                     |
-| ------------ | ---------------- | --------------- | -------------------------------------------------------- |
-| `stt_server` | `stt_server_gpu` | `STT_PORT` 5061 | the API: `/api/*`, the `/api/stream` websocket, models   |
-| `stt_www`    | `stt_www`        | 8080, 8443      | nginx: the web UI, `/api/` passed through, https for devices |
+| Container    | Image            | Port (default)      | Role                                                        |
+| ------------ | ---------------- | ------------------- | ----------------------------------------------------------- |
+| `stt_server` | `stt_server_gpu` | `STT_PORT` 5051     | the API: `/api/*`, the `/api/stream` websocket, models      |
+| `stt_www`    | `stt_www`        | `STT_WWW_PORT` 5053 | nginx: the web UI, `/api/` passed through, https by default |
 
 Both come from `docker-compose.yml` (GPU) or `docker-compose-cpu.yml`. `libs/`, `stt_server.py`, `stt_client.py`, `gu.py` and `www/` are bind-mounted, so a change to the code or the UI does not need a rebuild.
 
@@ -38,7 +38,7 @@ Both come from `docker-compose.yml` (GPU) or `docker-compose-cpu.yml`. `libs/`, 
    | `DIARIZE`, `DIARIZE_ENABLED`      | build and run switches for diarization                                |
    | `PARAKEET`, `STT_BACKEND`         | build and run switches for Parakeet                                   |
    | `STT_MODELS`, `STT_DEFAULT_MODEL` | several models side by side, each request picking one; give every entry an explicit `@N`, and count on the GPU memory of every worker times the sum of the pools |
-   | `STT_WWW_PORT`, `STT_WWW_TLS_PORT`| the web UI ports                                                      |
+   | `STT_WWW_PORT`, `STT_WWW_SCHEME`  | the web UI port and its scheme, `https` (default) or `http`           |
    | `STT_UID`, `STT_GID`              | the host user that should own `models/`, `logs/`, `recs/` (`id -u`, `id -g`) |
 
    Without `STT_UID` those directories belong to uid 1001 inside the image, and the host user can only write to them with sudo.
@@ -55,9 +55,9 @@ Both come from `docker-compose.yml` (GPU) or `docker-compose-cpu.yml`. `libs/`, 
 
 ### The web UI and its certificate
 
-`stt_www` serves http on `STT_WWW_PORT` and https on `STT_WWW_TLS_PORT`. Browsers give a page an audio device only over https or on `localhost`, so live capture from a device (the DEVICE tab) needs the https port.
+`stt_www` serves the UI on one port, `STT_WWW_PORT`, over https unless `STT_WWW_SCHEME=http`; any other value stops the container. On https a plain `http://` request to that port is redirected to https. Browsers give a page an audio device only over https or on `localhost`, so live capture from a device (the DEVICE tab) over the network needs https. The docker healthcheck asks a separate http listener on the container's loopback, so it works in both modes.
 
-On the first start the container creates a self-signed certificate in `./data/certs` (`stt.crt`, `stt.key`), and browsers ask to accept it once. To use a real certificate, put it there under the same two names and restart `stt_www`.
+On https, the first start creates a self-signed certificate in `./data/certs` (`stt.crt`, `stt.key`), and browsers ask to accept it once. To use a real certificate, put it there under the same two names and restart `stt_www`.
 
 ### Updating
 
@@ -102,7 +102,7 @@ curl -s localhost:$STT_PORT/api/health
 curl -s localhost:$STT_PORT/api/models | python3 -m json.tool | head
 curl -s -F file=@speech.wav "localhost:$STT_PORT/api/stt?language=en"
 python3 stt_client.py --stream speech.wav --speakers        # the live websocket, with STT_URL set
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:$STT_WWW_PORT/
+curl -sk -o /dev/null -w "%{http_code}\n" https://localhost:$STT_WWW_PORT/    # http:// with STT_WWW_SCHEME=http
 ```
 
 `docker compose logs stt_server` should have no `[ERROR]` line after start. The diarizer's loader prints one `image_like_kwargs` line in the same format, which comes from transformers and is harmless.
