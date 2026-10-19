@@ -13,7 +13,7 @@
   own with their confidence fields, or for Parakeet one segment with those fields `null`;
   `srt`, `vtt` and word timestamps are refused. Errors on `/v1` take OpenAI's shape and every
   `/v1` response carries `X-Request-Id`; `/api/*` errors are unchanged.
-- **Settings for a short-phrase instance.** A synchronous upload that already is a
+- **Faster short phrases, and settings for them.** A synchronous upload that already is a
   RIFF/WAVE file of 16 kHz mono 16-bit PCM is passed on as it is instead of being decoded
   and re-exported by pydub, which cost 70 ms per phrase; any other format, rate or width
   goes through pydub as before, and nothing new is resampled. `WHISPER_BEAM_SIZE` (default
@@ -27,9 +27,10 @@
   gate logs a dropped segment's speech share and length instead of its words. A multipart
   upload over 500 KB is held in memory rather than spooled to a temporary file (jobs still
   write theirs to `JOBS_DIR`, by design); an upload that still needs decoding is buffered
-  by ffmpeg in an unlinked file under `TMPDIR`, which a tmpfs at `/tmp` keeps in memory. `docs/DEPLOY.md`
-  describes a second instance for short phrases, with the latencies, error rates and GPU
-  memory of each model measured on one GB10.
+  by ffmpeg in an unlinked file under `TMPDIR`, which a tmpfs at `/tmp` keeps in memory.
+  `docs/DEPLOY.md` says how these settings, `STT_MODELS` and the pool sizes shape the
+  server's answers to short phrases, with the latencies, error rates and GPU memory of each
+  model measured on one GB10.
 - **Per-model latency in `/metrics`.** `stt_model_inference_seconds` (`model`, `backend`)
   times every model call that transcribes, for a request, a live phrase or a job's piece
   alike; `stt_model_wait_seconds` (`model`) times every wait for a free instance of a
@@ -391,6 +392,13 @@
   speaker decision since it started; what no phrase can still ask about is now dropped.
 
 #### Changed
+- **The default port is 5061 (was 5099).** It is the default of `STT_PORT` and of the
+  client's `STT_URL` (`http://localhost:5061`), and of the port the compose files publish,
+  check and pass to `stt_www`. A deployment that relied on the old default sets
+  `STT_PORT=5099` in `.env`, and a client that relied on it sets `STT_URL`.
+- **`/tmp` in the server container is a tmpfs.** Both compose files mount one for
+  `stt_server`, so an upload that ffmpeg has to decode, which it copies into a temporary
+  file under `/tmp` for the length of the decode, stays in memory and never reaches the disk.
 - **A live phrase is cut at a speaker change as soon as the diarizer can see it.** With
   `diarize` on, the open phrase used to be checked for a handover only after the worker had
   had nothing to transcribe for a second, so in a dense dialog, where people answer each other

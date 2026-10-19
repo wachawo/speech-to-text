@@ -20,7 +20,7 @@ services:
     environment:
       TZ: America/New_York
       STT_HOST: "0.0.0.0"
-      STT_PORT: "${STT_PORT:-5099}"
+      STT_PORT: "${STT_PORT:-5061}"
       # One instance per model unless .env says otherwise. Interpolated rather than pinned: a value
       # in this block overrides env_file, so a literal here would silently ignore STT_POOL_SIZE in .env.
       STT_POOL_SIZE: "${STT_POOL_SIZE:-1}"
@@ -55,7 +55,7 @@ services:
       # exactly these paths, and a cache anywhere else is a PermissionError for the stt user.
       DIARIZE_DOWNLOAD_ROOT: "/opt/models"
     ports:
-      - "${STT_PORT:-5099}:${STT_PORT:-5099}"
+      - "${STT_PORT:-5061}:${STT_PORT:-5061}"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -66,6 +66,12 @@ services:
       - ./models:/opt/models
       - ./logs:/opt/logs
       - ./recs:/opt/recs
+    # An upload pydub has to decode is copied by ffmpeg into an unlinked file under /tmp while it
+    # decodes; a tmpfs keeps that copy in memory. Nothing else here has to survive a restart: the
+    # model weights go to /opt/models, and /tmp holds only numba's cache and the other caches under
+    # XDG_CACHE_HOME (both set by the image) and gu.py's model-load lock.
+    tmpfs:
+      - /tmp
     # GPU passthrough via CDI. Requires a CDI spec on the host:
     #   sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
     # (nvidia-container-toolkit >= 1.14; regenerate after a driver update).
@@ -90,7 +96,7 @@ services:
         max-file: "3"
     entrypoint: ["/opt/entrypoint.sh"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${STT_PORT:-5099}/api/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${STT_PORT:-5061}/api/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -112,7 +118,7 @@ services:
       - stt_network
     environment:
       TZ: America/New_York
-      STT_UPSTREAM: "stt_server:${STT_PORT:-5099}"
+      STT_UPSTREAM: "stt_server:${STT_PORT:-5061}"
       STT_WWW_TLS_PORT: "${STT_WWW_TLS_PORT:-8443}"
     ports:
       - "${STT_WWW_PORT:-8080}:80"

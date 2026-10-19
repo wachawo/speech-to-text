@@ -98,5 +98,5 @@ COPY entrypoint.sh /opt/entrypoint.sh
 RUN chmod +x /opt/entrypoint.sh
 ENTRYPOINT ["/opt/entrypoint.sh"]
 
-EXPOSE 5099
+EXPOSE 5061
 CMD ["python3", "stt_server.py"]
