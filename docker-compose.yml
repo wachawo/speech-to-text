@@ -20,7 +20,7 @@ services:
     environment:
       TZ: America/New_York
       STT_HOST: "0.0.0.0"
-      STT_PORT: "${STT_PORT:-5061}"
+      STT_PORT: "${STT_PORT:-5051}"
       # One instance per model unless .env says otherwise. Interpolated rather than pinned: a value
       # in this block overrides env_file, so a literal here would silently ignore STT_POOL_SIZE in .env.
       STT_POOL_SIZE: "${STT_POOL_SIZE:-1}"
@@ -55,7 +55,7 @@ services:
       # exactly these paths, and a cache anywhere else is a PermissionError for the stt user.
       DIARIZE_DOWNLOAD_ROOT: "/opt/models"
     ports:
-      - "${STT_PORT:-5061}:${STT_PORT:-5061}"
+      - "${STT_PORT:-5051}:${STT_PORT:-5051}"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -97,7 +97,7 @@ services:
         max-file: "3"
     entrypoint: ["/opt/entrypoint.sh"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${STT_PORT:-5061}/api/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${STT_PORT:-5051}/api/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -119,13 +119,13 @@ services:
       - stt_network
     environment:
       TZ: America/New_York
-      STT_UPSTREAM: "stt_server:${STT_PORT:-5061}"
-      STT_WWW_TLS_PORT: "${STT_WWW_TLS_PORT:-8443}"
+      STT_UPSTREAM: "stt_server:${STT_PORT:-5051}"
+      # The UI speaks https unless .env says STT_WWW_SCHEME=http; anything else stops nginx.
+      STT_WWW_SCHEME: "${STT_WWW_SCHEME:-https}"
     ports:
-      - "${STT_WWW_PORT:-8080}:80"
-      # https: browsers hand an audio device only to a secure page, so live capture over the LAN
-      # needs this listener. The certificate is self-signed on first start into ./data/certs.
-      - "${STT_WWW_TLS_PORT:-8443}:443"
+      # One port, https or http after STT_WWW_SCHEME. On https a plain http request to it is
+      # redirected, and browsers allow an audio device only there (or on localhost).
+      - "${STT_WWW_PORT:-5053}:8080"
     volumes:
       - ./www:/usr/share/nginx/html:ro
       - ./data/certs:/etc/nginx/certs

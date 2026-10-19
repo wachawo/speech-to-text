@@ -61,28 +61,23 @@ GPU ビルドにはホスト上に `nvidia-container-toolkit` が必要です。
 
 ### Web UI
 
-`docker compose up` は `stt_www` も起動します。これはブラウザ UI を配信し、`/api/` をサーバーへ中継する nginx コンテナなので、UI と API は同じアドレスを共有します。
+`docker compose up` は `stt_www` も起動します。これはブラウザ UI を配信し、`/api/` をサーバーへ中継する nginx コンテナなので、UI と API は同じアドレスを共有します。待ち受けるポートは `STT_WWW_PORT`（デフォルト `5053`）の 1 つだけで、`STT_WWW_SCHEME=http` を指定しない限り https で動作します。
 
-| リスナー | デフォルトポート | 設定する変数       |
-| -------- | ---------------- | ------------------ |
-| http     | `8080`           | `STT_WWW_PORT`     |
-| https    | `8443`           | `STT_WWW_TLS_PORT` |
+`https://<host>:5053` を開きます。**TRANSCRIBE** には 3 つのソースがあります。**FILE** は音声ファイルをアップロードします。**DEVICE** は音声入力からリアルタイムで文字起こしします。入力には、マイクやヘッドセット、スピーカーやヘッドホンで再生されるものをすべて運ぶ Linux の `Monitor of ...` ソース、あるいは Chromium 系ブラウザでは、ブラウザのタブで再生されるもの（OS が許す場合はシステム全体）を対象とする `Tab or screen audio` を使えます。**STREAM** はストリームまたはリモートファイルのアドレス（インターネットラジオ、HLS、RTMP、RTSP、SRT）を受け取り、サーバー自身がそれを読み込みます。いずれの場合も、結果はフォームの下にプレーンテキストとして表示されます。ダイアライゼーションが有効なら、フレーズごとに話者と時刻を付けたブロックとして表示され、話者ごとに色が分かれ、2 人が同時に話したフレーズには印が付きます。リアルタイムのフレーズは、話者が言葉を切ってから約 1 秒後に表示されます。結果はコピーすることも、TXT または JSON としてダウンロードすることもでき、各ソースは別の画面を見ている間も直前の結果を保持します。FILE には **Turns** モードもあります。これは `POST /api/diarize` 単体の機能で、誰がいつ話したかを話者ごとのレーンを持つタイムラインとして描き、2 人が同時に話している区間には印を付けます。複数のモデルを読み込んでいる場合（`STT_MODELS`）、モードと言語の横にあるモデル選択で、FILE、DEVICE、STREAM のすべてのソースで使うモデルを選べます。選択肢は `GET /api/models` から取得され、言語の一覧は選んだモデルに従います。Turns は文字起こしを行わないため、モデルを送りません。**MODELS** は `GET /api/models` が報告する内容を表示します。`STT_TOKENS` が設定されている場合、UI は一度だけトークンを尋ね、ブラウザに保存します。
 
-`http://<host>:8080` を開きます。**TRANSCRIBE** には 3 つのソースがあります。**FILE** は音声ファイルをアップロードします。**DEVICE** は音声入力からリアルタイムで文字起こしします。入力には、マイクやヘッドセット、スピーカーやヘッドホンで再生されるものをすべて運ぶ Linux の `Monitor of ...` ソース、あるいは Chromium 系ブラウザでは、ブラウザのタブで再生されるもの（OS が許す場合はシステム全体）を対象とする `Tab or screen audio` を使えます。**STREAM** はストリームまたはリモートファイルのアドレス（インターネットラジオ、HLS、RTMP、RTSP、SRT）を受け取り、サーバー自身がそれを読み込みます。いずれの場合も、結果はフォームの下にプレーンテキストとして表示されます。ダイアライゼーションが有効なら、フレーズごとに話者と時刻を付けたブロックとして表示され、話者ごとに色が分かれ、2 人が同時に話したフレーズには印が付きます。リアルタイムのフレーズは、話者が言葉を切ってから約 1 秒後に表示されます。結果はコピーすることも、TXT または JSON としてダウンロードすることもでき、各ソースは別の画面を見ている間も直前の結果を保持します。FILE には **Turns** モードもあります。これは `POST /api/diarize` 単体の機能で、誰がいつ話したかを話者ごとのレーンを持つタイムラインとして描き、2 人が同時に話している区間には印を付けます。複数のモデルを読み込んでいる場合（`STT_MODELS`）、モードと言語の横にあるモデル選択で、FILE、DEVICE、STREAM のすべてのソースで使うモデルを選べます。選択肢は `GET /api/models` から取得され、言語の一覧は選んだモデルに従います。Turns は文字起こしを行わないため、モデルを送りません。**MODELS** は `GET /api/models` が報告する内容を表示します。`STT_TOKENS` が設定されている場合、UI は一度だけトークンを尋ね、ブラウザに保存します。
-
-ブラウザは安全なページにしか音声デバイスを渡さないため、ネットワーク越しでは DEVICE は https リスナー経由で動作します（`http://localhost` でも動作します）。https リスナーは、コンテナが初回起動時に `./data/certs` に作成する自己署名証明書を使います。置き換えるには、本物の `stt.crt` と `stt.key` をそこに置いてください。UI にはビルド工程も CDN もありません。Vue 2 とそのライブラリは `www/vendor` に同梱されているため、インターネットに接続できないマシンでも動作します。
+ブラウザは安全なページにしか音声デバイスを渡さないため、ネットワーク越しでは DEVICE に https が必要です。http では `http://localhost` でのみ動作します。https では、そのポートへの通常の `http://` リクエストは https にリダイレクトされ、コンテナは初回起動時に `./data/certs` に自己署名証明書を作成します。置き換えるには、本物の `stt.crt` と `stt.key` をそこに置いてください。UI にはビルド工程も CDN もありません。Vue 2 とそのライブラリは `www/vendor` に同梱されているため、インターネットに接続できないマシンでも動作します。
 
 ### HTTP API
 
 サーバーが起動したら、ステータスを確認し、文字起こし用の音声ファイルを送信します。
 
 ```bash
-curl localhost:5061/api/health
+curl localhost:5051/api/health
 
-curl -X POST localhost:5061/api/stt \
+curl -X POST localhost:5051/api/stt \
   -F file=@speech.mp3
 
-curl -X POST 'localhost:5061/api/stt?language=ru' \
+curl -X POST 'localhost:5051/api/stt?language=ru' \
   -H 'Content-Type: audio/wav' \
   --data-binary @speech.wav
 ```
@@ -104,7 +99,7 @@ curl -X POST 'localhost:5061/api/stt?language=ru' \
 `POST /api/stt` は `file` という名前の `multipart/form-data` フィールド、または生の `audio/*` ボディを受け付けます。任意の `model`（クエリ文字列またはフォームフィールド）で、読み込まれたモデルの 1 つを選べます。指定できるのは id、エイリアス（`large-v3-turbo`、`parakeet-tdt-0.6b-v3`）、`backend:model` 形式、またはバックエンド名だけで、バックエンド名はデフォルトモデルがそのバックエンドに属していればデフォルトモデルを、そうでなければそのバックエンドの最初のモデルを意味します。`model` がなければデフォルトモデルが応答します。任意の `language`（クエリ文字列またはフォームフィールド）は、そのリクエストに限りサーバーのデフォルトを上書きし、`auto` で自動検出します。成功するとテキスト、経過秒数、文字起こししたモデル、言語を返します。言語は Whisper が検出または使用したコード（英語専用モデルでは常に `en`）で、Parakeet は言語を報告しないため `null` です。
 
 ```bash
-curl -X POST 'localhost:5061/api/stt?model=turbo&language=en' -F file=@speech.mp3
+curl -X POST 'localhost:5051/api/stt?model=turbo&language=en' -F file=@speech.mp3
 ```
 
 ```json
@@ -128,7 +123,7 @@ Parakeet が受け付けるのはコードだけで、英語名は受け付け�
 `GET /api/models` はこのサーバーが備えているものを報告するため、クライアントは推測する必要がありません。読み込まれた各モデルが独自の行を持ち、何も読み込まれていない文字起こしバックエンド（`selectable: false`）とダイアライザーも同様です。各行はそれぞれの言語リストを持ちます。集合は実際に異なるため、統合したリストはどのモデルにとっても不正確になるからです。
 
 ```bash
-curl -H 'Authorization: Bearer <token>' localhost:5061/api/models
+curl -H 'Authorization: Bearer <token>' localhost:5051/api/models
 ```
 
 ```json
@@ -161,7 +156,7 @@ python3 stt_client.py --list
 `POST /api/diarize` は **誰がいつ話したか** だけに答え、それ以外は返しません。話者番号付きの時間範囲を返すだけで、テキストは決して返しません。`DIARIZE=true` でビルドしたイメージ上で `DIARIZE_ENABLED` を設定しない限り無効で、その場合は `503` を返します。
 
 ```bash
-curl -X POST localhost:5061/api/diarize -F file=@meeting.wav
+curl -X POST localhost:5051/api/diarize -F file=@meeting.wav
 ```
 
 ```json
@@ -178,7 +173,7 @@ curl -X POST localhost:5061/api/diarize -F file=@meeting.wav
 `POST /api/transcript` は **誰が何を話したか** に答えます。同じ音声に対してダイアライゼーションと文字起こしを実行し、時間で突き合わせます。ダイアライゼーションが有効になっている必要があり、そうでなければ `503` を返します。`/api/stt` と同じ `model` と `language` を受け付け、文字起こししたモデルを `model` で返します。
 
 ```bash
-curl -X POST localhost:5061/api/transcript -F file=@meeting.wav
+curl -X POST localhost:5051/api/transcript -F file=@meeting.wav
 ```
 
 ```json
@@ -200,8 +195,8 @@ curl -X POST localhost:5061/api/transcript -F file=@meeting.wav
 **長い録音はジョブで処理します。** `POST /api/jobs` は `/api/stt` と同じ形式のボディを `JOB_MAX_CONTENT_LENGTH_MB`（1 GB）まで受け付け、さらに `mode` を取ります。`text`（デフォルト）、`speakers`（`/api/transcript` の結果）、`turns`（`/api/diarize` の結果）のいずれかです。応答はすぐに `202` で返り、ジョブの id とポーリング先の `Location` が付きます。
 
 ```bash
-curl -F file=@meeting.mp3 'localhost:5061/api/jobs?mode=speakers&language=ru'
-curl localhost:5061/api/jobs/1f0c3a9e7d2b4c85
+curl -F file=@meeting.mp3 'localhost:5051/api/jobs?mode=speakers&language=ru'
+curl localhost:5051/api/jobs/1f0c3a9e7d2b4c85
 ```
 
 ```json
@@ -249,7 +244,7 @@ curl localhost:5061/api/jobs/1f0c3a9e7d2b4c85
 `POST /v1/audio/transcriptions` と `GET /v1/models` は OpenAI の音声 API に従っているので、`base_url` を `http://<host>:<port>/v1` に向け、API キーを `STT_TOKENS` のいずれか（認証が無効なら任意の文字列）にすれば、どの OpenAI SDK でも動作します。
 
 ```bash
-curl localhost:5061/v1/audio/transcriptions \
+curl localhost:5051/v1/audio/transcriptions \
   -H 'Authorization: Bearer <token>' \
   -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
 ```
@@ -257,7 +252,7 @@ curl localhost:5061/v1/audio/transcriptions \
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:5061/v1", api_key="<token>")
+client = OpenAI(base_url="http://localhost:5051/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
@@ -304,7 +299,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | 変数                     | デフォルト               | 用途                                                |
 | ----------------------- | ----------------------- | -------------------------------------------------- |
 | `STT_HOST`              | `0.0.0.0`               | サーバーのバインドアドレス                            |
-| `STT_PORT`              | `5061`                  | サーバーのポート                                     |
+| `STT_PORT`              | `5051`                  | サーバーのポート                                     |
 | `STT_POOL_SIZE`         | `8`                     | モデルごとのインスタンス数。`@pool` のない `STT_MODELS` エントリのデフォルト |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | 同期リクエストが `503` を返す前に、モデルの空きインスタンスを待つ秒数 |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | アイドル状態の HTTP 接続を開いたままにする秒数（uvicorn、gunicorn の `keepalive`） |
@@ -337,9 +332,9 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `SPEECH_GATE`           | `true`                  | 誰も話していない文字起こしテキストを除去（音声検出器） |
 | `STT_UID`, `STT_GID`    | （イメージの `stt`、1001） | `models/`、`logs/`、`recs/` を所有するホストユーザー（Docker） |
 | `HF_HUB_OFFLINE`        | `0`                     | モデルのキャッシュ後は `1`: 起動時に hub へリクエストしない |
-| `STT_WWW_PORT`          | `8080`                  | Web UI の http ポート（compose）                    |
-| `STT_WWW_TLS_PORT`      | `8443`                  | Web UI の https ポート（compose）                   |
-| `STT_URL`               | `http://localhost:5061` | クライアント: サーバーのベース URL                    |
+| `STT_WWW_PORT`          | `5053`                  | Web UI のポート（compose）                          |
+| `STT_WWW_SCHEME`        | `https`                 | Web UI のスキーム、`https` または `http`（compose）      |
+| `STT_URL`               | `http://localhost:5051` | クライアント: サーバーのベース URL                    |
 | `STT_TOKEN`             | （空）                   | クライアント: サーバーに送るベアラートークン           |
 
 ### プロジェクト構成

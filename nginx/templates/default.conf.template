@@ -1,8 +1,8 @@
 # Rendered by the official nginx image entrypoint (envsubst) into
 # /etc/nginx/conf.d/default.conf. Only the names present in the container
 # environment are substituted, so nginx's own $remote_addr, $uri, $host and the
-# rest survive untouched. The substituted names are ${STT_UPSTREAM} and
-# ${STT_WWW_TLS_PORT}; both are set by docker-compose.
+# rest survive untouched. The one substituted name is ${STT_UPSTREAM}, set by
+# docker-compose.
 
 # The access log mirrors the Python log line of stt_server:
 #   YYYY-MM-DD HH:MM:SS.mmm [INFO]: (nginx) client METHOD /path: status
@@ -26,16 +26,32 @@ upstream stt_upstream {
     keepalive 32;
 }
 
+# The docker healthcheck's own listener: plain http on the container's loopback,
+# whatever the scheme of the UI, and nothing else served on it.
 server {
-    listen 80;
-    # https on the same server block: browsers allow an audio device only on a
-    # secure page or on localhost, so over the LAN live capture must be opened
-    # through this listener. The certificate is self-signed by
-    # 30-selfsigned-cert.sh unless a real pair is mounted.
-    listen 443 ssl;
-    ssl_certificate     /etc/nginx/certs/stt.crt;
-    ssl_certificate_key /etc/nginx/certs/stt.key;
-    ssl_protocols       TLSv1.2 TLSv1.3;
+    listen 127.0.0.1:80;
+    server_name _;
+    access_log off;
+
+    location = /nginx-healthz {
+        # default_type, not add_header: a return already carries the
+        # Content-Type from nginx.conf, and add_header would append a second.
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location / {
+        return 404;
+    }
+}
+
+server {
+    # The one UI port, 8080 in the container whatever it speaks: https by
+    # default, or http with STT_WWW_SCHEME=http. 25-listen-scheme.sh writes the
+    # listener; on https the certificate is self-signed by 30-selfsigned-cert.sh
+    # unless a real pair is mounted. Browsers allow an audio device only on a
+    # secure page or on localhost, so over the LAN live capture needs https.
+    include /etc/nginx/listen.conf;
     server_name _;
     access_log /var/log/nginx/access.log unified;
 
@@ -119,24 +135,6 @@ server {
     location @too_large {
         default_type application/json;
         return 413 '{"error": "Payload Too Large"}';
-    }
-
-    # What the UI needs to know about this deployment and cannot ask the API:
-    # the https port, for the note that explains why live capture is off on http.
-    location = /ui-config.json {
-        access_log off;
-        default_type application/json;
-        add_header Cache-Control "no-cache";
-        return 200 '{"tls_port":"${STT_WWW_TLS_PORT}"}';
-    }
-
-    # nginx-side liveness for the docker healthcheck, no round trip to the API.
-    location = /nginx-healthz {
-        access_log off;
-        # default_type, not add_header: a return already carries the
-        # Content-Type from nginx.conf, and add_header would append a second.
-        default_type text/plain;
-        return 200 "ok\n";
     }
 
     # The static UI. no-cache means revalidate, not "do not cache": the browser

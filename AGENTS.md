@@ -64,7 +64,7 @@ make tag-rollback  # tag both running images as rollback-<rev> before a deploy
 docker compose up --build                            # GPU build (default)
 docker compose -f docker-compose-cpu.yml up --build   # CPU build
 
-python3 stt_client.py [--model NAME] [--language CODE] file.mp3 [file2 ...]   # respects STT_URL (default http://localhost:5061)
+python3 stt_client.py [--model NAME] [--language CODE] file.mp3 [file2 ...]   # respects STT_URL (default http://localhost:5051)
 python3 stt_client.py --stream file.wav --speakers   # play a file into /api/stream in real time
 python3 -m libs.stt file.wav                 # transcribe one file without the server
 python3 -m libs.diarize file.wav             # speaker turns for one 16 kHz mono file
@@ -90,7 +90,7 @@ The project is an installable package. `pip install speech-to-text` gives the HT
 - Diarization: `DIARIZE_ENABLED`, `DIARIZE_MODEL`, `DIARIZE_POOL_SIZE`, `DIARIZE_DOWNLOAD_ROOT`, `DIARIZE_THRESHOLD`. Two knobs, deliberately separate: `DIARIZE` is a compose **build** arg deciding whether the backend is installed at all, `DIARIZE_ENABLED` is the **runtime** switch. Never pin `DIARIZE_ENABLED` in a compose `environment:` block, which overrides `env_file:` and would silently ignore `.env`. The compose files once pinned `STT_POOL_SIZE: "1"` and fell into exactly this trap - a host whose `.env` said 2 ran a pool of 1 - so a value that `.env` should be able to change is written there as `"${NAME:-default}"`, never as a literal.
 - Gunicorn: `GUNICORN_WORKERS`, `GUNICORN_WORKER_CLASS` (`sync`, or `uvicorn_worker.UvicornWorker` for the live stream)
 - Client: `STT_URL`, `STT_TOKEN`
-- Web UI (compose only, never read by the Python code): `STT_WWW_PORT`, `STT_WWW_TLS_PORT`
+- Web UI (compose only, never read by the Python code): `STT_WWW_PORT` (one port, default 5053) and `STT_WWW_SCHEME` (`https`, the default, or `http`; `nginx/25-listen-scheme.sh` writes the listener and refuses any other value)
 - Container (read by `entrypoint.sh` and Hugging Face, not by `libs/config.py`): `STT_UID`, `STT_GID`, `HF_HUB_OFFLINE`
 
 Model `.pt` files live in `./models/` and are mounted at `/opt/models`, so the cache survives rebuilds.

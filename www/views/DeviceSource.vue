@@ -48,10 +48,11 @@
     </div>
 
     <!-- Why the form is off, in one line where the file source has its drop
-         zone. The link keeps the path and hash, so it opens this same screen. -->
+         zone. The UI has one port, so there is no https address of this
+         screen to link to: the server itself has to be switched. -->
     <div v-if="!secure" class="stt-note">
       <i class="fa fa-lock" aria-hidden="true"></i>
-      Audio devices need https: open <a :href="httpsUrl">{{ httpsUrl }}</a>
+      Audio devices need https, and this server serves the UI over http (STT_WWW_SCHEME)
     </div>
     <div v-else-if="!capable" class="stt-note">
       <i class="fa fa-circle-info" aria-hidden="true"></i>
@@ -135,7 +136,6 @@ module.exports = {
       deviceId: this.$store.state.transcribe.device,
       // The RMS of the last frame sent.
       level: 0,
-      tlsPort: '',
     };
   },
 
@@ -153,7 +153,6 @@ module.exports = {
     // The wait label of an input still opening, so a STOP during the prompt
     // can take it off the strip.
     this.openingLabel = '';
-    if (!this.secure) this.fetchUiConfig();
     if (!this.usable) return;
     this.refreshDevices(false);
     navigator.mediaDevices.addEventListener('devicechange', this.handleDeviceChange);
@@ -199,29 +198,10 @@ module.exports = {
       var share = (db - METER_FLOOR_DB) / -METER_FLOOR_DB;
       return Math.round(Math.max(0, Math.min(1, share)) * 100);
     },
-
-    /* The https address of this same screen, for the line that explains why
-       the form is off. The port comes from nginx (/ui-config.json); without
-       an answer the address is printed without one. */
-    httpsUrl: function () {
-      var place = window.location;
-      return 'https://' + place.hostname + (this.tlsPort ? ':' + this.tlsPort : '') +
-        place.pathname + place.search + place.hash;
-    },
   },
 
   methods: {
     /* Devices */
-
-    fetchUiConfig: function () {
-      var self = this;
-      this.$http.get('/ui-config.json')
-        .then(function (resp) {
-          var port = resp.data && resp.data.tls_port;
-          self.tlsPort = /^\d+$/.test(String(port)) ? String(port) : '';
-        })
-        .catch(function () { self.tlsPort = ''; });
-    },
 
     /* Read the inputs, asking for access first when `ask` and the browser is
        still hiding their names. Asking is always the operator's click, never

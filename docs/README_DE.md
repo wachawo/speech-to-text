@@ -61,28 +61,23 @@ Der GPU-Build benötigt `nvidia-container-toolkit` auf dem Host. Beim ersten Lau
 
 ### Web-Oberfläche
 
-`docker compose up` startet außerdem `stt_www`, einen nginx-Container, der die Browser-Oberfläche ausliefert und `/api/` an den Server durchreicht, sodass Oberfläche und API unter derselben Adresse erreichbar sind.
+`docker compose up` startet außerdem `stt_www`, einen nginx-Container, der die Browser-Oberfläche ausliefert und `/api/` an den Server durchreicht, sodass Oberfläche und API unter derselben Adresse erreichbar sind. Er lauscht auf einem Port, `STT_WWW_PORT` (Standard `5053`), über https, sofern nicht `STT_WWW_SCHEME=http` gesetzt ist.
 
-| Listener | Standard-Port | Gesetzt über       |
-| -------- | ------------- | ------------------ |
-| http     | `8080`        | `STT_WWW_PORT`     |
-| https    | `8443`        | `STT_WWW_TLS_PORT` |
+Öffnen Sie `https://<host>:5053`. **TRANSCRIBE** hat drei Quellen. **FILE** lädt eine Audiodatei hoch. **DEVICE** transkribiert live von einem Audioeingang: einem Mikrofon oder Headset, einer `Monitor of ...`-Quelle unter Linux, die alles führt, was über Lautsprecher oder Kopfhörer wiedergegeben wird, oder, in Chromium-Browsern, `Tab or screen audio` für das, was in einem Browser-Tab läuft, oder im ganzen System, wo das Betriebssystem es zulässt. **STREAM** nimmt die Adresse eines Streams oder einer entfernten Datei entgegen - Internetradio, HLS, RTMP, RTSP, SRT - und der Server liest sie selbst. In jedem Fall erscheint das Ergebnis unter dem Formular als schlichter Text oder, bei aktivierter Diarisierung, als ein Block pro Phrase mit Sprecher und Zeit, jeder Sprecher in einer eigenen Farbe und die Phrasen markiert, in denen zwei Personen gleichzeitig gesprochen haben; eine Live-Phrase erscheint etwa eine Sekunde, nachdem der Sprecher eine Pause macht. Das Ergebnis lässt sich kopieren oder als TXT oder JSON herunterladen, und jede Quelle behält ihr letztes Ergebnis, während Sie sich einen anderen Bildschirm ansehen. FILE hat außerdem einen Modus **Turns**, `POST /api/diarize` für sich allein: wer wann gesprochen hat, gezeichnet als Zeitleiste mit einer Spur pro Sprecher, in der die Abschnitte markiert sind, in denen zwei Personen gleichzeitig sprechen. Sind mehrere Modelle geladen (`STT_MODELS`), wählt eine Modellauswahl neben Modus und Sprache das Modell für alle drei Quellen, FILE, DEVICE und STREAM, gespeist aus `GET /api/models`, und die Sprachliste folgt dem gewählten Modell; Turns transkribiert nichts und sendet kein Modell. **MODELS** zeigt, was `GET /api/models` meldet. Wenn `STT_TOKENS` gesetzt ist, fragt die Oberfläche einmal nach einem Token und speichert es im Browser.
 
-Öffnen Sie `http://<host>:8080`. **TRANSCRIBE** hat drei Quellen. **FILE** lädt eine Audiodatei hoch. **DEVICE** transkribiert live von einem Audioeingang: einem Mikrofon oder Headset, einer `Monitor of ...`-Quelle unter Linux, die alles führt, was über Lautsprecher oder Kopfhörer wiedergegeben wird, oder, in Chromium-Browsern, `Tab or screen audio` für das, was in einem Browser-Tab läuft, oder im ganzen System, wo das Betriebssystem es zulässt. **STREAM** nimmt die Adresse eines Streams oder einer entfernten Datei entgegen - Internetradio, HLS, RTMP, RTSP, SRT - und der Server liest sie selbst. In jedem Fall erscheint das Ergebnis unter dem Formular als schlichter Text oder, bei aktivierter Diarisierung, als ein Block pro Phrase mit Sprecher und Zeit, jeder Sprecher in einer eigenen Farbe und die Phrasen markiert, in denen zwei Personen gleichzeitig gesprochen haben; eine Live-Phrase erscheint etwa eine Sekunde, nachdem der Sprecher eine Pause macht. Das Ergebnis lässt sich kopieren oder als TXT oder JSON herunterladen, und jede Quelle behält ihr letztes Ergebnis, während Sie sich einen anderen Bildschirm ansehen. FILE hat außerdem einen Modus **Turns**, `POST /api/diarize` für sich allein: wer wann gesprochen hat, gezeichnet als Zeitleiste mit einer Spur pro Sprecher, in der die Abschnitte markiert sind, in denen zwei Personen gleichzeitig sprechen. Sind mehrere Modelle geladen (`STT_MODELS`), wählt eine Modellauswahl neben Modus und Sprache das Modell für alle drei Quellen, FILE, DEVICE und STREAM, gespeist aus `GET /api/models`, und die Sprachliste folgt dem gewählten Modell; Turns transkribiert nichts und sendet kein Modell. **MODELS** zeigt, was `GET /api/models` meldet. Wenn `STT_TOKENS` gesetzt ist, fragt die Oberfläche einmal nach einem Token und speichert es im Browser.
-
-Browser geben Audiogeräte nur an eine sichere Seite heraus, daher funktioniert DEVICE über das Netzwerk über den https-Listener (und unter `http://localhost`). Der https-Listener verwendet ein selbstsigniertes Zertifikat, das der Container beim ersten Start in `./data/certs` anlegt; legen Sie dort ein echtes `stt.crt` und `stt.key` ab, um es zu ersetzen. Die Oberfläche hat keinen Build-Schritt und kein CDN: Vue 2 und seine Bibliotheken werden unter `www/vendor` mitgeliefert, sodass sie auch auf einer Maschine ohne Verbindung zum Internet funktioniert.
+Browser geben Audiogeräte nur an eine sichere Seite heraus, daher braucht DEVICE über das Netzwerk das Schema https; unter http funktioniert es nur unter `http://localhost`. Bei https wird eine einfache `http://`-Anfrage an den Port auf https umgeleitet, und der Container legt beim ersten Start ein selbstsigniertes Zertifikat in `./data/certs` an; legen Sie dort ein echtes `stt.crt` und `stt.key` ab, um es zu ersetzen. Die Oberfläche hat keinen Build-Schritt und kein CDN: Vue 2 und seine Bibliotheken werden unter `www/vendor` mitgeliefert, sodass sie auch auf einer Maschine ohne Verbindung zum Internet funktioniert.
 
 ### HTTP-API
 
 Sobald der Server läuft, prüfen Sie seinen Status und senden eine Audiodatei zur Transkription.
 
 ```bash
-curl localhost:5061/api/health
+curl localhost:5051/api/health
 
-curl -X POST localhost:5061/api/stt \
+curl -X POST localhost:5051/api/stt \
   -F file=@speech.mp3
 
-curl -X POST 'localhost:5061/api/stt?language=ru' \
+curl -X POST 'localhost:5051/api/stt?language=ru' \
   -H 'Content-Type: audio/wav' \
   --data-binary @speech.wav
 ```
@@ -104,7 +99,7 @@ Ist `STT_TOKENS` gesetzt, erscheinen `default_model` und `models` nur in der Ant
 `POST /api/stt` akzeptiert ein `multipart/form-data`-Feld namens `file` oder einen rohen `audio/*`-Body. Ein optionales `model` (Query-String oder Formularfeld) wählt eines der geladenen Modelle: seine ID, einen Alias (`large-v3-turbo`, `parakeet-tdt-0.6b-v3`), die Form `backend:model` oder den bloßen Backend-Namen, der das Standardmodell meint, wenn es zu diesem Backend gehört, und sonst dessen erstes Modell. Ohne `model` antwortet das Standardmodell. Ein optionales `language` (Query-String oder Formularfeld) überschreibt für diese Anfrage die Server-Voreinstellung; `auto` erkennt die Sprache automatisch. Bei Erfolg kommen der Text, die verstrichenen Sekunden, das Modell, das transkribiert hat, und die Sprache zurück: der Code, den Whisper erkannt oder verwendet hat (bei einem rein englischen Modell immer `en`), oder `null` bei Parakeet, das ihn nicht meldet.
 
 ```bash
-curl -X POST 'localhost:5061/api/stt?model=turbo&language=en' -F file=@speech.mp3
+curl -X POST 'localhost:5051/api/stt?model=turbo&language=en' -F file=@speech.mp3
 ```
 
 ```json
@@ -128,7 +123,7 @@ Die `400`-Fehler dieser beiden Optionen sind `Invalid model` (kein Backend kennt
 `GET /api/models` gibt an, was dieser Server mitbringt, sodass ein Client nicht raten muss. Jedes geladene Modell hat eine eigene Zeile, ebenso jeder Transkriptor ohne geladenes Modell (`selectable: false`) und der Diarisierer. Jede Zeile bringt ihre eigene Sprachliste mit, denn die Mengen unterscheiden sich tatsächlich, und eine zusammengeführte Liste wäre für jedes Modell für sich genommen falsch.
 
 ```bash
-curl -H 'Authorization: Bearer <token>' localhost:5061/api/models
+curl -H 'Authorization: Bearer <token>' localhost:5051/api/models
 ```
 
 ```json
@@ -161,7 +156,7 @@ python3 stt_client.py --list
 `POST /api/diarize` beantwortet **wer wann gesprochen hat**, und sonst nichts: Der Endpunkt gibt Zeitbereiche mit einer Sprechernummer zurück, niemals Text. Er ist deaktiviert, sofern nicht `DIARIZE_ENABLED` auf einem mit `DIARIZE=true` gebauten Image gesetzt ist; andernfalls antwortet er mit `503`.
 
 ```bash
-curl -X POST localhost:5061/api/diarize -F file=@meeting.wav
+curl -X POST localhost:5051/api/diarize -F file=@meeting.wav
 ```
 
 ```json
@@ -178,7 +173,7 @@ Keines der beiden Backends ist auf überlappende Sprache ausgelegt. NVIDIAs Mode
 `POST /api/transcript` beantwortet **wer was gesagt hat**: Der Endpunkt führt Diarisierung und Transkription über demselben Audio aus und verbindet beides über die Zeit. Er benötigt eine aktivierte Diarisierung und antwortet andernfalls mit `503`. Er nimmt dieselben `model` und `language` an wie `/api/stt` und nennt in `model` das Modell, das transkribiert hat.
 
 ```bash
-curl -X POST localhost:5061/api/transcript -F file=@meeting.wav
+curl -X POST localhost:5051/api/transcript -F file=@meeting.wav
 ```
 
 ```json
@@ -200,8 +195,8 @@ curl -X POST localhost:5061/api/transcript -F file=@meeting.wav
 **Lange Aufnahmen laufen über einen Job.** `POST /api/jobs` akzeptiert dieselben Body-Formen wie `/api/stt`, bis zu `JOB_MAX_CONTENT_LENGTH_MB` (1 GB), dazu einen `mode`: `text` (der Standard), `speakers` (das Ergebnis von `/api/transcript`) oder `turns` (das Ergebnis von `/api/diarize`). Der Endpunkt antwortet sofort mit `202`, der ID des Jobs und einer `Location`, die abgefragt werden kann:
 
 ```bash
-curl -F file=@meeting.mp3 'localhost:5061/api/jobs?mode=speakers&language=ru'
-curl localhost:5061/api/jobs/1f0c3a9e7d2b4c85
+curl -F file=@meeting.mp3 'localhost:5051/api/jobs?mode=speakers&language=ru'
+curl localhost:5051/api/jobs/1f0c3a9e7d2b4c85
 ```
 
 ```json
@@ -249,7 +244,7 @@ Wenn `STT_TOKENS` gesetzt ist, muss jede Route außer `GET /api/health` `Authori
 `POST /v1/audio/transcriptions` und `GET /v1/models` folgen der Audio-API von OpenAI, daher funktioniert jedes OpenAI-SDK, sobald seine `base_url` auf `http://<host>:<port>/v1` zeigt und sein API-Key einer der `STT_TOKENS` ist (bei ausgeschalteter Authentifizierung ein beliebiger String).
 
 ```bash
-curl localhost:5061/v1/audio/transcriptions \
+curl localhost:5051/v1/audio/transcriptions \
   -H 'Authorization: Bearer <token>' \
   -F file=@phrase.wav -F model=turbo -F language=en -F response_format=verbose_json
 ```
@@ -257,7 +252,7 @@ curl localhost:5061/v1/audio/transcriptions \
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:5061/v1", api_key="<token>")
+client = OpenAI(base_url="http://localhost:5051/v1", api_key="<token>")
 print(client.audio.transcriptions.create(model="turbo", file=open("phrase.wav", "rb")).text)
 ```
 
@@ -304,7 +299,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | Variable                | Default                 | Zweck                                               |
 | ----------------------- | ----------------------- | --------------------------------------------------- |
 | `STT_HOST`              | `0.0.0.0`               | Bind-Adresse des Servers                            |
-| `STT_PORT`              | `5061`                  | Server-Port                                         |
+| `STT_PORT`              | `5051`                  | Server-Port                                         |
 | `STT_POOL_SIZE`         | `8`                     | Instanzen pro Modell; Standard für einen `STT_MODELS`-Eintrag ohne `@pool` |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | Sekunden, die eine synchrone Anfrage auf eine freie Instanz ihres Modells wartet, bevor `503` kommt |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | Sekunden, die eine ungenutzte HTTP-Verbindung offen bleibt (uvicorn; gunicorn `keepalive`) |
@@ -337,9 +332,9 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `SPEECH_GATE`           | `true`                  | verwirft Text, den niemand gesprochen hat (Sprachaktivitätserkennung) |
 | `STT_UID`, `STT_GID`    | (`stt` aus dem Image, 1001) | Host-Benutzer, dem `models/`, `logs/`, `recs/` gehören (Docker) |
 | `HF_HUB_OFFLINE`        | `0`                     | `1`, sobald die Modelle im Cache liegen: keine Hub-Anfragen beim Start |
-| `STT_WWW_PORT`          | `8080`                  | http-Port der Web-Oberfläche (compose)              |
-| `STT_WWW_TLS_PORT`      | `8443`                  | https-Port der Web-Oberfläche (compose)             |
-| `STT_URL`               | `http://localhost:5061` | Client: Basis-URL des Servers                       |
+| `STT_WWW_PORT`          | `5053`                  | Port der Web-Oberfläche (compose)                   |
+| `STT_WWW_SCHEME`        | `https`                 | Schema der Web-Oberfläche, `https` oder `http` (compose) |
+| `STT_URL`               | `http://localhost:5051` | Client: Basis-URL des Servers                       |
 | `STT_TOKEN`             | (empty)                 | Client: an den Server gesendetes Bearer-Token       |
 
 ### Projektstruktur
