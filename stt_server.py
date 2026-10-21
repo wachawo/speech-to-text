@@ -378,11 +378,13 @@ def transcribe_text(wav_bio, model, language, spec) -> tuple[str, str | None]:
     subtitle credit such as "to be continued...". Either way one decode by the spec's backend
     gives the text, the segments and the language the model reports.
     """
+    transcriber = backends.transcriber_for_backend(spec["backend"])
     with metrics.measure_inference(spec["id"], spec["backend"]):
-        result = backends.transcriber_for_backend(spec["backend"]).get_stt_result(wav_bio, model=model, language=language)
+        result = transcriber.get_stt_result(wav_bio, model=model, language=language)
     if not config.SPEECH_GATE:
         return result["text"], result["language"]
-    kept = speech_gate.gate_wav(wav_bio, result["segments"], get_request_id())
+    words = getattr(transcriber, "WORD_SEGMENTS", False)
+    kept = speech_gate.gate_wav(wav_bio, result["segments"], get_request_id(), words)
     return "".join(segment["text"] for segment in kept).strip(), result["language"]
 
 
@@ -600,7 +602,8 @@ def transcribe_by_speaker():
         return build_error_response("Transcription failed", 500)
 
     if config.SPEECH_GATE:
-        segments = speech_gate.gate_wav(wav_bio, segments, get_request_id())
+        words = getattr(backends.transcriber_for_backend(spec["backend"]), "WORD_SEGMENTS", False)
+        segments = speech_gate.gate_wav(wav_bio, segments, get_request_id(), words)
     attributed = align.attribute_segments(segments, turns)
     elapsed = time.monotonic() - start_time
     speakers = align.count_speakers(attributed)

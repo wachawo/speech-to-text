@@ -111,6 +111,30 @@ def test_keep_spoken_drops_what_was_not_spoken():
     assert [item["text"] for item in kept] == [" spoken", " spoken again"]
 
 
+def test_words_are_kept_by_their_distance_to_speech():
+    """A word is judged by how far it lies from speech, not by its share.
+
+    The first word starts ahead of the detected onset, as Parakeet's did on the host, so its share
+    is under MIN_SPEECH_SHARE; as a word it is kept. A word past the margin and a credit line go.
+    """
+    words = [
+        segment(0.0, 0.24, " He"),
+        segment(0.24, 0.5, " tried"),
+        segment(1.2, 1.3, " to"),
+        segment(1.4, 1.6, " think"),
+        segment(0.5, 0.5, " instant"),
+        segment(0.6, 0.8, CREDIT_MADE),
+    ]
+    ranges = [(0.2, 0.95)]
+    assert speech_gate.speech_share(words[0], ranges) < speech_gate.MIN_SPEECH_SHARE
+    assert speech_gate.speech_distance(words[2], ranges) == pytest.approx(0.25)
+    assert speech_gate.speech_distance(words[0], []) == float("inf")
+    kept = speech_gate.keep_spoken(words, ranges, words=True)
+    assert [item["text"] for item in kept] == [" He", " tried", " to", " instant"]
+    assert speech_gate.keep_spoken(words, [], words=True) == []
+    assert [item["text"] for item in speech_gate.keep_spoken(words, ranges)] == [" tried", " instant"]
+
+
 def test_keep_spoken_passes_everything_without_ranges():
     """No ranges means no detector: every segment goes out as the transcriber produced it."""
     segments = [segment(0.0, 1.0, " " + TO_BE_CONTINUED)]
@@ -169,11 +193,19 @@ def test_stt_without_the_gate_is_unchanged(client):
     assert body["text"] == "stub transcription"
 
 
-def test_stt_keeps_only_spoken_segments(client, gate_on):
-    """Gate on: the text is the spoken segments joined, the unspoken one gone."""
-    gate_on["ranges"] = [(0.0, 1.1)]
-    body = post_wav(client, "/api/stt").get_json()
-    assert body["text"] == "first phrase"
+@pytest.mark.parametrize(
+    "params, ranges, text",
+    [
+        ({}, [(0.0, 1.1)], "first phrase"),
+        # Parakeet's first word has a share of 5 % and is kept as a word; its second lies 0.35 s from speech.
+        ({"model": "parakeet"}, [(0.9, 0.95)], "parakeet first"),
+    ],
+)
+def test_stt_keeps_only_spoken_segments(multi_client, gate_on, params, ranges, text):
+    """Gate on: the text is the spoken segments joined, the unspoken one gone; words are judged as words."""
+    gate_on["ranges"] = ranges
+    body = post_wav(multi_client, "/api/stt", **params).get_json()
+    assert body["text"] == text
 
 
 def test_stt_with_no_speech_answers_empty_text(client, gate_on):

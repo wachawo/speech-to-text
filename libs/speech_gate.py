@@ -10,10 +10,16 @@ highest log-probabilities of the whole run. So a separate voice detector, Silero
 where speech is, and a segment that is mostly outside speech is dropped. Credit lines that no
 person ever says are dropped wherever they appear, which covers music with vocals, where the
 detector does hear a voice.
+
+A backend whose segments are single words (Parakeet, WORD_SEGMENTS) is judged by distance instead:
+a share is meaningless on a word of a quarter of a second, where the detector's onset lag and its
+rounding of range edges are as long as the word itself, and it dropped the first word of most
+phrases.
 """
 
 import io
 import logging
+import math
 import re
 import threading
 import time
@@ -43,6 +49,11 @@ WINDOW_JOIN_SECONDS = 0.1
 
 # A segment needs at least this share of its time inside detected speech to be kept.
 MIN_SPEECH_SHARE = 0.3
+
+# A word needs to lie within this many seconds of detected speech to be kept. Measured on the
+# deployment host: Parakeet's first word starts up to 0.28 s before the detector's range opens, and
+# the farthest real word lay 0.22 s from a range, in noise; the margin adds one 80 ms Parakeet frame.
+WORD_SPEECH_MARGIN = 0.3
 
 # Whole-segment credit lines from subtitled video. Only lines nobody says in a conversation are
 # listed: "to be continued..." or "Thank you for watching" can be real speech, and the voice
@@ -180,6 +191,12 @@ def speech_share(segment: dict[str, Any], ranges: list[tuple[float, float]], dur
     return covered / length
 
 
+def speech_distance(segment: dict[str, Any], ranges: list[tuple[float, float]]) -> float:
+    """Seconds between a segment and the nearest range of detected speech: 0 when they touch, inf with none."""
+    seg_start, seg_end = float(segment["start"]), float(segment["end"])
+    return min((max(0.0, start - seg_end, seg_start - end) for start, end in ranges), default=math.inf)
+
+
 def is_credit_line(text: str) -> bool:
     """Whether the whole segment is a subtitle credit line."""
     normalized = " ".join(text.lower().split()).strip(" .!")
@@ -191,36 +208,47 @@ def keep_spoken(
     ranges: list[tuple[float, float]] | None,
     request_id: str = "-",
     duration: float | None = None,
+    words: bool = False,
 ) -> list[dict[str, Any]]:
     """The segments that were spoken: enough of their time in speech, and not a credit line.
 
     With no ranges (the detector is unavailable) every segment is kept. `duration` is the length
-    of the audio in seconds; see speech_share.
+    of the audio in seconds; see speech_share. With `words`, the segments are single words and
+    each is kept when it lies within WORD_SPEECH_MARGIN of speech instead of by its share.
     """
     if ranges is None:
         return segments
     kept = []
     for segment in segments:
-        share = speech_share(segment, ranges, duration)
-        if share < MIN_SPEECH_SHARE or is_credit_line(segment["text"]):
-            # The share and the length, never the words: a transcript must not reach the log.
-            logger.info(
-                "[%s] Dropped as not spoken (speech %.0f%%, %d chars)", request_id, share * 100, len(segment["text"].strip())
-            )
+        if words:
+            distance = speech_distance(segment, ranges)
+            spoken = distance <= WORD_SPEECH_MARGIN
+        else:
+            share = speech_share(segment, ranges, duration)
+            spoken = share >= MIN_SPEECH_SHARE
+        if not spoken or is_credit_line(segment["text"]):
+            # The distance or the share and the length, never the words: a transcript must not reach the log.
+            chars = len(segment["text"].strip())
+            if words:
+                logger.info("[%s] Dropped as not spoken (%.2fs from speech, %d chars)", request_id, distance, chars)
+            else:
+                logger.info("[%s] Dropped as not spoken (speech %.0f%%, %d chars)", request_id, share * 100, chars)
             metrics.DROPPED_SEGMENTS.inc()
             continue
         kept.append(segment)
     return kept
 
 
-def gate_wav(wav_bio: io.BytesIO, segments: list[dict[str, Any]], request_id: str = "-") -> list[dict[str, Any]]:
-    """Keep the segments of a 16 kHz mono WAV buffer that were spoken; the buffer is rewound."""
+def gate_wav(
+    wav_bio: io.BytesIO, segments: list[dict[str, Any]], request_id: str = "-", words: bool = False
+) -> list[dict[str, Any]]:
+    """Keep the segments of a 16 kHz mono WAV buffer that were spoken; the buffer is rewound. `words`: see keep_spoken."""
     wav_bio.seek(0)
     samples, unused_rate = sf.read(wav_bio, dtype="float32")
     wav_bio.seek(0)
     if samples.ndim == 2:
         samples = samples.mean(axis=1)
-    return keep_spoken(segments, find_speech(samples, request_id), request_id, samples.shape[0] / SAMPLE_RATE)
+    return keep_spoken(segments, find_speech(samples, request_id), request_id, samples.shape[0] / SAMPLE_RATE, words)
 
 
 def main():

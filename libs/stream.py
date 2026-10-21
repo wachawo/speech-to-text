@@ -251,8 +251,9 @@ def transcribe_piece(
     background job alike. `spec` is the model to use (libs/registry.py): an instance of it is
     borrowed from that model's own pool for this piece only, run through that model's backend,
     and returned to the same pool in `finally`. `ranges` are the piece's speech ranges from zero,
-    or None without a detector; segments mostly outside them are dropped. Raises queue.Empty when
-    no instance frees up in time.
+    or None without a detector; segments mostly outside them are dropped, and a backend's words
+    (WORD_SEGMENTS) only when they lie farther than speech_gate.WORD_SPEECH_MARGIN from speech.
+    Raises queue.Empty when no instance frees up in time.
 
     The text stays exactly as the transcriber emitted it, leading space included: joined with
     nothing, those spaces are what makes a readable transcript - Whisper's segments and Parakeet's
@@ -270,7 +271,8 @@ def transcribe_piece(
     finally:
         model_pool.release_model(model, model_id=spec["id"])
     timed = []
-    for segment in speech_gate.keep_spoken(segments, ranges, request_id, length):
+    words = getattr(transcriber, "WORD_SEGMENTS", False)
+    for segment in speech_gate.keep_spoken(segments, ranges, request_id, length, words):
         if not segment["text"].strip():
             continue
         # Clamped to the piece: whisper pads to 30 s and can place segment times past the audio.
