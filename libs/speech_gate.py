@@ -13,8 +13,8 @@ detector does hear a voice.
 
 A backend whose segments are single words (Parakeet, WORD_SEGMENTS) is judged by distance instead:
 a share is meaningless on a word of a quarter of a second, where the detector's onset lag and its
-rounding of range edges are as long as the word itself, and it dropped the first word of most
-phrases.
+rounding of range edges are as long as the word itself, and it dropped the first word of a third
+of the phrases measured.
 """
 
 import io
@@ -51,8 +51,8 @@ WINDOW_JOIN_SECONDS = 0.1
 MIN_SPEECH_SHARE = 0.3
 
 # A word needs to lie within this many seconds of detected speech to be kept. Measured on the
-# deployment host: Parakeet's first word starts up to 0.28 s before the detector's range opens, and
-# the farthest real word lay 0.22 s from a range, in noise; the margin adds one 80 ms Parakeet frame.
+# deployment host, the farthest real Parakeet word lay 0.08 s from a range on clean phrases and
+# 0.22 s in noise; the margin adds one 80 ms Parakeet frame.
 WORD_SPEECH_MARGIN = 0.3
 
 # Whole-segment credit lines from subtitled video. Only lines nobody says in a conversation are
@@ -220,19 +220,17 @@ def keep_spoken(
         return segments
     kept = []
     for segment in segments:
+        # The distance or the share and the length, never the words: a transcript must not reach the log.
         if words:
             distance = speech_distance(segment, ranges)
             spoken = distance <= WORD_SPEECH_MARGIN
+            detail = "no speech detected" if math.isinf(distance) else f"{distance:.2f}s from speech"
         else:
             share = speech_share(segment, ranges, duration)
             spoken = share >= MIN_SPEECH_SHARE
+            detail = f"speech {share * 100:.0f}%"
         if not spoken or is_credit_line(segment["text"]):
-            # The distance or the share and the length, never the words: a transcript must not reach the log.
-            chars = len(segment["text"].strip())
-            if words:
-                logger.info("[%s] Dropped as not spoken (%.2fs from speech, %d chars)", request_id, distance, chars)
-            else:
-                logger.info("[%s] Dropped as not spoken (speech %.0f%%, %d chars)", request_id, share * 100, chars)
+            logger.info("[%s] Dropped as not spoken (%s, %d chars)", request_id, detail, len(segment["text"].strip()))
             metrics.DROPPED_SEGMENTS.inc()
             continue
         kept.append(segment)

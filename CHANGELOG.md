@@ -236,9 +236,9 @@
 
 #### Fixed
 - **The speech gate no longer drops Parakeet's first words.** Parakeet's segments are single
-  words, and a word of a quarter of a second starts before the voice detector's range as often
-  as not, so the 0.3 share meant for Whisper's phrases dropped the first word of most phrases:
-  with the gate on, its word error rate on 40 short phrases was 6.1 % against 1.1 % without it.
+  words, and on a word of a quarter of a second the voice detector's onset lag is as long as the
+  word, so the 0.3 share meant for Whisper's phrases dropped the first word of 14 of 40 short
+  phrases: with the gate on, its word error rate on them was 6.1% against 1.1% without it.
   A backend whose segments are words (`WORD_SEGMENTS`) now keeps a word that overlaps detected
   speech or lies within 0.3 s of it, on `/api/stt`, `/api/transcript`, `/v1`, the live stream
   and jobs alike; credit lines and words far from any speech are still dropped. Whisper's
