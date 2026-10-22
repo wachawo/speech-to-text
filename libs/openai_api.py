@@ -131,15 +131,15 @@ def transcribe_wav(wav_bio: io.BytesIO, model: Any, language: str | None, spec: 
     joined texts of the segments the gate keeps with it. `segments` are Whisper's own segments
     with every field it reports, or for a backend that reports none one segment made of its words.
     """
+    transcriber = backends.transcriber_for_backend(spec["backend"])
     with metrics.measure_inference(spec["id"], spec["backend"]):
-        result = backends.transcriber_for_backend(spec["backend"]).get_stt_result(
-            wav_bio, model=model, language=language, prompt=prompt
-        )
+        result = transcriber.get_stt_result(wav_bio, model=model, language=language, prompt=prompt)
     details = result.get("segment_details")
     segments = result["segments"] if details is None else details
     text = result["text"]
     if config.SPEECH_GATE:
-        segments = speech_gate.gate_wav(wav_bio, segments, get_request_id())
+        # The gate sees the transcriber's own segments: Parakeet's words, not the phrase built below.
+        segments = speech_gate.gate_wav(wav_bio, segments, get_request_id(), getattr(transcriber, "WORD_SEGMENTS", False))
         text = "".join(segment["text"] for segment in segments).strip()
     if details is None:
         segments = build_phrase_segment(segments)
