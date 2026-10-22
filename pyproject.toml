@@ -60,7 +60,7 @@ whisper = [
 # It is an add-on to `whisper`, not a standalone install: torch comes with that one.
 #   pip install "speech-to-text[whisper,diarize]"
 diarize = [
-    "transformers>=5.19.0",
+    "transformers>=5.20.1",
     "soundfile>=0.12.1",
     # The checkpoint's feature extractor requires it; transformers does not install it.
     "librosa>=0.11.0",
@@ -68,7 +68,7 @@ diarize = [
 # The Parakeet transcription backend: parakeet_tdt ships in released transformers.
 # An add-on rather than a standalone install, like `diarize`: torch comes with `whisper`.
 parakeet = [
-    "transformers>=5.19.0",
+    "transformers>=5.20.1",
     "soundfile>=0.12.1",
     "librosa>=0.11.0",
 ]
