@@ -6,7 +6,7 @@
 # recognize this architecture". The repository ships no custom modeling code either, so
 # trust_remote_code is not a way around it. 5.18.0 is the first release that carries it;
 # the images hold the exact version through constraints.txt.
-transformers>=5.19.0
+transformers>=5.20.1
 
 # Reading the 16 kHz mono WAV the server hands to the diarizer.
 soundfile>=0.12.1
