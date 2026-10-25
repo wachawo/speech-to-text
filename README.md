@@ -341,6 +341,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_MODEL`         | `small.en`              | Whisper model name (e.g. `small.en`, `turbo`) when `STT_MODELS` is empty |
 | `WHISPER_LANGUAGE`      | `en`                    | default language of every Whisper model             |
 | `WHISPER_BEAM_SIZE`     | `1`                     | Whisper beam width; `1` is greedy, a wider beam is slower and slightly more accurate |
+| `WHISPER_FP16`          | `true`                  | Half precision on CUDA; `false` on Pascal cards (Tesla P40), which run fp16 at 1/64 speed |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | model cache directory (`/opt/models` in Docker)     |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda`, or `auto`                             |
 | `STT_BACKEND`           | `whisper`               | transcription backend when `STT_MODELS` is empty: `whisper` or `parakeet` |

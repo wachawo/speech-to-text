@@ -197,6 +197,7 @@ def decode_buffer(
         temperature=0.0,
         beam_size=config.WHISPER_BEAM_SIZE,
         best_of=1,
+        fp16=config.WHISPER_FP16,
         condition_on_previous_text=False,
         initial_prompt=prompt or None,
     )

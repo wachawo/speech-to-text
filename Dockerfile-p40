@@ -1,0 +1,101 @@
+# GPU image for Pascal cards (Tesla P40, sm_61): CUDA 13 and the cu128/cu130 torch builds dropped
+# sm_50-sm_61, the cu126 build still carries sm_60 kernels, which run on sm_61.
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+
+# ffmpeg is required by pydub; libsndfile1 is required by soundfile.
+# libcublas-12-6 provides cuBLAS / cuBLASLt runtime that torch 2.9+cu126
+# calls into (cublasLtMatmul*). The `-runtime` base image does not include
+# it by default - without this package the first matmul on CUDA fails with
+# `CUBLAS_STATUS_NOT_INITIALIZED`.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-venv \
+        ffmpeg \
+        build-essential \
+        libsndfile1 \
+        libcublas-12-6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# uv: fast Python package installer (https://github.com/astral-sh/uv).
+# Pinned, not :latest - when the tag moved, every layer after this one missed the cache and
+# the build re-downloaded torch and the CUDA wheels (20 minutes on the deployment host).
+COPY --from=ghcr.io/astral-sh/uv:0.12.19 /uv /uvx /usr/local/bin/
+
+WORKDIR /opt
+
+ENV PATH="/opt/venv/bin:${PATH}"
+ENV UV_LINK_MODE=copy
+
+RUN uv venv /opt/venv --python python3
+
+# The CUDA wheels run to about 2.5 GB, and on a slow link uv's default 30 s read timeout has
+# failed a build here partway through them.
+ENV UV_HTTP_TIMEOUT=300
+
+# PyTorch in a layer of its own, ahead of requirements.txt. When both were one RUN after the
+# COPY, editing a comment in requirements.txt threw away the cached CUDA wheels and sent the
+# next build back to the network for all of them.
+RUN uv pip install --no-cache \
+        --extra-index-url https://download.pytorch.org/whl/cu126 \
+        torch==2.9.0+cu126 torchaudio==2.9.0+cu126
+
+COPY requirements.txt constraints.txt /opt/
+RUN uv pip install --no-cache -r requirements.txt -c constraints.txt
+
+# Parakeet is opt-in at build time too: `--build-arg PARAKEET=true`. It and the diarizer share
+# one transformers release, which carries both architectures; the assertions below check it.
+ARG PARAKEET=false
+COPY requirements-parakeet.txt /opt/requirements-parakeet.txt
+RUN if [ "$PARAKEET" = "true" ]; then uv pip install --no-cache -r requirements-parakeet.txt -c constraints.txt; fi
+
+# Speaker diarization is opt-in at build time: `--build-arg DIARIZE=true`. Off, the image is
+# what it was before diarization existed.
+ARG DIARIZE=false
+COPY requirements-diarize.txt /opt/requirements-diarize.txt
+RUN if [ "$DIARIZE" = "true" ]; then uv pip install --no-cache -r requirements-diarize.txt -c constraints.txt; fi
+
+# The torch wheel above is a CUDA build chosen on purpose, and the resolutions that follow it
+# are unconstrained: anything depending on torch can replace it, and the failure surfaces much
+# later as cuBLAS and cuDNN errors that read like a driver problem. Fail the build instead.
+RUN python3 -c "import torch; v = torch.__version__; assert '+cu126' in v, f'torch was replaced by {v}'"
+
+# Tesla P40 is sm_61 and runs on the sm_60 kernels. Checked from the compiled flags, because
+# get_arch_list() reads empty without a GPU at build time.
+RUN python3 -c "import torch; flags = torch._C._cuda_getArchFlags().split(); \
+assert 'sm_61' in flags or 'sm_60' in flags, f'no kernels for Pascal: {flags}'"
+RUN if [ "$DIARIZE" = "true" ]; then \
+        python3 -c "from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES; \
+assert 'nemotron3_diarization' in CONFIG_MAPPING_NAMES, 'this transformers build does not carry the diarization model'"; \
+    fi
+RUN if [ "$PARAKEET" = "true" ]; then \
+        python3 -c "from transformers import AutoModelForTDT; import transformers; \
+assert 'parakeet_tdt' in transformers.models.auto.configuration_auto.CONFIG_MAPPING_NAMES, \
+'this transformers build does not carry the parakeet model'"; \
+    fi
+
+# The stt user is created with --no-create-home and only the bind-mounted dirs are chowned,
+# so anything HuggingFace writes outside them fails. cache_dir covers the snapshot; HF_HOME
+# covers the rest, including the Xet chunk cache.
+ENV HF_HOME=/opt/models/hf
+
+COPY stt_server.py stt_client.py gu.py /opt/
+COPY libs /opt/libs
+RUN mkdir -p /opt/models /opt/logs /opt/recs
+
+# The server may run as a host uid (STT_UID) that owns nothing in the image and whose $HOME is
+# /root. numba, which librosa uses, caches its compiled functions next to the package or under
+# $HOME and refuses to import without somewhere to write ("cannot cache function ... no locator
+# available"), which took the diarizer down; everything else that caches goes under XDG too.
+ENV NUMBA_CACHE_DIR=/tmp/numba XDG_CACHE_HOME=/tmp/cache
+
+RUN useradd --no-create-home --shell /bin/false stt
+RUN chown -R stt:stt /opt
+
+# Start as root: the entrypoint chowns the bind-mounted dirs (the build-time
+# chown above cannot reach host-owned mounts) and drops privileges to stt.
+COPY entrypoint.sh /opt/entrypoint.sh
+RUN chmod +x /opt/entrypoint.sh
+ENTRYPOINT ["/opt/entrypoint.sh"]
+
+EXPOSE 5051
+CMD ["python3", "stt_server.py"]

@@ -127,6 +127,9 @@ COMPUTE_TYPE = os.getenv("COMPUTE_TYPE", "auto").lower()
 WHISPER_BEAM_SIZE = int(os.getenv("WHISPER_BEAM_SIZE", "1"))
 if WHISPER_BEAM_SIZE < 1:
     raise ValueError("WHISPER_BEAM_SIZE must be 1 or more")
+# Half precision on CUDA. Pascal cards (Tesla P40, sm_61) run fp16 at 1/64 of the fp32 rate,
+# so they set it to false; on CPU whisper always decodes in fp32.
+WHISPER_FP16 = os.getenv("WHISPER_FP16", "true").lower() in ("1", "true", "yes", "on")
 
 # Which backend transcribes when STT_MODELS is empty. With STT_MODELS set it is ignored.
 STT_BACKEND = os.getenv("STT_BACKEND", "whisper").strip().lower()
