@@ -368,9 +368,8 @@ speech-to-text/
 │   ├── backends.py      # имя бэкенда -> модуль транскрипции (STT_BACKEND или запись STT_MODELS)
 │   ├── registry.py      # какие модели загружены и что может выбрать запрос
 │   └── diarize.py       # диаризация говорящих (кто когда говорил, без текста)
-├── Dockerfile           # сборка под GPU (CUDA 13.0)
+├── Dockerfile           # сборка под GPU (CUDA 13.0; аргументы сборки для CUDA 12.6 и Pascal)
 ├── Dockerfile-cpu       # сборка под CPU
-├── Dockerfile-p40       # сборка под GPU Pascal (CUDA 12.6, Tesla P40)
 ├── Dockerfile-www       # образ веб-интерфейса (nginx)
 ├── nginx/               # конфигурация stt_www: статический интерфейс, прокси /api/, самоподписанный TLS
 ├── www/                 # веб-интерфейс: Vue 2 без этапа сборки, библиотеки в репозитории

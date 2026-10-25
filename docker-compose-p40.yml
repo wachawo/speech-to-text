@@ -1,11 +1,19 @@
-# Tesla P40 (Pascal, sm_61) variant of docker-compose.yml: CUDA 12.6 image, fp32 Whisper, no web UI.
+# Tesla P40 (Pascal, sm_61) variant of docker-compose.yml: the same Dockerfile built for CUDA 12.6,
+# fp32 Whisper, no web UI.
 #   docker compose -f docker-compose-p40.yml up -d --build
 services:
   stt_server:
     build:
       context: .
-      dockerfile: Dockerfile-p40
+      dockerfile: Dockerfile
       args:
+        # The main Dockerfile, built for Pascal: CUDA 12.6 and the cu126 torch build, whose sm_60
+        # kernels run on the P40's sm_61. The five go together; see the top of the Dockerfile.
+        CUDA_IMAGE: "nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04"
+        CUBLAS_PACKAGE: "libcublas-12-6"
+        TORCH_VERSION: "2.9.0"
+        TORCH_CUDA: "cu126"
+        TORCH_ARCHES: "sm_61 sm_60"
         # Build the diarization backend into the image: DIARIZE=true docker compose up --build
         DIARIZE: "${DIARIZE:-false}"
         # Build the Parakeet backend into the image: PARAKEET=true docker compose up --build

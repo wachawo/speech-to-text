@@ -168,7 +168,7 @@ Read speech is the easy case: phone audio, accents and noise are likely to raise
 
 ### Pascal GPUs (Tesla P40)
 
-The main GPU image cannot run on Pascal cards: CUDA 13 and the cu128/cu130 torch builds no longer carry kernels for sm_50-sm_61. `Dockerfile-p40` builds on CUDA 12.6 with `torch==2.9.0+cu126`, whose sm_60 kernels run on a P40 (sm_61), and `docker-compose-p40.yml` runs it as `stt_server_p40`, without the web UI:
+The main GPU image cannot run on Pascal cards: CUDA 13 and the cu128/cu130 torch builds no longer carry kernels for sm_50-sm_61. `docker-compose-p40.yml` builds the same `Dockerfile` with five build args set for CUDA 12.6 and `torch==2.9.0+cu126`, whose sm_60 kernels run on a P40 (sm_61), and runs it as `stt_server_p40`, without the web UI:
 
 ```bash
 docker compose -f docker-compose-p40.yml up -d --build

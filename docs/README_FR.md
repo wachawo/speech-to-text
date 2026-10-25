@@ -368,9 +368,8 @@ speech-to-text/
 │   ├── backends.py      # nom de backend -> module de transcription (STT_BACKEND ou une entrée de STT_MODELS)
 │   ├── registry.py      # quels modèles sont chargés et ce qu'une requête peut choisir
 │   └── diarize.py       # diarisation des locuteurs (qui a parlé et quand, sans texte)
-├── Dockerfile           # Construction GPU (CUDA 13.0)
+├── Dockerfile           # Construction GPU (CUDA 13.0 ; arguments de build pour CUDA 12.6 et Pascal)
 ├── Dockerfile-cpu       # Construction CPU
-├── Dockerfile-p40       # Construction GPU Pascal (CUDA 12.6, Tesla P40)
 ├── Dockerfile-www       # Image de l'interface web (nginx)
 ├── nginx/               # Configuration de stt_www : interface statique, proxy /api/, TLS auto-signé
 ├── www/                 # Interface web : Vue 2 sans étape de build, bibliothèques embarquées

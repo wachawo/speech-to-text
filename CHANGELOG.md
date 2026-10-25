@@ -4,9 +4,11 @@
 
 #### Added
 - **An image for Pascal GPUs such as the Tesla P40.** CUDA 13 and the cu128/cu130 torch
-  builds dropped sm_50-sm_61, so the main GPU image cannot run on them. `Dockerfile-p40`
-  builds on CUDA 12.6 with `torch==2.9.0+cu126`, whose sm_60 kernels run on sm_61, asserts
-  both at build time, and `docker-compose-p40.yml` runs it without the web UI.
+  builds dropped sm_50-sm_61, so the main GPU image cannot run on them. The `Dockerfile`
+  takes five build args - `CUDA_IMAGE`, `CUBLAS_PACKAGE`, `TORCH_VERSION`, `TORCH_CUDA` and
+  `TORCH_ARCHES` - whose defaults are the main image as before; `docker-compose-p40.yml` sets
+  them for CUDA 12.6 and `torch==2.9.0+cu126`, whose sm_60 kernels run on sm_61, and runs the
+  result without the web UI. The build asserts the torch build and its kernels either way.
   `WHISPER_FP16` (default `true`) switches Whisper's half precision on CUDA; the P40 compose
   file defaults it to `false`, since Pascal runs fp16 at 1/64 of the fp32 rate: on a P40,
   `turbo` answered a short phrase in 0.92 s in fp32 against 3.65 s in fp16, with the same text.
