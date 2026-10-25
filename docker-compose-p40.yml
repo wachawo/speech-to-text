@@ -40,8 +40,9 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
       # Force CUDA backend.
       COMPUTE_TYPE: "cuda"
-      # Pascal runs fp16 at 1/64 of the fp32 rate
-      WHISPER_FP16: "false"
+      # Pascal runs fp16 at 1/64 of the fp32 rate, so Whisper decodes in fp32 here unless .env says
+      # otherwise. Interpolated, not pinned: a literal in this block would override env_file.
+      WHISPER_FP16: "${WHISPER_FP16:-false}"
       # DIARIZE_ENABLED is deliberately NOT set here: `environment:` overrides `env_file:`, so
       # pinning it would silently ignore the value in .env, which is where every document says
       # to put it. It is a runtime switch; DIARIZE above is the build arg. Turning it on for an

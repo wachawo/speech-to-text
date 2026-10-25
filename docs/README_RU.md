@@ -55,6 +55,7 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
+docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
 
 Для сборки под GPU на хосте нужен `nvidia-container-toolkit`. При первом запуске модель Whisper скачивается в `./models`. Работа на сервере - обновления, откаты, сертификаты, зависимости - описана в [docs/DEPLOY.md](DEPLOY.md).
@@ -314,6 +315,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_MODEL`         | `small.en`              | имя модели Whisper (например, `small.en`, `turbo`), если `STT_MODELS` пуст |
 | `WHISPER_LANGUAGE`      | `en`                    | язык по умолчанию для всех моделей Whisper |
 | `WHISPER_BEAM_SIZE`     | `1`                     | ширина луча (beam) Whisper; `1` - жадный поиск, более широкий луч медленнее и чуть точнее |
+| `WHISPER_FP16`          | `true`                  | половинная точность на CUDA; `false` на картах Pascal (Tesla P40), где fp16 в 64 раза медленнее |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | каталог кеша моделей (`/opt/models` в Docker)       |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda` или `auto`                             |
 | `STT_BACKEND`           | `whisper`               | бэкенд транскрипции: `whisper` или `parakeet`, если `STT_MODELS` пуст |
@@ -368,6 +370,7 @@ speech-to-text/
 │   └── diarize.py       # диаризация говорящих (кто когда говорил, без текста)
 ├── Dockerfile           # сборка под GPU (CUDA 13.0)
 ├── Dockerfile-cpu       # сборка под CPU
+├── Dockerfile-p40       # сборка под GPU Pascal (CUDA 12.6, Tesla P40)
 ├── Dockerfile-www       # образ веб-интерфейса (nginx)
 ├── nginx/               # конфигурация stt_www: статический интерфейс, прокси /api/, самоподписанный TLS
 ├── www/                 # веб-интерфейс: Vue 2 без этапа сборки, библиотеки в репозитории

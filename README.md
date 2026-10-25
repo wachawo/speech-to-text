@@ -65,6 +65,7 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
+docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
 
 The GPU build needs `nvidia-container-toolkit` on the host, and the compose file requests the GPU through CDI, so the host also needs a CDI spec. Generate it once, and again after every driver update:
@@ -396,6 +397,7 @@ speech-to-text/
 │   └── diarize.py       # speaker diarization (who spoke when, no text)
 ├── Dockerfile           # GPU build (CUDA 13.0)
 ├── Dockerfile-cpu       # CPU build
+├── Dockerfile-p40       # Pascal GPU build (CUDA 12.6, Tesla P40)
 ├── Dockerfile-www       # web UI image (nginx)
 ├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS
 ├── www/                 # web UI: Vue 2 without a build step, libraries vendored

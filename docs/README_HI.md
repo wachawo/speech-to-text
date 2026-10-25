@@ -55,6 +55,7 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
+docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
 
 GPU बिल्ड को होस्ट पर `nvidia-container-toolkit` की आवश्यकता होती है। पहली बार चलाने पर Whisper मॉडल `./models` में डाउनलोड हो जाता है। सर्वर पर इसे चलाना - अपडेट, रोलबैक, प्रमाणपत्र, निर्भरताएँ - [docs/DEPLOY.md](DEPLOY.md) में बताया गया है।
@@ -314,6 +315,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_MODEL`         | `small.en`              | Whisper मॉडल नाम (जैसे `small.en`, `turbo`) (जब `STT_MODELS` खाली हो) |
 | `WHISPER_LANGUAGE`      | `en`                    | हर Whisper मॉडल की डिफ़ॉल्ट भाषा |
 | `WHISPER_BEAM_SIZE`     | `1`                     | Whisper की बीम चौड़ाई; `1` ग्रीडी है, चौड़ी बीम धीमी और थोड़ी अधिक सटीक है |
+| `WHISPER_FP16`          | `true`                  | CUDA पर हाफ़ प्रिसिज़न; Pascal कार्ड (Tesla P40) पर `false`, जो fp16 को 1/64 गति से चलाते हैं |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | मॉडल कैश डायरेक्टरी (Docker में `/opt/models`)        |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda`, या `auto`                             |
 | `STT_BACKEND`           | `whisper`               | ट्रांसक्रिप्शन बैकएंड: `whisper` या `parakeet` (जब `STT_MODELS` खाली हो) |
@@ -368,6 +370,7 @@ speech-to-text/
 │   └── diarize.py       # speaker diarization (who spoke when, no text)
 ├── Dockerfile           # GPU build (CUDA 13.0)
 ├── Dockerfile-cpu       # CPU build
+├── Dockerfile-p40       # Pascal GPU build (CUDA 12.6, Tesla P40)
 ├── Dockerfile-www       # web UI image (nginx)
 ├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS
 ├── www/                 # web UI: Vue 2 without a build step, libraries vendored
