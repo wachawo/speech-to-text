@@ -55,6 +55,7 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
+docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
 
 La construction GPU nécessite `nvidia-container-toolkit` sur l'hôte. Le premier lancement télécharge le modèle Whisper dans `./models`. L'exploitation sur un serveur - mises à jour, retours arrière, certificats, dépendances - est traitée dans [docs/DEPLOY.md](DEPLOY.md).
@@ -314,6 +315,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_MODEL`         | `small.en`              | nom du modèle Whisper (par ex. `small.en`, `turbo`) lorsque `STT_MODELS` est vide |
 | `WHISPER_LANGUAGE`      | `en`                    | langue par défaut de chaque modèle Whisper |
 | `WHISPER_BEAM_SIZE`     | `1`                     | largeur du faisceau (beam) de Whisper ; `1` est glouton, un faisceau plus large est plus lent et un peu plus précis |
+| `WHISPER_FP16`          | `true`                  | demi-précision sur CUDA ; `false` sur les cartes Pascal (Tesla P40), qui exécutent le fp16 à 1/64 de la vitesse |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | répertoire de cache des modèles (`/opt/models` dans Docker) |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda` ou `auto`                              |
 | `STT_BACKEND`           | `whisper`               | backend de transcription : `whisper` ou `parakeet` lorsque `STT_MODELS` est vide |
@@ -366,7 +368,7 @@ speech-to-text/
 │   ├── backends.py      # nom de backend -> module de transcription (STT_BACKEND ou une entrée de STT_MODELS)
 │   ├── registry.py      # quels modèles sont chargés et ce qu'une requête peut choisir
 │   └── diarize.py       # diarisation des locuteurs (qui a parlé et quand, sans texte)
-├── Dockerfile           # Construction GPU (CUDA 13.0)
+├── Dockerfile           # Construction GPU (CUDA 13.0 ; arguments de build pour CUDA 12.6 et Pascal)
 ├── Dockerfile-cpu       # Construction CPU
 ├── Dockerfile-www       # Image de l'interface web (nginx)
 ├── nginx/               # Configuration de stt_www : interface statique, proxy /api/, TLS auto-signé

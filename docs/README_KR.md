@@ -55,6 +55,7 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
+docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
 
 GPU 빌드는 호스트에 `nvidia-container-toolkit`가 필요합니다. 첫 실행 시 Whisper 모델을 `./models`로 내려받습니다. 서버에서의 운영(업데이트, 롤백, 인증서, 의존성)은 [docs/DEPLOY.md](DEPLOY.md)에서 다룹니다.
@@ -314,6 +315,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_MODEL`         | `small.en`              | Whisper 모델 이름(예: `small.en`, `turbo`)(`STT_MODELS`가 비어 있을 때) |
 | `WHISPER_LANGUAGE`      | `en`                    | 모든 Whisper 모델의 기본 언어 |
 | `WHISPER_BEAM_SIZE`     | `1`                     | Whisper 빔 너비. `1`은 탐욕 탐색이며, 넓은 빔은 느리지만 조금 더 정확함 |
+| `WHISPER_FP16`          | `true`                  | CUDA에서 반정밀도. fp16을 1/64 속도로 실행하는 Pascal 카드(Tesla P40)에서는 `false` |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | 모델 캐시 디렉터리(Docker에서는 `/opt/models`)     |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda`, 또는 `auto`                         |
 | `STT_BACKEND`           | `whisper`               | 전사 백엔드: `whisper` 또는 `parakeet`(`STT_MODELS`가 비어 있을 때) |
@@ -366,7 +368,7 @@ speech-to-text/
 │   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
 │   ├── registry.py      # which models are loaded and what a request may select
 │   └── diarize.py       # speaker diarization (who spoke when, no text)
-├── Dockerfile           # GPU build (CUDA 13.0)
+├── Dockerfile           # GPU build (CUDA 13.0; build args for CUDA 12.6 and Pascal)
 ├── Dockerfile-cpu       # CPU build
 ├── Dockerfile-www       # web UI image (nginx)
 ├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS

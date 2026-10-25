@@ -55,6 +55,7 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
+docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
 
 Der GPU-Build benötigt `nvidia-container-toolkit` auf dem Host. Beim ersten Lauf wird das Whisper-Modell nach `./models` heruntergeladen. Den Betrieb auf einem Server - Updates, Rollbacks, Zertifikate, Abhängigkeiten - behandelt [docs/DEPLOY.md](DEPLOY.md).
@@ -314,6 +315,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_MODEL`         | `small.en`              | Whisper-Modellname (z. B. `small.en`, `turbo`), wenn `STT_MODELS` leer ist |
 | `WHISPER_LANGUAGE`      | `en`                    | Standardsprache jedes Whisper-Modells |
 | `WHISPER_BEAM_SIZE`     | `1`                     | Beam-Breite von Whisper; `1` ist greedy, ein breiterer Beam ist langsamer und etwas genauer |
+| `WHISPER_FP16`          | `true`                  | Halbe Genauigkeit auf CUDA; `false` auf Pascal-Karten (Tesla P40), die fp16 mit 1/64 der Geschwindigkeit rechnen |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | Verzeichnis des Modell-Caches (`/opt/models` in Docker) |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda` oder `auto`                            |
 | `STT_BACKEND`           | `whisper`               | Transkriptions-Backend: `whisper` oder `parakeet`, wenn `STT_MODELS` leer ist |
@@ -366,7 +368,7 @@ speech-to-text/
 │   ├── backends.py      # Backend-Name -> Transkriptionsmodul (STT_BACKEND oder ein STT_MODELS-Eintrag)
 │   ├── registry.py      # welche Modelle geladen sind und was eine Anfrage wählen darf
 │   └── diarize.py       # Sprecherdiarisierung (wer wann gesprochen hat, kein Text)
-├── Dockerfile           # GPU-Build (CUDA 13.0)
+├── Dockerfile           # GPU-Build (CUDA 13.0; Build-Argumente für CUDA 12.6 und Pascal)
 ├── Dockerfile-cpu       # CPU-Build
 ├── Dockerfile-www       # Image der Web-Oberfläche (nginx)
 ├── nginx/               # stt_www-Konfiguration: statische Oberfläche, /api/-Proxy, selbstsigniertes TLS

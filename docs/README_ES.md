@@ -55,6 +55,7 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
+docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
 
 La compilación para GPU necesita `nvidia-container-toolkit` en el host. La primera ejecución descarga el modelo Whisper en `./models`. El funcionamiento en un servidor - actualizaciones, reversiones, certificados, dependencias - se describe en [docs/DEPLOY.md](DEPLOY.md).
@@ -314,6 +315,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_MODEL`         | `small.en`              | nombre del modelo Whisper (p. ej. `small.en`, `turbo`) cuando `STT_MODELS` está vacío |
 | `WHISPER_LANGUAGE`      | `en`                    | idioma por defecto de todos los modelos Whisper |
 | `WHISPER_BEAM_SIZE`     | `1`                     | anchura del haz (beam) de Whisper; `1` es voraz, un haz más ancho es más lento y algo más preciso |
+| `WHISPER_FP16`          | `true`                  | media precisión en CUDA; `false` en tarjetas Pascal (Tesla P40), que ejecutan fp16 a 1/64 de la velocidad |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | directorio de caché del modelo (`/opt/models` en Docker) |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda` o `auto`                             |
 | `STT_BACKEND`           | `whisper`               | backend de transcripción: `whisper` o `parakeet` cuando `STT_MODELS` está vacío |
@@ -366,7 +368,7 @@ speech-to-text/
 │   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
 │   ├── registry.py      # which models are loaded and what a request may select
 │   └── diarize.py       # speaker diarization (who spoke when, no text)
-├── Dockerfile           # GPU build (CUDA 13.0)
+├── Dockerfile           # GPU build (CUDA 13.0; build args for CUDA 12.6 and Pascal)
 ├── Dockerfile-cpu       # CPU build
 ├── Dockerfile-www       # web UI image (nginx)
 ├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS

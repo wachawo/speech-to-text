@@ -65,6 +65,7 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
+docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
 
 The GPU build needs `nvidia-container-toolkit` on the host, and the compose file requests the GPU through CDI, so the host also needs a CDI spec. Generate it once, and again after every driver update:
@@ -341,6 +342,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_MODEL`         | `small.en`              | Whisper model name (e.g. `small.en`, `turbo`) when `STT_MODELS` is empty |
 | `WHISPER_LANGUAGE`      | `en`                    | default language of every Whisper model             |
 | `WHISPER_BEAM_SIZE`     | `1`                     | Whisper beam width; `1` is greedy, a wider beam is slower and slightly more accurate |
+| `WHISPER_FP16`          | `true`                  | Half precision on CUDA; `false` on Pascal cards (Tesla P40), which run fp16 at 1/64 speed |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | model cache directory (`/opt/models` in Docker)     |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda`, or `auto`                             |
 | `STT_BACKEND`           | `whisper`               | transcription backend when `STT_MODELS` is empty: `whisper` or `parakeet` |
@@ -393,7 +395,7 @@ speech-to-text/
 │   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
 │   ├── registry.py      # which models are loaded and what a request may select
 │   └── diarize.py       # speaker diarization (who spoke when, no text)
-├── Dockerfile           # GPU build (CUDA 13.0)
+├── Dockerfile           # GPU build (CUDA 13.0; build args for CUDA 12.6 and Pascal)
 ├── Dockerfile-cpu       # CPU build
 ├── Dockerfile-www       # web UI image (nginx)
 ├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS

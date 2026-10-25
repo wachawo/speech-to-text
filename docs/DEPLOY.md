@@ -166,6 +166,23 @@ Measured on 2026-10-12 on one NVIDIA GB10 with 240 phrases of LibriSpeech read s
 
 Read speech is the easy case: phone audio, accents and noise are likely to raise every error rate, and the ranking between the models may differ on them. GPU memory adds up over every model the server loads, times the number of workers, and is shared with every other process on the same GPU.
 
+### Pascal GPUs (Tesla P40)
+
+The main GPU image cannot run on Pascal cards: CUDA 13 and the cu128/cu130 torch builds no longer carry kernels for sm_50-sm_61. `docker-compose-p40.yml` builds the same `Dockerfile` with five build args set for CUDA 12.6 and `torch==2.9.0+cu126`, whose sm_60 kernels run on a P40 (sm_61), and runs it as `stt_server_p40`, without the web UI:
+
+```bash
+docker compose -f docker-compose-p40.yml up -d --build
+```
+
+Everything else, `.env` included, works as on the main image. The compose file sets `WHISPER_FP16=false` unless `.env` says otherwise, because Pascal runs fp16 at 1/64 of the fp32 rate. Measured on a Tesla P40 with 40 LibriSpeech phrases of 1 to 3 s, Whisper `turbo` beam 1:
+
+| `WHISPER_FP16` | p50     | p95     | WER  |
+| -------------- | ------- | ------- | ---- |
+| `false`        | 0.92 s  | 1.05 s  | 4.3% |
+| `true`         | 3.65 s  | 4.54 s  | 4.3% |
+
+Parakeet v3 answered in 0.25 s (p50) with a WER of 1.1% on the same phrases. Both are about four times slower than on a GB10, with the same text.
+
 ### Dependencies
 
 `constraints.txt` holds every package version the GPU image resolved. All `pip install` steps in the Dockerfiles run with `-c constraints.txt`, so a rebuild installs the versions that were tested instead of whatever PyPI has that day. After a dependency change has been built and verified, freeze it with `make constraints` and commit the result.

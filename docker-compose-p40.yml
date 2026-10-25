@@ -1,0 +1,129 @@
+# Tesla P40 (Pascal, sm_61) variant of docker-compose.yml: the same Dockerfile built for CUDA 12.6,
+# fp32 Whisper, no web UI.
+#   docker compose -f docker-compose-p40.yml up -d --build
+services:
+  stt_server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # The main Dockerfile, built for Pascal: CUDA 12.6 and the cu126 torch build, whose sm_60
+        # kernels run on the P40's sm_61. The five go together; see the top of the Dockerfile.
+        CUDA_IMAGE: "nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04"
+        CUBLAS_PACKAGE: "libcublas-12-6"
+        TORCH_VERSION: "2.9.0"
+        TORCH_CUDA: "cu126"
+        TORCH_ARCHES: "sm_61 sm_60"
+        # Build the diarization backend into the image: DIARIZE=true docker compose up --build
+        DIARIZE: "${DIARIZE:-false}"
+        # Build the Parakeet backend into the image: PARAKEET=true docker compose up --build
+        PARAKEET: "${PARAKEET:-false}"
+    image: stt_server_p40
+    pull_policy: build
+    container_name: stt_server_p40
+    hostname: stt_server_p40
+    restart: unless-stopped
+    networks:
+      - stt_network
+    env_file:
+      - .env
+    environment:
+      TZ: America/New_York
+      STT_HOST: "0.0.0.0"
+      STT_PORT: "${STT_PORT:-5051}"
+      # One instance per model unless .env says otherwise. Interpolated rather than pinned: a value
+      # in this block overrides env_file, so a literal here would silently ignore STT_POOL_SIZE in .env.
+      STT_POOL_SIZE: "${STT_POOL_SIZE:-1}"
+      STT_DEBUG: "false"
+      # 100 MB covers about 50 minutes of 16 kHz WAV and hours of compressed audio; .env overrides it.
+      MAX_CONTENT_LENGTH_MB: "${MAX_CONTENT_LENGTH_MB:-100}"
+      CORS_ORIGINS: "*"
+      GUNICORN_WORKERS: "4"
+      WHISPER_DOWNLOAD_ROOT: "/opt/models"
+      # Background jobs live under the bind-mounted recs/, so they survive a container rebuild.
+      JOBS_DIR: "/opt/recs/jobs"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NVIDIA_VISIBLE_DEVICES: "all"
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
+      # Force CUDA backend.
+      COMPUTE_TYPE: "cuda"
+      # Pascal runs fp16 at 1/64 of the fp32 rate, so Whisper decodes in fp32 here unless .env says
+      # otherwise. Interpolated, not pinned: a literal in this block would override env_file.
+      WHISPER_FP16: "${WHISPER_FP16:-false}"
+      # DIARIZE_ENABLED is deliberately NOT set here: `environment:` overrides `env_file:`, so
+      # pinning it would silently ignore the value in .env, which is where every document says
+      # to put it. It is a runtime switch; DIARIZE above is the build arg. Turning it on for an
+      # image built without the backend answers 503 and logs why, rather than failing to start.
+      # STT_BACKEND selects the transcriber when STT_MODELS is empty; parakeet needs a
+      # PARAKEET=true image. STT_MODELS and STT_DEFAULT_MODEL, which load several models side
+      # by side, are deliberately NOT set here: they come from .env through env_file, which this
+      # block would override. An STT_MODELS entry without @pool gets STT_POOL_SIZE, 1 above
+      # unless .env sets it; several large models also take longer to load than the healthcheck
+      # start_period.
+      STT_BACKEND: "${STT_BACKEND:-whisper}"
+      PARAKEET_DOWNLOAD_ROOT: "/opt/models"
+      DIARIZE_POOL_SIZE: "1"
+      # Pinned to the mount for the same reason WHISPER_DOWNLOAD_ROOT is: entrypoint.sh chowns
+      # exactly these paths, and a cache anywhere else is a PermissionError for the stt user.
+      DIARIZE_DOWNLOAD_ROOT: "/opt/models"
+    ports:
+      - "${STT_PORT:-5051}:${STT_PORT:-5051}"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ./stt_server.py:/opt/stt_server.py:ro
+      - ./stt_client.py:/opt/stt_client.py:ro
+      - ./gu.py:/opt/gu.py:ro
+      - ./libs:/opt/libs:ro
+      - ./models:/opt/models
+      - ./logs:/opt/logs
+      - ./recs:/opt/recs
+    # An upload pydub has to decode is copied by ffmpeg into an unlinked file under /tmp while it
+    # decodes; a tmpfs keeps that copy in memory. Nothing else here has to survive a restart: the
+    # model weights go to /opt/models, and /tmp holds only numba's cache and the other caches under
+    # XDG_CACHE_HOME (both set by the image) and gu.py's model-load lock. A job's upload, which may
+    # be gigabytes, is spooled under JOBS_DIR rather than here.
+    tmpfs:
+      - /tmp
+    # GPU passthrough via CDI. Requires a CDI spec on the host:
+    #   sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+    # (nvidia-container-toolkit >= 1.14; regenerate after a driver update).
+    #
+    # Preferred over deploy.resources.reservations.devices: with that form a
+    # `systemctl daemon-reload` silently revokes the container's access to the
+    # nvidia device nodes on cgroup v2. The container keeps running and looks
+    # healthy, but nvidia-smi inside reports "Failed to initialize NVML" and
+    # CUDA calls start failing with misleading cuDNN/cuBLAS errors.
+    devices:
+      - "nvidia.com/gpu=all"
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "128m"
+        max-file: "3"
+    entrypoint: ["/opt/entrypoint.sh"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${STT_PORT:-5051}/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    command:
+      - "python3 stt_server.py"
+      # - "gunicorn --config gu.py stt_server:app"
+
+
+networks:
+  stt_network:
+    driver: bridge
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.enable_ipv6: "false"
+

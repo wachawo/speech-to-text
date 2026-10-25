@@ -55,6 +55,7 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
+docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
 
 A build com GPU precisa do `nvidia-container-toolkit` no host. A primeira execução baixa o modelo do Whisper para `./models`. A operação em um servidor - atualizações, rollbacks, certificados, dependências - é descrita em [docs/DEPLOY.md](DEPLOY.md).
@@ -314,6 +315,7 @@ O `.env` é carregado tanto pelo servidor quanto pelo cliente através do `pytho
 | `WHISPER_MODEL`         | `small.en`              | nome do modelo Whisper (ex.: `small.en`, `turbo`) quando `STT_MODELS` está vazio |
 | `WHISPER_LANGUAGE`      | `en`                    | idioma padrão de todos os modelos Whisper |
 | `WHISPER_BEAM_SIZE`     | `1`                     | largura do beam do Whisper; `1` é guloso, um beam mais largo é mais lento e um pouco mais preciso |
+| `WHISPER_FP16`          | `true`                  | meia precisão em CUDA; `false` em placas Pascal (Tesla P40), que executam fp16 a 1/64 da velocidade |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | diretório de cache de modelos (`/opt/models` no Docker) |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda` ou `auto`                             |
 | `STT_BACKEND`           | `whisper`               | backend de transcrição: `whisper` ou `parakeet` quando `STT_MODELS` está vazio |
@@ -366,7 +368,7 @@ speech-to-text/
 │   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
 │   ├── registry.py      # which models are loaded and what a request may select
 │   └── diarize.py       # speaker diarization (who spoke when, no text)
-├── Dockerfile           # GPU build (CUDA 13.0)
+├── Dockerfile           # GPU build (CUDA 13.0; build args for CUDA 12.6 and Pascal)
 ├── Dockerfile-cpu       # CPU build
 ├── Dockerfile-www       # web UI image (nginx)
 ├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS
