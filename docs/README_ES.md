@@ -55,8 +55,9 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
-docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
+
+Una tarjeta Pascal como la Tesla P40 usa el mismo archivo compose y el mismo contenedor `stt_server`: CUDA 13 ya no incluye kernels para ella, así que su `.env` elige una build para CUDA 12.6 y Whisper en fp32 con el bloque Pascal de `.env.example`. Detalles en [docs/DEPLOY.md](DEPLOY.md).
 
 La compilación para GPU necesita `nvidia-container-toolkit` en el host. La primera ejecución descarga el modelo Whisper en `./models`. El funcionamiento en un servidor - actualizaciones, reversiones, certificados, dependencias - se describe en [docs/DEPLOY.md](DEPLOY.md).
 
@@ -334,6 +335,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `SPEECH_GATE`           | `true`                  | descarta el texto transcrito que nadie dijo (detector de voz) |
 | `STT_UID`, `STT_GID`    | (`stt` de la imagen, 1001) | usuario del host dueño de `models/`, `logs/`, `recs/` (Docker) |
 | `HF_HUB_OFFLINE`        | `0`                     | `1` una vez que los modelos están en caché: sin peticiones al hub al arrancar |
+| `CUDA_IMAGE`, `CUBLAS_PACKAGE`, `TORCH_VERSION`, `TORCH_CUDA`, `TORCH_ARCHES` | CUDA 13.0 | build CUDA de la imagen GPU (compose); una tarjeta Pascal define las cinco, ver `.env.example` |
 | `STT_WWW_PORT`          | `5053`                  | puerto de la interfaz web (compose)                 |
 | `STT_WWW_SCHEME`        | `https`                 | esquema de la interfaz web, `https` o `http` (compose) |
 | `STT_URL`               | `http://localhost:5051` | cliente: URL base del servidor                     |

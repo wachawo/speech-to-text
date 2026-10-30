@@ -55,8 +55,9 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
-docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
+
+Tesla P40 같은 Pascal 카드도 같은 compose 파일과 같은 `stt_server` 컨테이너로 실행됩니다. CUDA 13에는 이 카드용 커널이 더 이상 없으므로, `.env.example`의 Pascal 블록을 `.env`에 넣어 CUDA 12.6 빌드와 fp32 Whisper를 선택합니다. 자세한 내용은 [docs/DEPLOY.md](DEPLOY.md)를 참고하세요.
 
 GPU 빌드는 호스트에 `nvidia-container-toolkit`가 필요합니다. 첫 실행 시 Whisper 모델을 `./models`로 내려받습니다. 서버에서의 운영(업데이트, 롤백, 인증서, 의존성)은 [docs/DEPLOY.md](DEPLOY.md)에서 다룹니다.
 
@@ -334,6 +335,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `SPEECH_GATE`           | `true`                  | 아무도 말하지 않은 전사 텍스트 제거(음성 검출기)    |
 | `STT_UID`, `STT_GID`    | (이미지의 `stt`, 1001)  | `models/`, `logs/`, `recs/`를 소유하는 호스트 사용자(Docker) |
 | `HF_HUB_OFFLINE`        | `0`                     | 모델이 캐시된 뒤 `1`: 시작 시 허브 요청 없음        |
+| `CUDA_IMAGE`, `CUBLAS_PACKAGE`, `TORCH_VERSION`, `TORCH_CUDA`, `TORCH_ARCHES` | CUDA 13.0 | GPU 이미지의 CUDA 빌드(compose). Pascal 카드는 다섯 개를 모두 설정, `.env.example` 참고 |
 | `STT_WWW_PORT`          | `5053`                  | 웹 UI 포트(compose)                                 |
 | `STT_WWW_SCHEME`        | `https`                 | 웹 UI 스킴, `https` 또는 `http`(compose)              |
 | `STT_URL`               | `http://localhost:5051` | 클라이언트: 서버 기본 URL                          |

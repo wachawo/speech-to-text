@@ -4,6 +4,16 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
+        # The CUDA build, set from .env per host. The defaults are the main image (CUDA 13.0,
+        # torch 2.10.0+cu130, for current cards and the GB10) and must stay equal to the ARG
+        # defaults in the Dockerfile: compose passes every arg listed here, and an empty one would
+        # replace the Dockerfile's default with an empty string. The five go together; a Pascal
+        # host (Tesla P40) sets all five in .env, see .env.example and docs/DEPLOY.md.
+        CUDA_IMAGE: "${CUDA_IMAGE:-nvidia/cuda:13.0.3-cudnn-runtime-ubuntu24.04}"
+        CUBLAS_PACKAGE: "${CUBLAS_PACKAGE:-libcublas-13-0}"
+        TORCH_VERSION: "${TORCH_VERSION:-2.10.0}"
+        TORCH_CUDA: "${TORCH_CUDA:-cu130}"
+        TORCH_ARCHES: "${TORCH_ARCHES:-sm_121 sm_120 compute_120}"
         # Build the diarization backend into the image: DIARIZE=true docker compose up --build
         DIARIZE: "${DIARIZE:-false}"
         # Build the Parakeet backend into the image: PARAKEET=true docker compose up --build
@@ -18,42 +28,43 @@ services:
     env_file:
       - .env
     environment:
-      TZ: America/New_York
+      # Every value in this block overrides env_file, so a literal here is a setting .env cannot
+      # change. Anything a host may tune is therefore written "${NAME:-default}"; only what the
+      # image and the bind mounts fix is pinned, each with its reason. DIARIZE_ENABLED, STT_MODELS,
+      # STT_DEFAULT_MODEL and WHISPER_FP16 are not here at all: they come from .env through env_file.
+      TZ: "${TZ:-America/New_York}"
+      # Pinned: the server has to listen on every interface of the container to be reached through
+      # the published port and from stt_www, whatever a .env written for a bare-metal run says.
       STT_HOST: "0.0.0.0"
       STT_PORT: "${STT_PORT:-5051}"
-      # One instance per model unless .env says otherwise. Interpolated rather than pinned: a value
-      # in this block overrides env_file, so a literal here would silently ignore STT_POOL_SIZE in .env.
+      # One instance per model, also the pool of every STT_MODELS entry without @pool. Several large
+      # models take longer to load than the healthcheck start_period.
       STT_POOL_SIZE: "${STT_POOL_SIZE:-1}"
-      STT_DEBUG: "false"
-      # 100 MB covers about 50 minutes of 16 kHz WAV and hours of compressed audio; .env overrides it.
+      STT_DEBUG: "${STT_DEBUG:-false}"
+      # 100 MB covers about 50 minutes of 16 kHz WAV and hours of compressed audio.
       MAX_CONTENT_LENGTH_MB: "${MAX_CONTENT_LENGTH_MB:-100}"
-      CORS_ORIGINS: "*"
-      GUNICORN_WORKERS: "4"
+      CORS_ORIGINS: "${CORS_ORIGINS:-*}"
+      GUNICORN_WORKERS: "${GUNICORN_WORKERS:-4}"
+      # Pinned: the model caches live in the bind-mounted /opt/models. entrypoint.sh chowns exactly
+      # that path, and a cache anywhere else is a PermissionError for the stt user.
       WHISPER_DOWNLOAD_ROOT: "/opt/models"
-      # Background jobs live under the bind-mounted recs/, so they survive a container rebuild.
+      PARAKEET_DOWNLOAD_ROOT: "/opt/models"
+      DIARIZE_DOWNLOAD_ROOT: "/opt/models"
+      # Pinned: background jobs live under the bind-mounted recs/, so they survive a rebuild.
       JOBS_DIR: "/opt/recs/jobs"
-      OMP_NUM_THREADS: "1"
-      MKL_NUM_THREADS: "1"
+      # One thread unless .env says otherwise: more made the voice detector slower on the GB10.
+      OMP_NUM_THREADS: "${OMP_NUM_THREADS:-1}"
+      MKL_NUM_THREADS: "${MKL_NUM_THREADS:-1}"
+      # Pinned: this file is the GPU variant, so the CUDA backend and the nvidia runtime are what
+      # it is. A host .env written for a bare-metal run may say COMPUTE_TYPE=auto.
       NVIDIA_VISIBLE_DEVICES: "all"
       NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
-      # Force CUDA backend.
       COMPUTE_TYPE: "cuda"
-      # DIARIZE_ENABLED is deliberately NOT set here: `environment:` overrides `env_file:`, so
-      # pinning it would silently ignore the value in .env, which is where every document says
-      # to put it. It is a runtime switch; DIARIZE above is the build arg. Turning it on for an
-      # image built without the backend answers 503 and logs why, rather than failing to start.
-      # STT_BACKEND selects the transcriber when STT_MODELS is empty; parakeet needs a
-      # PARAKEET=true image. STT_MODELS and STT_DEFAULT_MODEL, which load several models side
-      # by side, are deliberately NOT set here: they come from .env through env_file, which this
-      # block would override. An STT_MODELS entry without @pool gets STT_POOL_SIZE, 1 above
-      # unless .env sets it; several large models also take longer to load than the healthcheck
-      # start_period.
+      # The transcriber when STT_MODELS is empty; parakeet needs a PARAKEET=true image.
       STT_BACKEND: "${STT_BACKEND:-whisper}"
-      PARAKEET_DOWNLOAD_ROOT: "/opt/models"
-      DIARIZE_POOL_SIZE: "1"
-      # Pinned to the mount for the same reason WHISPER_DOWNLOAD_ROOT is: entrypoint.sh chowns
-      # exactly these paths, and a cache anywhere else is a PermissionError for the stt user.
-      DIARIZE_DOWNLOAD_ROOT: "/opt/models"
+      # DIARIZE_ENABLED is the runtime switch and DIARIZE above the build arg. Turning it on for an
+      # image built without the backend answers 503 and logs why, rather than failing to start.
+      DIARIZE_POOL_SIZE: "${DIARIZE_POOL_SIZE:-1}"
     ports:
       - "${STT_PORT:-5051}:${STT_PORT:-5051}"
     volumes:
@@ -118,7 +129,7 @@ services:
     networks:
       - stt_network
     environment:
-      TZ: America/New_York
+      TZ: "${TZ:-America/New_York}"
       STT_UPSTREAM: "stt_server:${STT_PORT:-5051}"
       # The UI speaks https unless .env says STT_WWW_SCHEME=http; anything else stops nginx.
       STT_WWW_SCHEME: "${STT_WWW_SCHEME:-https}"

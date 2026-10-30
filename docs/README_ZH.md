@@ -55,8 +55,9 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
-docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
+
+Tesla P40 等 Pascal 显卡使用同一个 compose 文件和同一个 `stt_server` 容器：CUDA 13 已不再包含它的内核，因此在 `.env` 中写入 `.env.example` 里的 Pascal 配置块，选择 CUDA 12.6 构建和 fp32 的 Whisper。详见 [docs/DEPLOY.md](DEPLOY.md)。
 
 GPU 构建需要主机上安装 `nvidia-container-toolkit`。首次运行会将 Whisper 模型下载到 `./models`。在服务器上运行（更新、回滚、证书、依赖）的说明见 [docs/DEPLOY.md](DEPLOY.md)。
 
@@ -334,6 +335,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `SPEECH_GATE`           | `true`                  | 丢弃无人说出的转录文本（语音检测器）                |
 | `STT_UID`, `STT_GID`    | （镜像中的 `stt`，1001） | 拥有 `models/`、`logs/`、`recs/` 的主机用户（Docker） |
 | `HF_HUB_OFFLINE`        | `0`                     | 模型缓存完成后设为 `1`：启动时不再请求 hub          |
+| `CUDA_IMAGE`, `CUBLAS_PACKAGE`, `TORCH_VERSION`, `TORCH_CUDA`, `TORCH_ARCHES` | CUDA 13.0 | GPU 镜像的 CUDA 构建（compose）；Pascal 显卡需设置全部五项，见 `.env.example` |
 | `STT_WWW_PORT`          | `5053`                  | Web 界面端口（compose）                            |
 | `STT_WWW_SCHEME`        | `https`                 | Web 界面协议，`https` 或 `http`（compose）           |
 | `STT_URL`               | `http://localhost:5051` | 客户端：服务器基础 URL                             |

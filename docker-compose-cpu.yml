@@ -13,30 +13,35 @@ services:
     env_file:
       - .env
     environment:
-      TZ: America/New_York
+      # Every value in this block overrides env_file, so a literal here is a setting .env cannot
+      # change. Anything a host may tune is therefore written "${NAME:-default}"; only what the
+      # image and the bind mounts fix is pinned, each with its reason. STT_MODELS and
+      # STT_DEFAULT_MODEL are not here at all: they come from .env through env_file.
+      TZ: "${TZ:-America/New_York}"
+      # Pinned: the server has to listen on every interface of the container to be reached through
+      # the published port and from stt_www, whatever a .env written for a bare-metal run says.
       STT_HOST: "0.0.0.0"
       STT_PORT: "${STT_PORT:-5051}"
-      # One instance per model unless .env says otherwise: this is also the pool of every
-      # STT_MODELS entry without @pool. Interpolated rather than pinned, because a value in this
-      # block overrides env_file and a literal would silently ignore STT_POOL_SIZE in .env.
-      # STT_MODELS and STT_DEFAULT_MODEL are deliberately NOT set here: they come from .env
-      # through env_file, which this block would override.
+      # One instance per model, also the pool of every STT_MODELS entry without @pool.
       STT_POOL_SIZE: "${STT_POOL_SIZE:-1}"
-      STT_DEBUG: "false"
-      # 100 MB covers about 50 minutes of 16 kHz WAV and hours of compressed audio; .env overrides it.
+      STT_DEBUG: "${STT_DEBUG:-false}"
+      # 100 MB covers about 50 minutes of 16 kHz WAV and hours of compressed audio.
       MAX_CONTENT_LENGTH_MB: "${MAX_CONTENT_LENGTH_MB:-100}"
-      CORS_ORIGINS: "*"
-      GUNICORN_WORKERS: "4"
+      CORS_ORIGINS: "${CORS_ORIGINS:-*}"
+      GUNICORN_WORKERS: "${GUNICORN_WORKERS:-4}"
+      # Pinned: the model cache lives in the bind-mounted /opt/models. entrypoint.sh chowns exactly
+      # that path, and a cache anywhere else is a PermissionError for the stt user.
       WHISPER_DOWNLOAD_ROOT: "/opt/models"
-      # Background jobs live under the bind-mounted recs/, so they survive a container rebuild.
+      # Pinned: background jobs live under the bind-mounted recs/, so they survive a rebuild.
       JOBS_DIR: "/opt/recs/jobs"
-      OMP_NUM_THREADS: "1"
-      MKL_NUM_THREADS: "1"
-      # Force CPU backend.
+      # One thread unless .env says otherwise: more made the voice detector slower.
+      OMP_NUM_THREADS: "${OMP_NUM_THREADS:-1}"
+      MKL_NUM_THREADS: "${MKL_NUM_THREADS:-1}"
+      # Pinned: this file is the CPU variant, and its image has no CUDA.
       COMPUTE_TYPE: "cpu"
-      # Diarization stays off here. The model card names Ampere, Ada, Hopper and Blackwell and
-      # never mentions CPU, and nobody has measured this path; a CPU build is a follow-up with
-      # numbers behind it, not an assumption.
+      # Pinned off: the CPU image does not install the diarization backend. The model card names
+      # Ampere, Ada, Hopper and Blackwell and never mentions CPU, and nobody has measured this
+      # path; a CPU build is a follow-up with numbers behind it, not an assumption.
       DIARIZE_ENABLED: "false"
     ports:
       - "${STT_PORT:-5051}:${STT_PORT:-5051}"
@@ -91,7 +96,7 @@ services:
     networks:
       - stt_network
     environment:
-      TZ: America/New_York
+      TZ: "${TZ:-America/New_York}"
       STT_UPSTREAM: "stt_server:${STT_PORT:-5051}"
       # The UI speaks https unless .env says STT_WWW_SCHEME=http; anything else stops nginx.
       STT_WWW_SCHEME: "${STT_WWW_SCHEME:-https}"

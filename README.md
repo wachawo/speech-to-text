@@ -65,8 +65,9 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
-docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
+
+A Pascal card such as the Tesla P40 runs the same compose file and the same `stt_server` container: CUDA 13 no longer carries kernels for it, so its `.env` selects a CUDA 12.6 build and fp32 Whisper with the Pascal block from `.env.example`. See [docs/DEPLOY.md](docs/DEPLOY.md).
 
 The GPU build needs `nvidia-container-toolkit` on the host, and the compose file requests the GPU through CDI, so the host also needs a CDI spec. Generate it once, and again after every driver update:
 
@@ -361,6 +362,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `SPEECH_GATE`           | `true`                  | drop transcribed text nobody spoke (voice detector) |
 | `STT_UID`, `STT_GID`    | (image's `stt`, 1001)   | host user that owns `models/`, `logs/`, `recs/` (Docker) |
 | `HF_HUB_OFFLINE`        | `0`                     | `1` once the models are cached: no hub requests on start |
+| `CUDA_IMAGE`, `CUBLAS_PACKAGE`, `TORCH_VERSION`, `TORCH_CUDA`, `TORCH_ARCHES` | CUDA 13.0 | the GPU image's CUDA build (compose); a Pascal card sets all five, see `.env.example` |
 | `STT_WWW_PORT`          | `5053`                  | web UI port (compose)                               |
 | `STT_WWW_SCHEME`        | `https`                 | web UI scheme, `https` or `http` (compose)          |
 | `STT_URL`               | `http://localhost:5051` | client: server base URL                             |
