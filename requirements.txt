@@ -37,6 +37,6 @@ soundfile>=0.12.1
 # Utilities
 python-dotenv>=1.2.4
 requests>=2.34.2
-websockets>=17.2
+websockets>=17.3
 prometheus-client>=0.20
 uvicorn-worker>=0.3
