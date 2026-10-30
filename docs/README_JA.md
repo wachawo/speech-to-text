@@ -41,7 +41,7 @@ STT_MODELS=whisper:turbo@2,whisper:small.en@1,parakeet:nvidia/parakeet-tdt-0.6b-
 STT_DEFAULT_MODEL=turbo    # `model` のないリクエストが使うモデル。空の場合は最初のエントリ
 ```
 
-選べるのは起動時に読み込まれたモデルだけです。リクエストがダウンロードや読み込みを引き起こすことはなく、読み込まれていないモデルは `400` で拒否されます。リストの各モデルはサーバーが動いている間ずっとメモリを使い、その量はおおよそ `ワーカー数 x (プール x モデルサイズ)` をリスト全体で合計したものに、ダイアライザーを加えたものです。GPU 上の `turbo@2,small@1,parakeet@1` はプロセスあたり約 12 + 2 + 3 = 17 GB です。gunicorn では各 sync ワーカーが一度に 1 つのリクエストしか処理しないため、各エントリは `@1` にして `GUNICORN_WORKERS` でスケールしてください。`@pool` のないエントリは `STT_POOL_SIZE` を使い、Docker の外ではこれが 8 なので、`@N` を明示してください。大きなモデルを複数読み込むと 1 つより時間がかかるため、起動中にコンテナが unhealthy と判定される場合は compose ファイルの healthcheck の `start_period` を延ばしてください。
+選べるのは起動時に読み込まれたモデルだけです。リクエストがダウンロードや読み込みを引き起こすことはなく、読み込まれていないモデルは `400` で拒否されます。リストの各モデルはサーバーが動いている間ずっとメモリを使い、その量はおおよそ `ワーカー数 x (プール x モデルサイズ)` をリスト全体で合計したものに、ダイアライザーを加えたものです。GPU 上の `turbo@2,small@1,parakeet@1` はプロセスあたり約 12 + 2 + 3 = 17 GB です。gunicorn では各 sync ワーカーが一度に 1 つのリクエストしか処理しないため、各エントリは `@1` にして `GUNICORN_WORKERS` でスケールしてください。`@pool` のないエントリは `STT_POOL_SIZE` を使い、Docker の外ではこれが 8 なので、`@N` を明示してください。大きなモデルを複数読み込むと 1 つより時間がかかるため、起動中にコンテナが unhealthy と判定される場合は `.env` の `STT_HEALTH_START_PERIOD`（healthcheck の `start_period`、既定値 `60s`）を延ばしてください。
 
 `STT_MODELS` が空なら、これまでどおり `STT_BACKEND`、`WHISPER_MODEL`、`PARAKEET_MODEL` が単一のモデルを選び、サーバーは以前とまったく同じものを読み込みます。レスポンスにはフィールドが増えるだけです。設定されている場合、これらの変数は何を読み込むかを決めなくなります。Docker では `STT_MODELS` と `STT_DEFAULT_MODEL` を `.env` に書いてください。compose の `environment:` ブロックに書くと `.env` を上書きしてしまいます。Parakeet のエントリには引き続き `PARAKEET=true` でビルドしたイメージが必要です。未知のバックエンド、同じ重みの二重指定（`turbo` と `large-v3-turbo`）、リストにない `STT_DEFAULT_MODEL` があると、サーバーは起動を拒否します。ファイルパスで指定したモデルは `.pt` を除いたファイル名で公開されるため、パスがクライアントに届くことはありません。 `STT_DEFAULT_MODEL` では、このようなエントリをその名前でも、`STT_MODELS` に書かれたとおりのパスでも指定できます。その言語はファイル名が示すチェックポイントのものになり、`/models/large-v3.pt` は `large-v3` と同じ言語を扱います。同じ名前で提供されることになる 2 つのエントリ (`/a/model.pt` と `/b/model.pt`) や、バックエンド名で提供されることになるエントリ (`/models/parakeet.pt`) があると、サーバーは起動時に停止します。
 
@@ -336,6 +336,10 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `STT_UID`, `STT_GID`    | （イメージの `stt`、1001） | `models/`、`logs/`、`recs/` を所有するホストユーザー（Docker） |
 | `HF_HUB_OFFLINE`        | `0`                     | モデルのキャッシュ後は `1`: 起動時に hub へリクエストしない |
 | `CUDA_IMAGE`, `CUBLAS_PACKAGE`, `TORCH_VERSION`, `TORCH_CUDA`, `TORCH_ARCHES` | CUDA 13.0 | GPU イメージの CUDA ビルド（compose）。Pascal カードでは 5 つすべてを設定、`.env.example` を参照 |
+| `TZ`                    | `America/New_York`      | コンテナのタイムゾーン（compose） |
+| `OMP_NUM_THREADS`, `MKL_NUM_THREADS` | `1`        | torch の CPU スレッド数。音声検出器には 1 が最速（compose） |
+| `STT_COMMAND`           | `python3 stt_server.py` | サーバーコンテナのコマンドライン、例: gunicorn（compose） |
+| `STT_HEALTH_START_PERIOD` | `60s`                 | healthcheck がモデルの読み込みを待つ時間（compose） |
 | `STT_WWW_PORT`          | `5053`                  | Web UI のポート（compose）                          |
 | `STT_WWW_SCHEME`        | `https`                 | Web UI のスキーム、`https` または `http`（compose）      |
 | `STT_URL`               | `http://localhost:5051` | クライアント: サーバーのベース URL                    |

@@ -424,6 +424,9 @@
   (`1`), and in the GPU file `DIARIZE_POOL_SIZE` (`1`). What the image or a bind mount fixes
   stays pinned, each with its reason in a comment: `STT_HOST`, the model cache roots,
   `JOBS_DIR`, `COMPUTE_TYPE`, the `NVIDIA_*` hints and, in the CPU file, `DIARIZE_ENABLED`.
+  The container's command line and its healthcheck start period are `.env` settings too,
+  `STT_COMMAND` (`python3 stt_server.py`) and `STT_HEALTH_START_PERIOD` (`60s`), so running
+  gunicorn or waiting longer for several models no longer means editing the compose file.
 - **The default API port is 5051 (was 5099).** It is the default of `STT_PORT` and of the
   client's `STT_URL` (`http://localhost:5051`), and of the port the compose files publish,
   check and pass to `stt_www`. A deployment that relied on the old default sets

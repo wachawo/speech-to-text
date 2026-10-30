@@ -40,6 +40,7 @@ Both come from `docker-compose.yml` (GPU) or `docker-compose-cpu.yml`. `libs/`, 
    | `STT_MODELS`, `STT_DEFAULT_MODEL` | several models side by side, each request picking one; give every entry an explicit `@N`, and count on the GPU memory of every worker times the sum of the pools |
    | `STT_WWW_PORT`, `STT_WWW_SCHEME`  | the web UI port and its scheme, `https` (default) or `http`           |
    | `STT_UID`, `STT_GID`              | the host user that should own `models/`, `logs/`, `recs/` (`id -u`, `id -g`) |
+   | `STT_COMMAND`, `STT_HEALTH_START_PERIOD` | the run mode, gunicorn instead of one process (see [Several workers](#several-workers)), and how long the healthcheck waits for the models to load |
    | `CUDA_IMAGE` ... `TORCH_ARCHES`, `WHISPER_FP16` | only on a Pascal card such as the Tesla P40: the CUDA 12.6 build and fp32 Whisper, see [Pascal GPUs](#pascal-gpus-tesla-p40) |
 
    Every difference between hosts goes in `.env`: the compose file is the same everywhere and so are the container names, `stt_server` and `stt_www`.
@@ -115,7 +116,7 @@ curl -sk -o /dev/null -w "%{http_code}\n" https://localhost:$STT_WWW_PORT/    # 
 
 `POST /api/jobs` stores each job under `JOBS_DIR`, which compose puts in `./recs/jobs` on the host. The directory holds the upload until the job has run, then only the record and the result. Finished jobs are removed after `JOB_RETENTION_HOURS` (24). Jobs survive a restart: one that was running when the server stopped runs again from the start. A job keeps the model it was accepted for, so one whose model the restart unloaded - after a change to `STT_MODELS`, `STT_BACKEND`, `WHISPER_MODEL` or `PARAKEET_MODEL` - fails as `Model not loaded` and has to be sent again.
 
-Leave `OMP_NUM_THREADS=1` as the compose file sets it. The voice detector runs on the CPU, and with torch's default thread count it ran eight times slower on the GB10 host.
+Leave `OMP_NUM_THREADS` at 1, the compose default. The voice detector runs on the CPU, and with torch's default thread count it ran eight times slower on the GB10 host.
 
 ### Monitoring
 
@@ -129,11 +130,15 @@ Leave `OMP_NUM_THREADS=1` as the compose file sets it. The voice detector runs o
 
 ### Several workers
 
-`python3 stt_server.py` is one process with each model's pool: `STT_POOL_SIZE` instances of the single model, or the `@N` of every `STT_MODELS` entry. For several processes, run gunicorn instead (`command:` in the compose file):
+`python3 stt_server.py` is one process with each model's pool: `STT_POOL_SIZE` instances of the single model, or the `@N` of every `STT_MODELS` entry. For several processes, run gunicorn instead, set in `.env` like everything else that differs between hosts:
 
 ```bash
-GUNICORN_WORKERS=2 GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker gunicorn --config gu.py stt_server:asgi_app
+STT_COMMAND=gunicorn --config gu.py stt_server:asgi_app
+GUNICORN_WORKERS=2
+GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker
 ```
+
+Then `docker compose up -d --no-build`. Several workers load their models one after another, so raise `STT_HEALTH_START_PERIOD` (default `60s`) if the container is marked unhealthy while it starts.
 
 - **The live stream needs `UvicornWorker`.** The default `sync` workers serve the HTTP API only.
 - **Each worker loads its own models.** Two workers need twice the GPU memory.

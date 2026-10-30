@@ -74,15 +74,18 @@ services:
         max-size: "128m"
         max-file: "3"
     entrypoint: ["/opt/entrypoint.sh"]
+    # The run mode, from .env: STT_COMMAND="gunicorn --config gu.py stt_server:app" for sync workers,
+    # or stt_server:asgi_app with GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker for the live
+    # stream as well. entrypoint.sh runs the whole line through sh, so it is one string.
     command:
-      - "python3 stt_server.py"
-      # - "gunicorn --config gu.py stt_server:app"
+      - "${STT_COMMAND:-python3 stt_server.py}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${STT_PORT:-5051}/api/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      # Several large models load for longer than a minute: raise STT_HEALTH_START_PERIOD in .env.
+      start_period: ${STT_HEALTH_START_PERIOD:-60s}
 
   stt_www:
     build:

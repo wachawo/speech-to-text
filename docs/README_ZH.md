@@ -41,7 +41,7 @@ STT_MODELS=whisper:turbo@2,whisper:small.en@1,parakeet:nvidia/parakeet-tdt-0.6b-
 STT_DEFAULT_MODEL=turbo    # 不带 `model` 的请求所用的模型；为空表示第一个条目
 ```
 
-只能在启动时加载的模型中选择：请求从不会触发下载或加载，未加载的模型会以 `400` 拒绝。列表中的每个模型在服务器运行期间都会占用内存，大致为 `worker 数 x（池大小 x 模型大小）` 在整个列表上的总和，再加上说话人分离器。在 GPU 上，`turbo@2,small@1,parakeet@1` 每个进程约占 12 + 2 + 3 = 17 GB。在 gunicorn 下，每个 sync worker 一次只处理一个请求，因此请给每个条目设 `@1`，并通过 `GUNICORN_WORKERS` 扩展。没有 `@pool` 的条目使用 `STT_POOL_SIZE`，在 Docker 之外它是 8，因此请显式写出 `@N`。加载多个大模型比加载一个更慢，如果容器在启动期间被标记为 unhealthy，请调大 compose 文件中 healthcheck 的 `start_period`。
+只能在启动时加载的模型中选择：请求从不会触发下载或加载，未加载的模型会以 `400` 拒绝。列表中的每个模型在服务器运行期间都会占用内存，大致为 `worker 数 x（池大小 x 模型大小）` 在整个列表上的总和，再加上说话人分离器。在 GPU 上，`turbo@2,small@1,parakeet@1` 每个进程约占 12 + 2 + 3 = 17 GB。在 gunicorn 下，每个 sync worker 一次只处理一个请求，因此请给每个条目设 `@1`，并通过 `GUNICORN_WORKERS` 扩展。没有 `@pool` 的条目使用 `STT_POOL_SIZE`，在 Docker 之外它是 8，因此请显式写出 `@N`。加载多个大模型比加载一个更慢，如果容器在启动期间被标记为 unhealthy，请调大 `.env` 中的 `STT_HEALTH_START_PERIOD`（healthcheck 的 `start_period`，默认 `60s`）。
 
 `STT_MODELS` 为空时，`STT_BACKEND`、`WHISPER_MODEL` 和 `PARAKEET_MODEL` 像以前一样选择唯一的模型，服务器加载的内容与以前完全相同；响应只是多了一些字段。设置之后，这些变量不再决定加载什么。在 Docker 中，请把 `STT_MODELS` 和 `STT_DEFAULT_MODEL` 写进 `.env`，而不是 compose 的 `environment:` 块，后者会覆盖 `.env`。Parakeet 条目仍然需要用 `PARAKEET=true` 构建的镜像；遇到未知后端、同一权重被列出两次（`turbo` 和 `large-v3-turbo`）或不在列表中的 `STT_DEFAULT_MODEL` 时，服务器会拒绝启动。以文件路径给出的模型以去掉 `.pt` 的文件名对外提供，因此路径永远不会传到客户端。`STT_DEFAULT_MODEL` 可以用这个名称，也可以用与 `STT_MODELS` 中写法完全一致的路径来指定这样的条目；它的语言就是文件名所指检查点的语言：`/models/large-v3.pt` 支持的语言与 `large-v3` 相同。两个会以同一名称提供的条目（`/a/model.pt` 和 `/b/model.pt`），或会以后端名称提供的条目（`/models/parakeet.pt`），都会让服务器在启动时停止。
 
@@ -336,6 +336,10 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `STT_UID`, `STT_GID`    | （镜像中的 `stt`，1001） | 拥有 `models/`、`logs/`、`recs/` 的主机用户（Docker） |
 | `HF_HUB_OFFLINE`        | `0`                     | 模型缓存完成后设为 `1`：启动时不再请求 hub          |
 | `CUDA_IMAGE`, `CUBLAS_PACKAGE`, `TORCH_VERSION`, `TORCH_CUDA`, `TORCH_ARCHES` | CUDA 13.0 | GPU 镜像的 CUDA 构建（compose）；Pascal 显卡需设置全部五项，见 `.env.example` |
+| `TZ`                    | `America/New_York`      | 容器的时区（compose） |
+| `OMP_NUM_THREADS`, `MKL_NUM_THREADS` | `1`        | torch 的 CPU 线程数；对语音检测器 1 最快（compose） |
+| `STT_COMMAND`           | `python3 stt_server.py` | 服务器容器的命令行，例如 gunicorn（compose） |
+| `STT_HEALTH_START_PERIOD` | `60s`                 | healthcheck 等待模型加载的时间（compose） |
 | `STT_WWW_PORT`          | `5053`                  | Web 界面端口（compose）                            |
 | `STT_WWW_SCHEME`        | `https`                 | Web 界面协议，`https` 或 `http`（compose）           |
 | `STT_URL`               | `http://localhost:5051` | 客户端：服务器基础 URL                             |
