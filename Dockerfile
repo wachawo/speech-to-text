@@ -1,7 +1,8 @@
 # GPU image based on CUDA + cuDNN. The defaults build the main image: CUDA 13.0 with torch
-# 2.10.0+cu130, for current cards and the GB10. docker-compose-p40.yml overrides the five CUDA
-# build args for Pascal cards such as the Tesla P40 (sm_61): CUDA 13 and the cu128/cu130 torch
-# builds dropped sm_50-sm_61, and the cu126 build still carries sm_60 kernels, which run on sm_61.
+# 2.10.0+cu130, for current cards and the GB10. docker-compose.yml passes the five CUDA build args
+# from .env, with these defaults repeated there (keep the two equal); a Pascal host such as one with
+# a Tesla P40 (sm_61) sets them for CUDA 12.6 in its .env: CUDA 13 and the cu128/cu130 torch builds
+# dropped sm_50-sm_61, and the cu126 build still carries sm_60 kernels, which run on sm_61.
 # The five go together: the base image, its cuBLAS package, the torch build for that CUDA, and
 # the kernels the build must carry.
 ARG CUDA_IMAGE=nvidia/cuda:13.0.3-cudnn-runtime-ubuntu24.04

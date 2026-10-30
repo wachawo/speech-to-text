@@ -41,7 +41,7 @@ STT_MODELS=whisper:turbo@2,whisper:small.en@1,parakeet:nvidia/parakeet-tdt-0.6b-
 STT_DEFAULT_MODEL=turbo    # Modell für Anfragen ohne `model`; leer bedeutet der erste Eintrag
 ```
 
-Gewählt wird nur unter den Modellen, die beim Start geladen wurden: Eine Anfrage löst nie einen Download oder ein Laden aus, und ein nicht geladenes Modell wird mit `400` abgelehnt. Jedes aufgeführte Modell belegt Speicher, solange der Server läuft, grob `Worker x (Pool x Modellgröße)` über die Liste summiert, dazu der Diarisierer. `turbo@2,small@1,parakeet@1` braucht auf einer GPU etwa 12 + 2 + 3 = 17 GB pro Prozess. Unter gunicorn bearbeitet jeder sync-Worker eine Anfrage nach der anderen; geben Sie daher jedem Eintrag `@1` und skalieren Sie über `GUNICORN_WORKERS`. Ein Eintrag ohne `@pool` erhält `STT_POOL_SIZE`, außerhalb von Docker also 8; schreiben Sie `@N` deshalb ausdrücklich. Mehrere große Modelle laden länger als eines; erhöhen Sie die `start_period` des Healthchecks in der Compose-Datei, falls der Container beim Start als unhealthy markiert wird.
+Gewählt wird nur unter den Modellen, die beim Start geladen wurden: Eine Anfrage löst nie einen Download oder ein Laden aus, und ein nicht geladenes Modell wird mit `400` abgelehnt. Jedes aufgeführte Modell belegt Speicher, solange der Server läuft, grob `Worker x (Pool x Modellgröße)` über die Liste summiert, dazu der Diarisierer. `turbo@2,small@1,parakeet@1` braucht auf einer GPU etwa 12 + 2 + 3 = 17 GB pro Prozess. Unter gunicorn bearbeitet jeder sync-Worker eine Anfrage nach der anderen; geben Sie daher jedem Eintrag `@1` und skalieren Sie über `GUNICORN_WORKERS`. Ein Eintrag ohne `@pool` erhält `STT_POOL_SIZE`, außerhalb von Docker also 8; schreiben Sie `@N` deshalb ausdrücklich. Mehrere große Modelle laden länger als eines; erhöhen Sie `STT_HEALTH_START_PERIOD` in der `.env` (die `start_period` des Healthchecks, Standard `60s`), falls der Container beim Start als unhealthy markiert wird.
 
 Ist `STT_MODELS` leer, wählen `STT_BACKEND`, `WHISPER_MODEL` und `PARAKEET_MODEL` wie bisher das eine Modell, und der Server lädt genau das, was er bisher geladen hat; die Antworten erhalten nur neue Felder. Ist es gesetzt, bestimmen diese Variablen nicht mehr, was geladen wird. Unter Docker gehören `STT_MODELS` und `STT_DEFAULT_MODEL` in die `.env`, nicht in den `environment:`-Block der Compose-Datei, der die `.env` überschreibt. Ein Parakeet-Eintrag braucht weiterhin ein mit `PARAKEET=true` gebautes Image, und der Server startet nicht bei einem unbekannten Backend, bei denselben Gewichten in zwei Einträgen (`turbo` und `large-v3-turbo`) oder bei einem `STT_DEFAULT_MODEL`, das nicht in der Liste steht. Ein als Dateipfad angegebenes Modell wird unter seinem Dateinamen ohne `.pt` angeboten, sodass der Pfad nie bei einem Client ankommt. `STT_DEFAULT_MODEL` darf einen solchen Eintrag mit diesem Namen oder mit dem Pfad genau so nennen, wie er in `STT_MODELS` steht, und seine Sprachen sind die des Checkpoints, den der Dateiname nennt: `/models/large-v3.pt` kennt, was `large-v3` kennt. Zwei Einträge, die unter demselben Namen bereitgestellt würden (`/a/model.pt` und `/b/model.pt`), oder ein Eintrag, der unter einem Backend-Namen bereitgestellt würde (`/models/parakeet.pt`), stoppen den Server beim Start.
 
@@ -55,8 +55,9 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
-docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
+
+Eine Pascal-Karte wie die Tesla P40 nutzt dieselbe Compose-Datei und denselben Container `stt_server`: CUDA 13 enthält keine Kernel mehr für sie, daher wählt ihre `.env` mit dem Pascal-Block aus `.env.example` einen Build für CUDA 12.6 und Whisper in fp32. Details in [docs/DEPLOY.md](DEPLOY.md).
 
 Der GPU-Build benötigt `nvidia-container-toolkit` auf dem Host. Beim ersten Lauf wird das Whisper-Modell nach `./models` heruntergeladen. Den Betrieb auf einem Server - Updates, Rollbacks, Zertifikate, Abhängigkeiten - behandelt [docs/DEPLOY.md](DEPLOY.md).
 
@@ -334,6 +335,11 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `SPEECH_GATE`           | `true`                  | verwirft Text, den niemand gesprochen hat (Sprachaktivitätserkennung) |
 | `STT_UID`, `STT_GID`    | (`stt` aus dem Image, 1001) | Host-Benutzer, dem `models/`, `logs/`, `recs/` gehören (Docker) |
 | `HF_HUB_OFFLINE`        | `0`                     | `1`, sobald die Modelle im Cache liegen: keine Hub-Anfragen beim Start |
+| `CUDA_IMAGE`, `CUBLAS_PACKAGE`, `TORCH_VERSION`, `TORCH_CUDA`, `TORCH_ARCHES` | CUDA 13.0 | CUDA-Build des GPU-Images (Compose); eine Pascal-Karte setzt alle fünf, siehe `.env.example` |
+| `TZ`                    | `America/New_York`      | Zeitzone der Container (Compose) |
+| `OMP_NUM_THREADS`, `MKL_NUM_THREADS` | `1`        | CPU-Threads von torch; 1 ist für den Sprachdetektor am schnellsten (Compose) |
+| `STT_COMMAND`           | `python3 stt_server.py` | Kommandozeile des Server-Containers, z. B. gunicorn (Compose) |
+| `STT_HEALTH_START_PERIOD` | `60s`                 | wie lange der Healthcheck auf das Laden der Modelle wartet (Compose) |
 | `STT_WWW_PORT`          | `5053`                  | Port der Web-Oberfläche (compose)                   |
 | `STT_WWW_SCHEME`        | `https`                 | Schema der Web-Oberfläche, `https` oder `http` (compose) |
 | `STT_URL`               | `http://localhost:5051` | Client: Basis-URL des Servers                       |

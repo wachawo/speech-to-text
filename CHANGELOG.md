@@ -6,13 +6,14 @@
 - **An image for Pascal GPUs such as the Tesla P40.** CUDA 13 and the cu128/cu130 torch
   builds dropped sm_50-sm_61, so the main GPU image cannot run on them. The `Dockerfile`
   takes five build args - `CUDA_IMAGE`, `CUBLAS_PACKAGE`, `TORCH_VERSION`, `TORCH_CUDA` and
-  `TORCH_ARCHES` - whose defaults are the main image as before; `docker-compose-p40.yml` sets
-  them for CUDA 12.6 and `torch==2.9.0+cu126`, whose sm_60 kernels run on sm_61, and runs the
-  result without the web UI. The build asserts the torch build and its kernels either way.
-  `WHISPER_FP16` (default `true`) switches Whisper's half precision on CUDA; the P40 compose
-  file defaults it to `false`, since Pascal runs fp16 at 1/64 of the fp32 rate: on a P40,
-  `turbo` answered a short phrase in 0.92 s in fp32 against 3.65 s in fp16, with the same text.
-  `docs/DEPLOY.md` has the details.
+  `TORCH_ARCHES` - whose defaults are the main image as before. `docker-compose.yml` passes
+  them from `.env`, so a Pascal host sets them there for CUDA 12.6 and `torch==2.9.0+cu126`,
+  whose sm_60 kernels run on sm_61, and runs the same compose file and the same `stt_server`
+  and `stt_www` containers as any other host. The build asserts the torch build and its
+  kernels either way. `WHISPER_FP16` (default `true`) switches Whisper's half precision on
+  CUDA; a Pascal host sets it to `false` in `.env`, since Pascal runs fp16 at 1/64 of the fp32
+  rate: on a P40, `turbo` answered a short phrase in 0.92 s in fp32 against 3.65 s in fp16,
+  with the same text. `.env.example` has the block and `docs/DEPLOY.md` the details.
 - **An OpenAI-compatible API under `/v1`.** `POST /v1/audio/transcriptions` takes OpenAI's
   multipart request and `GET /v1/models` lists the loaded models, so any OpenAI SDK works
   with its `base_url` pointed at `/v1`. `model` and `language` are resolved exactly as on
@@ -410,6 +411,22 @@
   speaker decision since it started; what no phrase can still ask about is now dropped.
 
 #### Changed
+- **One compose file per image, and every host difference in `.env`.** The separate
+  `docker-compose-p40.yml`, which ran the Pascal build as `stt_server_p40` from an image of
+  that name and without the web UI, is gone: a Pascal host uses `docker-compose.yml` with the
+  CUDA build args and `WHISPER_FP16=false` in its `.env`, and its containers are `stt_server`
+  and `stt_www` like everywhere else. A host that ran the old file stops it with
+  `docker compose -f docker-compose-p40.yml down` before pulling, then runs
+  `docker compose up -d --build`. The compose `environment:` blocks override `.env`, so the
+  values a host may want to change are no longer pinned there and come from `.env` with the
+  same defaults: `TZ` (`America/New_York`, both services), `STT_DEBUG` (`false`),
+  `CORS_ORIGINS` (`*`), `GUNICORN_WORKERS` (`4`), `OMP_NUM_THREADS` and `MKL_NUM_THREADS`
+  (`1`), and in the GPU file `DIARIZE_POOL_SIZE` (`1`). What the image or a bind mount fixes
+  stays pinned, each with its reason in a comment: `STT_HOST`, the model cache roots,
+  `JOBS_DIR`, `COMPUTE_TYPE`, the `NVIDIA_*` hints and, in the CPU file, `DIARIZE_ENABLED`.
+  The container's command line and its healthcheck start period are `.env` settings too,
+  `STT_COMMAND` (`python3 stt_server.py`) and `STT_HEALTH_START_PERIOD` (`60s`), so running
+  gunicorn or waiting longer for several models no longer means editing the compose file.
 - **The default API port is 5051 (was 5099).** It is the default of `STT_PORT` and of the
   client's `STT_URL` (`http://localhost:5051`), and of the port the compose files publish,
   check and pass to `stt_www`. A deployment that relied on the old default sets

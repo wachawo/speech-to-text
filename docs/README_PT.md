@@ -41,7 +41,7 @@ STT_MODELS=whisper:turbo@2,whisper:small.en@1,parakeet:nvidia/parakeet-tdt-0.6b-
 STT_DEFAULT_MODEL=turbo    # o modelo de uma requisição sem `model`; vazio significa a primeira entrada
 ```
 
-A escolha acontece apenas entre os modelos carregados na inicialização: uma requisição nunca dispara um download nem um carregamento, e um modelo que não está carregado é recusado com `400`. Cada modelo da lista ocupa memória enquanto o servidor estiver rodando, aproximadamente `workers x (pool x tamanho do modelo)` somado sobre a lista, mais o diarizador. `turbo@2,small@1,parakeet@1` em uma GPU ocupa cerca de 12 + 2 + 3 = 17 GB por processo. No gunicorn, cada worker sync atende uma requisição por vez, então dê `@1` a cada entrada e escale com `GUNICORN_WORKERS`. Uma entrada sem `@pool` recebe `STT_POOL_SIZE`, que fora do Docker vale 8, então escreva `@N` explicitamente. Carregar vários modelos grandes demora mais do que carregar um, então aumente o `start_period` do healthcheck no arquivo compose se o contêiner for marcado como unhealthy durante a inicialização.
+A escolha acontece apenas entre os modelos carregados na inicialização: uma requisição nunca dispara um download nem um carregamento, e um modelo que não está carregado é recusado com `400`. Cada modelo da lista ocupa memória enquanto o servidor estiver rodando, aproximadamente `workers x (pool x tamanho do modelo)` somado sobre a lista, mais o diarizador. `turbo@2,small@1,parakeet@1` em uma GPU ocupa cerca de 12 + 2 + 3 = 17 GB por processo. No gunicorn, cada worker sync atende uma requisição por vez, então dê `@1` a cada entrada e escale com `GUNICORN_WORKERS`. Uma entrada sem `@pool` recebe `STT_POOL_SIZE`, que fora do Docker vale 8, então escreva `@N` explicitamente. Carregar vários modelos grandes demora mais do que carregar um, então aumente `STT_HEALTH_START_PERIOD` no `.env` (o `start_period` do healthcheck, padrão `60s`) se o contêiner for marcado como unhealthy durante a inicialização.
 
 Com `STT_MODELS` vazio, `STT_BACKEND`, `WHISPER_MODEL` e `PARAKEET_MODEL` escolhem o modelo único como antes, e o servidor carrega exatamente o que carregava antes; as respostas apenas ganham campos. Quando ele está definido, essas variáveis deixam de decidir o que é carregado. No Docker, coloque `STT_MODELS` e `STT_DEFAULT_MODEL` no `.env`, não no bloco `environment:` do compose, que sobrescreve o `.env`. Uma entrada do Parakeet continua exigindo uma imagem construída com `PARAKEET=true`, e o servidor se recusa a iniciar com um backend desconhecido, com os mesmos pesos listados duas vezes (`turbo` e `large-v3-turbo`) ou com um `STT_DEFAULT_MODEL` que não está na lista. Um modelo informado como caminho de arquivo é servido pelo nome do arquivo sem `.pt`, de modo que o caminho nunca chega a um cliente. `STT_DEFAULT_MODEL` pode indicar uma entrada assim por esse nome ou pelo caminho exatamente como está escrito em `STT_MODELS`, e os idiomas dela são os do checkpoint que o nome do arquivo indica: `/models/large-v3.pt` conhece o que `large-v3` conhece. Duas entradas que seriam servidas com o mesmo nome (`/a/model.pt` e `/b/model.pt`), ou uma entrada servida com o nome de um backend (`/models/parakeet.pt`), impedem o servidor de iniciar.
 
@@ -55,8 +55,9 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
-docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
+
+Uma placa Pascal como a Tesla P40 usa o mesmo arquivo compose e o mesmo contêiner `stt_server`: o CUDA 13 não traz mais kernels para ela, então o seu `.env` escolhe uma build para CUDA 12.6 e o Whisper em fp32 com o bloco Pascal do `.env.example`. Detalhes em [docs/DEPLOY.md](DEPLOY.md).
 
 A build com GPU precisa do `nvidia-container-toolkit` no host. A primeira execução baixa o modelo do Whisper para `./models`. A operação em um servidor - atualizações, rollbacks, certificados, dependências - é descrita em [docs/DEPLOY.md](DEPLOY.md).
 
@@ -334,6 +335,11 @@ O `.env` é carregado tanto pelo servidor quanto pelo cliente através do `pytho
 | `SPEECH_GATE`           | `true`                  | descarta o texto transcrito que ninguém falou (detector de voz) |
 | `STT_UID`, `STT_GID`    | (`stt` da imagem, 1001) | usuário do host dono de `models/`, `logs/`, `recs/` (Docker) |
 | `HF_HUB_OFFLINE`        | `0`                     | `1` depois que os modelos estão em cache: nenhuma requisição ao hub na inicialização |
+| `CUDA_IMAGE`, `CUBLAS_PACKAGE`, `TORCH_VERSION`, `TORCH_CUDA`, `TORCH_ARCHES` | CUDA 13.0 | build CUDA da imagem GPU (compose); uma placa Pascal define as cinco, veja `.env.example` |
+| `TZ`                    | `America/New_York`      | fuso horário dos contêineres (compose) |
+| `OMP_NUM_THREADS`, `MKL_NUM_THREADS` | `1`        | threads de CPU do torch; 1 é o mais rápido para o detector de voz (compose) |
+| `STT_COMMAND`           | `python3 stt_server.py` | linha de comando do contêiner do servidor, p. ex. gunicorn (compose) |
+| `STT_HEALTH_START_PERIOD` | `60s`                 | quanto tempo o healthcheck espera os modelos carregarem (compose) |
 | `STT_WWW_PORT`          | `5053`                  | porta da interface web (compose)                    |
 | `STT_WWW_SCHEME`        | `https`                 | esquema da interface web, `https` ou `http` (compose) |
 | `STT_URL`               | `http://localhost:5051` | cliente: URL base do servidor                       |

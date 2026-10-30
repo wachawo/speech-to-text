@@ -40,6 +40,10 @@ Both come from `docker-compose.yml` (GPU) or `docker-compose-cpu.yml`. `libs/`, 
    | `STT_MODELS`, `STT_DEFAULT_MODEL` | several models side by side, each request picking one; give every entry an explicit `@N`, and count on the GPU memory of every worker times the sum of the pools |
    | `STT_WWW_PORT`, `STT_WWW_SCHEME`  | the web UI port and its scheme, `https` (default) or `http`           |
    | `STT_UID`, `STT_GID`              | the host user that should own `models/`, `logs/`, `recs/` (`id -u`, `id -g`) |
+   | `STT_COMMAND`, `STT_HEALTH_START_PERIOD` | the run mode, gunicorn instead of one process (see [Several workers](#several-workers)), and how long the healthcheck waits for the models to load |
+   | `CUDA_IMAGE` ... `TORCH_ARCHES`, `WHISPER_FP16` | only on a Pascal card such as the Tesla P40: the CUDA 12.6 build and fp32 Whisper, see [Pascal GPUs](#pascal-gpus-tesla-p40) |
+
+   Every difference between hosts goes in `.env`: the compose file is the same everywhere and so are the container names, `stt_server` and `stt_www`.
 
    Without `STT_UID` those directories belong to uid 1001 inside the image, and the host user can only write to them with sudo.
 
@@ -78,6 +82,7 @@ What to do next depends on what the pull changed:
 | `requirements*.txt`, `constraints.txt`, `Dockerfile`, `entrypoint.sh`            | `docker compose build stt_server && docker compose up -d --no-build`    |
 | `nginx/`, `Dockerfile-www`                                                       | `docker compose build stt_www && docker compose up -d --no-build`       |
 | `docker-compose.yml`, `.env`                                                     | `docker compose up -d --no-build`                                       |
+| the build args in `.env` (`DIARIZE`, `PARAKEET`, `CUDA_IMAGE` ... `TORCH_ARCHES`) | `docker compose build stt_server && docker compose up -d --no-build`    |
 
 Two traps apply:
 - **`pull_policy: build` is set,** so a plain `docker compose up -d` rebuilds the images. `--no-build` reuses the ones already built.
@@ -111,7 +116,7 @@ curl -sk -o /dev/null -w "%{http_code}\n" https://localhost:$STT_WWW_PORT/    # 
 
 `POST /api/jobs` stores each job under `JOBS_DIR`, which compose puts in `./recs/jobs` on the host. The directory holds the upload until the job has run, then only the record and the result. Finished jobs are removed after `JOB_RETENTION_HOURS` (24). Jobs survive a restart: one that was running when the server stopped runs again from the start. A job keeps the model it was accepted for, so one whose model the restart unloaded - after a change to `STT_MODELS`, `STT_BACKEND`, `WHISPER_MODEL` or `PARAKEET_MODEL` - fails as `Model not loaded` and has to be sent again.
 
-Leave `OMP_NUM_THREADS=1` as the compose file sets it. The voice detector runs on the CPU, and with torch's default thread count it ran eight times slower on the GB10 host.
+Leave `OMP_NUM_THREADS` at 1, the compose default. The voice detector runs on the CPU, and with torch's default thread count it ran eight times slower on the GB10 host.
 
 ### Monitoring
 
@@ -125,11 +130,15 @@ Leave `OMP_NUM_THREADS=1` as the compose file sets it. The voice detector runs o
 
 ### Several workers
 
-`python3 stt_server.py` is one process with each model's pool: `STT_POOL_SIZE` instances of the single model, or the `@N` of every `STT_MODELS` entry. For several processes, run gunicorn instead (`command:` in the compose file):
+`python3 stt_server.py` is one process with each model's pool: `STT_POOL_SIZE` instances of the single model, or the `@N` of every `STT_MODELS` entry. For several processes, run gunicorn instead, set in `.env` like everything else that differs between hosts:
 
 ```bash
-GUNICORN_WORKERS=2 GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker gunicorn --config gu.py stt_server:asgi_app
+STT_COMMAND=gunicorn --config gu.py stt_server:asgi_app
+GUNICORN_WORKERS=2
+GUNICORN_WORKER_CLASS=uvicorn_worker.UvicornWorker
 ```
+
+Then `docker compose up -d --no-build`. Several workers load their models one after another, so raise `STT_HEALTH_START_PERIOD` (default `60s`) if the container is marked unhealthy while it starts.
 
 - **The live stream needs `UvicornWorker`.** The default `sync` workers serve the HTTP API only.
 - **Each worker loads its own models.** Two workers need twice the GPU memory.
@@ -168,13 +177,24 @@ Read speech is the easy case: phone audio, accents and noise are likely to raise
 
 ### Pascal GPUs (Tesla P40)
 
-The main GPU image cannot run on Pascal cards: CUDA 13 and the cu128/cu130 torch builds no longer carry kernels for sm_50-sm_61. `docker-compose-p40.yml` builds the same `Dockerfile` with five build args set for CUDA 12.6 and `torch==2.9.0+cu126`, whose sm_60 kernels run on a P40 (sm_61), and runs it as `stt_server_p40`, without the web UI:
+The main GPU image cannot run on Pascal cards: CUDA 13 and the cu128/cu130 torch builds no longer carry kernels for sm_50-sm_61. A Pascal host runs the same `docker-compose.yml` and the same `Dockerfile`, built for CUDA 12.6 and `torch==2.9.0+cu126`, whose sm_60 kernels run on a P40 (sm_61). The difference is five build args in its `.env`, which `docker-compose.yml` passes to the build, plus fp32 Whisper:
 
 ```bash
-docker compose -f docker-compose-p40.yml up -d --build
+CUDA_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+CUBLAS_PACKAGE=libcublas-12-6
+TORCH_VERSION=2.9.0
+TORCH_CUDA=cu126
+TORCH_ARCHES=sm_61 sm_60
+WHISPER_FP16=false
 ```
 
-Everything else, `.env` included, works as on the main image. The compose file sets `WHISPER_FP16=false` unless `.env` says otherwise, because Pascal runs fp16 at 1/64 of the fp32 rate. Measured on a Tesla P40 with 40 LibriSpeech phrases of 1 to 3 s, Whisper `turbo` beam 1:
+Then build and start as on any other host; the containers are `stt_server` and `stt_www`:
+
+```bash
+docker compose up -d --build
+```
+
+The five build args go together, and a change to any of them needs a rebuild. `WHISPER_FP16=false` because Pascal runs fp16 at 1/64 of the fp32 rate. Measured on a Tesla P40 with 40 LibriSpeech phrases of 1 to 3 s, Whisper `turbo` beam 1:
 
 | `WHISPER_FP16` | p50     | p95     | WER  |
 | -------------- | ------- | ------- | ---- |
@@ -188,8 +208,8 @@ Parakeet v3 answered in 0.25 s (p50) with a WER of 1.1% on the same phrases. Bot
 `constraints.txt` holds every package version the GPU image resolved. All `pip install` steps in the Dockerfiles run with `-c constraints.txt`, so a rebuild installs the versions that were tested instead of whatever PyPI has that day. After a dependency change has been built and verified, freeze it with `make constraints` and commit the result.
 
 The GPU Dockerfile also checks what it built:
-- the CUDA 13.0 torch is still the one installed;
-- torch carries kernels for NVIDIA GB10;
+- the torch build `TORCH_CUDA` names (CUDA 13.0 by default) is still the one installed;
+- torch carries kernels for one of `TORCH_ARCHES` (NVIDIA GB10 by default);
 - the diarizer and Parakeet architectures are present when they were requested.
 
 A failed check stops the build instead of producing an image that fails at its first request.

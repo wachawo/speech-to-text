@@ -41,7 +41,7 @@ STT_MODELS=whisper:turbo@2,whisper:small.en@1,parakeet:nvidia/parakeet-tdt-0.6b-
 STT_DEFAULT_MODEL=turbo    # `model`이 없는 요청이 쓰는 모델, 비어 있으면 첫 번째 항목
 ```
 
-선택은 시작할 때 로드된 모델 안에서만 이루어집니다. 요청이 다운로드나 로드를 일으키는 일은 없고, 로드되지 않은 모델은 `400`으로 거부됩니다. 목록의 각 모델은 서버가 실행되는 동안 메모리를 차지하며, 대략 `워커 수 x (풀 x 모델 크기)`를 목록 전체에 대해 더한 값에 화자 분리기를 더한 만큼입니다. GPU에서 `turbo@2,small@1,parakeet@1`은 프로세스당 약 12 + 2 + 3 = 17 GB입니다. gunicorn에서는 각 sync 워커가 한 번에 요청 하나만 처리하므로 모든 항목에 `@1`을 주고 `GUNICORN_WORKERS`로 확장하십시오. `@pool`이 없는 항목은 `STT_POOL_SIZE`를 받는데 Docker 밖에서는 8이므로 `@N`을 명시하십시오. 큰 모델 여러 개를 로드하면 하나보다 오래 걸리므로, 시작하는 동안 컨테이너가 unhealthy로 표시되면 compose 파일의 healthcheck `start_period`를 늘리십시오.
+선택은 시작할 때 로드된 모델 안에서만 이루어집니다. 요청이 다운로드나 로드를 일으키는 일은 없고, 로드되지 않은 모델은 `400`으로 거부됩니다. 목록의 각 모델은 서버가 실행되는 동안 메모리를 차지하며, 대략 `워커 수 x (풀 x 모델 크기)`를 목록 전체에 대해 더한 값에 화자 분리기를 더한 만큼입니다. GPU에서 `turbo@2,small@1,parakeet@1`은 프로세스당 약 12 + 2 + 3 = 17 GB입니다. gunicorn에서는 각 sync 워커가 한 번에 요청 하나만 처리하므로 모든 항목에 `@1`을 주고 `GUNICORN_WORKERS`로 확장하십시오. `@pool`이 없는 항목은 `STT_POOL_SIZE`를 받는데 Docker 밖에서는 8이므로 `@N`을 명시하십시오. 큰 모델 여러 개를 로드하면 하나보다 오래 걸리므로, 시작하는 동안 컨테이너가 unhealthy로 표시되면 `.env`의 `STT_HEALTH_START_PERIOD`(healthcheck의 `start_period`, 기본값 `60s`)를 늘리십시오.
 
 `STT_MODELS`가 비어 있으면 `STT_BACKEND`, `WHISPER_MODEL`, `PARAKEET_MODEL`이 예전처럼 단일 모델을 고르고, 서버는 예전과 정확히 같은 것을 로드합니다. 응답에는 필드만 추가됩니다. 값이 설정되면 이 변수들은 무엇을 로드할지 더 이상 결정하지 않습니다. Docker에서는 `STT_MODELS`와 `STT_DEFAULT_MODEL`을 compose의 `environment:` 블록이 아니라 `.env`에 넣으십시오. `environment:` 블록은 `.env`를 덮어씁니다. Parakeet 항목에는 여전히 `PARAKEET=true`로 빌드한 이미지가 필요하며, 알 수 없는 백엔드, 두 번 나열된 같은 가중치(`turbo`와 `large-v3-turbo`), 목록에 없는 `STT_DEFAULT_MODEL`이 있으면 서버는 시작을 거부합니다. 파일 경로로 지정한 모델은 `.pt`를 뺀 파일 이름으로 제공되므로 경로가 클라이언트에 전달되지 않습니다. `STT_DEFAULT_MODEL`은 이런 항목을 그 이름으로도, `STT_MODELS`에 적힌 경로 그대로도 지정할 수 있으며, 그 언어는 파일 이름이 가리키는 체크포인트의 언어입니다. `/models/large-v3.pt`는 `large-v3`가 아는 언어를 압니다. 같은 이름으로 제공될 두 항목(`/a/model.pt`와 `/b/model.pt`)이나 백엔드 이름으로 제공될 항목(`/models/parakeet.pt`)이 있으면 서버는 시작할 때 멈춥니다.
 
@@ -55,8 +55,9 @@ cd speech-to-text
 
 docker compose up --build                              # GPU (CUDA 13.0)
 docker compose -f docker-compose-cpu.yml up --build    # CPU only
-docker compose -f docker-compose-p40.yml up --build    # Pascal GPU such as Tesla P40 (CUDA 12.6), no web UI
 ```
+
+Tesla P40 같은 Pascal 카드도 같은 compose 파일과 같은 `stt_server` 컨테이너로 실행됩니다. CUDA 13에는 이 카드용 커널이 더 이상 없으므로, `.env.example`의 Pascal 블록을 `.env`에 넣어 CUDA 12.6 빌드와 fp32 Whisper를 선택합니다. 자세한 내용은 [docs/DEPLOY.md](DEPLOY.md)를 참고하세요.
 
 GPU 빌드는 호스트에 `nvidia-container-toolkit`가 필요합니다. 첫 실행 시 Whisper 모델을 `./models`로 내려받습니다. 서버에서의 운영(업데이트, 롤백, 인증서, 의존성)은 [docs/DEPLOY.md](DEPLOY.md)에서 다룹니다.
 
@@ -334,6 +335,11 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `SPEECH_GATE`           | `true`                  | 아무도 말하지 않은 전사 텍스트 제거(음성 검출기)    |
 | `STT_UID`, `STT_GID`    | (이미지의 `stt`, 1001)  | `models/`, `logs/`, `recs/`를 소유하는 호스트 사용자(Docker) |
 | `HF_HUB_OFFLINE`        | `0`                     | 모델이 캐시된 뒤 `1`: 시작 시 허브 요청 없음        |
+| `CUDA_IMAGE`, `CUBLAS_PACKAGE`, `TORCH_VERSION`, `TORCH_CUDA`, `TORCH_ARCHES` | CUDA 13.0 | GPU 이미지의 CUDA 빌드(compose). Pascal 카드는 다섯 개를 모두 설정, `.env.example` 참고 |
+| `TZ`                    | `America/New_York`      | 컨테이너의 시간대(compose) |
+| `OMP_NUM_THREADS`, `MKL_NUM_THREADS` | `1`        | torch CPU 스레드 수. 음성 검출기에는 1이 가장 빠름(compose) |
+| `STT_COMMAND`           | `python3 stt_server.py` | 서버 컨테이너의 명령줄, 예: gunicorn(compose) |
+| `STT_HEALTH_START_PERIOD` | `60s`                 | healthcheck가 모델 로드를 기다리는 시간(compose) |
 | `STT_WWW_PORT`          | `5053`                  | 웹 UI 포트(compose)                                 |
 | `STT_WWW_SCHEME`        | `https`                 | 웹 UI 스킴, `https` 또는 `http`(compose)              |
 | `STT_URL`               | `http://localhost:5051` | 클라이언트: 서버 기본 URL                          |
