@@ -411,6 +411,15 @@
   speaker decision since it started; what no phrase can still ask about is now dropped.
 
 #### Changed
+- **A host can give the server one card, publish it on loopback and do without
+  `/etc/timezone`.** `docker-compose.yml` reads `STT_GPU_DEVICE` (a CDI name such as
+  `nvidia.com/gpu=<index or UUID>`, default every card), `STT_PUBLISH_PORT` (e.g.
+  `127.0.0.1:5051`, default every interface) and `STT_TIMEZONE_FILE` (default `/etc/timezone`)
+  from `.env`; unset, the compose file renders exactly as before. Needed on a shared GPU host
+  whose other cards and network belong to other services.
+- **The image no longer doubles in size at the end of the build.** `chown -R stt:stt /opt`
+  rewrote the whole venv into a layer of its own (6.7 GB more); only the directories the
+  server writes are chowned now.
 - **One compose file per image, and every host difference in `.env`.** The separate
   `docker-compose-p40.yml`, which ran the Pascal build as `stt_server_p40` from an image of
   that name and without the web UI, is gone: a Pascal host uses `docker-compose.yml` with the

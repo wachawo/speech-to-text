@@ -66,10 +66,13 @@ services:
       # image built without the backend answers 503 and logs why, rather than failing to start.
       DIARIZE_POOL_SIZE: "${DIARIZE_POOL_SIZE:-1}"
     ports:
-      - "${STT_PORT:-5051}:${STT_PORT:-5051}"
+      # STT_PUBLISH_PORT=127.0.0.1:5051 publishes on loopback only; unset, every interface.
+      - "${STT_PUBLISH_PORT:-${STT_PORT:-5051}}:${STT_PORT:-5051}"
     volumes:
       - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
+      # A host without /etc/timezone points STT_TIMEZONE_FILE at a file that exists: Docker would
+      # create a missing bind-mount source as an empty directory owned by root.
+      - "${STT_TIMEZONE_FILE:-/etc/timezone}:/etc/timezone:ro"
       - ./stt_server.py:/opt/stt_server.py:ro
       - ./stt_client.py:/opt/stt_client.py:ro
       - ./gu.py:/opt/gu.py:ro
@@ -93,8 +96,10 @@ services:
     # nvidia device nodes on cgroup v2. The container keeps running and looks
     # healthy, but nvidia-smi inside reports "Failed to initialize NVML" and
     # CUDA calls start failing with misleading cuDNN/cuBLAS errors.
+    # STT_GPU_DEVICE picks one card by its CDI name (nvidia.com/gpu=<index or UUID>) on a host
+    # whose other GPUs the server must not see.
     devices:
-      - "nvidia.com/gpu=all"
+      - "${STT_GPU_DEVICE:-nvidia.com/gpu=all}"
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
     ulimits:
@@ -144,7 +149,7 @@ services:
       - ./www:/usr/share/nginx/html:ro
       - ./data/certs:/etc/nginx/certs
       - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
+      - "${STT_TIMEZONE_FILE:-/etc/timezone}:/etc/timezone:ro"
     # service_started, not service_healthy: stt_server loads its models before it listens, and the
     # UI shows that wait itself - nginx answers 502 with a JSON error until the server is up.
     depends_on:

@@ -102,7 +102,9 @@ RUN mkdir -p /opt/models /opt/logs /opt/recs
 ENV NUMBA_CACHE_DIR=/tmp/numba XDG_CACHE_HOME=/tmp/cache
 
 RUN useradd --no-create-home --shell /bin/false stt
-RUN chown -R stt:stt /opt
+# Only the directories the server writes. A recursive chown of /opt rewrote the whole venv into
+# a layer of its own and doubled the image (6.7 GB more); the server only reads the venv.
+RUN chown stt:stt /opt /opt/models /opt/logs /opt/recs
 
 # Start as root: the entrypoint chowns the bind-mounted dirs (the build-time
 # chown above cannot reach host-owned mounts) and drops privileges to stt.
