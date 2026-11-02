@@ -1,4 +1,4 @@
-SHELL := /bin/zsh
+SHELL := /bin/bash
 
 PID_FILE := .stt_server.pid
 LOG_FILE := logs/stt_server.log
