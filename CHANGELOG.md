@@ -246,6 +246,10 @@
   linked from the language switcher at the top of each README.
 
 #### Fixed
+- **`make` works on a host without zsh.** The Makefile ran its recipes with `/bin/zsh`, so
+  `make tag-rollback`, `make start` and every other target failed with "No such file or
+  directory" on a stock Ubuntu server; the recipes are plain POSIX shell and now run with
+  `/bin/bash`.
 - **The speech gate no longer drops Parakeet's first words.** Parakeet's segments are single
   words, and on a word of a quarter of a second the voice detector's onset lag is as long as the
   word, so the 0.3 share meant for Whisper's phrases dropped the first word of 14 of 40 short
