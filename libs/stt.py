@@ -15,11 +15,10 @@ import soundfile as sf
 import torch
 import torchaudio
 import whisper
-from pydub import AudioSegment
 from whisper.tokenizer import LANGUAGES, TO_LANGUAGE_CODE
 
 # Local imports
-from libs import config, logs
+from libs import audio, config, logs
 
 # Whisper always decodes in FP32 on CPU; the warning carries nothing actionable.
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
@@ -307,14 +306,16 @@ def get_stt_filename(
     device: str | None = None,
     language: str | None = None,
 ) -> str:
-    """Transcribe an audio file from disk by exporting it to a WAV buffer first."""
+    """Transcribe an audio file from disk, converted exactly as the server converts an upload.
+
+    The file goes through audio.convert_to_wav like every synchronous upload, so the CLI and the
+    server hand the model the same 16 kHz mono WAV and cannot drift apart.
+    """
     if not os.path.exists(filename):
         raise FileNotFoundError(f"File '{filename}' does not exist.")
-    audio = AudioSegment.from_file(filename)
-    bio = io.BytesIO()
-    audio.export(bio, format="wav")
-    bio.seek(0)
-    return get_stt_bio(bio, model=model, device=device, language=language)
+    with open(filename, "rb") as audio_file:
+        wav_bio = audio.convert_to_wav(io.BytesIO(audio_file.read()))
+    return get_stt_bio(wav_bio, model=model, device=device, language=language)
 
 
 def main():
