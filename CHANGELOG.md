@@ -246,6 +246,11 @@
   linked from the language switcher at the top of each README.
 
 #### Fixed
+- **`python3 -m libs.stt` converts a file as the server converts an upload.** The CLI decoded
+  the file through pydub on its own and handed Whisper the file's own rate and channels, a
+  second conversion path that could drift from the server's. It now goes through
+  `audio.convert_to_wav`, so a 16 kHz mono WAV is passed on untouched and anything else
+  reaches the model as 16 kHz mono 16-bit, exactly as on `/api/stt`.
 - **`make` works on a host without zsh.** The Makefile ran its recipes with `/bin/zsh`, so
   `make tag-rollback`, `make start` and every other target failed with "No such file or
   directory" on a stock Ubuntu server; the recipes are plain POSIX shell and now run with
