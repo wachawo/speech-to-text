@@ -65,7 +65,7 @@ body:
     attributes:
       label: Version
       description: The release tag or the commit you are running.
-      placeholder: "0.1.0"
+      placeholder: "0.1.1"
     validations:
       required: true
   - type: input
