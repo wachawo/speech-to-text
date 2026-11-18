@@ -2,6 +2,8 @@
 
 ### [Unreleased]
 
+### [0.1.1] - 2026-11-18
+
 #### Added
 - **Parakeet decodes concurrent requests in one batch, like faster-whisper.** Whatever is
   waiting when the GPU frees up goes into the next batch, and a lone request waits for
