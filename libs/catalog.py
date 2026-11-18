@@ -16,7 +16,11 @@ logger = logging.getLogger(__name__)
 # Rows are grouped by backend in this order, and within a backend in STT_MODELS order. A backend
 # is only listed as available when it is switched on; the diarizer is optional and a deployment
 # that never wanted it should not advertise it.
-BACKENDS = ("whisper", "parakeet", "diarize")
+BACKENDS = ("whisper", "parakeet", "faster-whisper", "diarize")
+
+# Backends listed only by their loaded models. faster-whisper has no model setting of its own and
+# would describe WHISPER_MODEL, giving the catalogue a second row under the id of the Whisper model.
+LISTED_WHEN_LOADED = ("faster-whisper",)
 
 
 def describe_configured_model(spec: dict[str, Any], default_id: str) -> dict[str, Any]:
@@ -87,6 +91,8 @@ def describe_backend_rows(name: str, specs: list[dict[str, Any]], default_id: st
         return []
     configured = [spec for spec in specs if spec["backend"] == name]
     if not configured:
+        if name in LISTED_WHEN_LOADED:
+            return []
         return describe_safely(name, partial(describe_unconfigured_backend, name))
     rows: list[dict[str, Any]] = []
     for spec in configured:

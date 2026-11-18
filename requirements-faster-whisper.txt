@@ -1,0 +1,13 @@
+# faster-whisper (CTranslate2) transcription backend, installed only when the image is built with
+# --build-arg FASTER_WHISPER=true. Mirrors the `faster-whisper` extra in pyproject.toml.
+#
+# CTranslate2 publishes CUDA builds for x86_64 only, against CUDA 12 and cuDNN 9; its aarch64
+# wheels are CPU-only. The Dockerfile checks both before the image is accepted.
+#
+# Pinned exactly, not floored: libs/fast_whisper.py batches requests through faster-whisper's own
+# building blocks, one of them private (WhisperModel._split_segments_by_timestamps). A new release
+# is taken once a batched decode is checked to give each phrase what its own transcribe gives it.
+faster-whisper==1.2.1
+
+# Reading the 16 kHz mono WAV the server hands over.
+soundfile>=0.12.1

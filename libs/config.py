@@ -139,6 +139,12 @@ STT_BACKEND = os.getenv("STT_BACKEND", "whisper").strip().lower()
 PARAKEET_MODEL = os.getenv("PARAKEET_MODEL", "nvidia/parakeet-tdt-0.6b-v3")
 PARAKEET_DOWNLOAD_ROOT = os.getenv("PARAKEET_DOWNLOAD_ROOT", "models")
 
+# faster-whisper (CTranslate2), the optional batching backend. Its checkpoints are Whisper's, so
+# WHISPER_MODEL, WHISPER_LANGUAGE, WHISPER_BEAM_SIZE and WHISPER_DOWNLOAD_ROOT apply to it as well.
+# The compute type is CTranslate2's: "auto" picks the fastest the device supports, int8_float16
+# is what a current card usually wants, and a Pascal card runs int8 or float32.
+FASTER_WHISPER_COMPUTE_TYPE = os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "auto").strip().lower()
+
 # Several transcription models served side by side, each with its own pool. Empty keeps the
 # single-model deployment chosen by STT_BACKEND / WHISPER_MODEL / PARAKEET_MODEL.
 STT_MODELS = parse_model_list(os.getenv("STT_MODELS", ""))

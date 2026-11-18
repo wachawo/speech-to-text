@@ -319,11 +319,12 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_FP16`          | `true`                  | 在 CUDA 上使用半精度；Pascal 显卡（Tesla P40）上设为 `false`，其 fp16 速度只有 1/64 |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | 模型缓存目录（Docker 中为 `/opt/models`）          |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`、`cuda` 或 `auto`                            |
-| `STT_BACKEND`           | `whisper`               | 转录后端：`whisper` 或 `parakeet`（`STT_MODELS` 为空时） |
+| `STT_BACKEND`           | `whisper`               | 转录后端：`whisper`、`parakeet` 或 `faster-whisper`（`STT_MODELS` 为空时） |
 | `STT_MODELS`            | （空）                     | 同时使用多个模型：逗号分隔的 `backend:model[@pool]` |
 | `STT_DEFAULT_MODEL`     | （空）                     | 不带 `model` 的请求所用的模型；为空表示 `STT_MODELS` 的第一个条目 |
 | `PARAKEET_MODEL`        | `nvidia/parakeet-tdt-0.6b-v3` | Parakeet 模型 id                                   |
 | `PARAKEET_DOWNLOAD_ROOT` | `models`                | Parakeet 模型缓存目录                              |
+| `FASTER_WHISPER_COMPUTE_TYPE` | `auto`          | `faster-whisper` 模型的 CTranslate2 计算类型：`auto`、`int8_float16`、`int8`、`float32` 等 |
 | `DIARIZE_ENABLED`       | `false`                 | 启用 `POST /api/diarize`（需 `DIARIZE=true` 镜像） |
 | `DIARIZE_MODEL`         | `nvidia/Nemotron-3-Diarization` | 说话人分离模型 id                                  |
 | `DIARIZE_POOL_SIZE`     | `1`                     | 预加载的说话人分离实例数量                         |
@@ -371,6 +372,7 @@ speech-to-text/
 │   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
+│   ├── fast_whisper.py  # faster-whisper (CTranslate2) wrapper that batches concurrent requests
 │   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
 │   ├── registry.py      # which models are loaded and what a request may select
 │   └── diarize.py       # speaker diarization (who spoke when, no text)

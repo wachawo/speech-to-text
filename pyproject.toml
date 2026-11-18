@@ -72,6 +72,13 @@ parakeet = [
     "soundfile>=0.12.1",
     "librosa>=0.11.0",
 ]
+# The faster-whisper (CTranslate2) backend, which batches concurrent requests. An add-on to
+# `whisper` like the two above: it reads Whisper's language tables from that backend. Pinned
+# exactly for the reason given in requirements-faster-whisper.txt.
+faster-whisper = [
+    "faster-whisper==1.2.1",
+    "soundfile>=0.12.1",
+]
 dev = [
     "black>=26.10.1,<27",
     "ruff>=0.17.3",

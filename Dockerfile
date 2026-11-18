@@ -57,6 +57,13 @@ ARG PARAKEET=false
 COPY requirements-parakeet.txt /opt/requirements-parakeet.txt
 RUN if [ "$PARAKEET" = "true" ]; then uv pip install --no-cache -r requirements-parakeet.txt -c constraints.txt; fi
 
+# faster-whisper is opt-in at build time too: `--build-arg FASTER_WHISPER=true`. CTranslate2 has
+# CUDA builds for x86_64 only, made against CUDA 12 and cuDNN 9, so the image must be a CUDA 12
+# build of the five args above; the checks below refuse anything else.
+ARG FASTER_WHISPER=false
+COPY requirements-faster-whisper.txt /opt/requirements-faster-whisper.txt
+RUN if [ "$FASTER_WHISPER" = "true" ]; then uv pip install --no-cache -r requirements-faster-whisper.txt -c constraints.txt; fi
+
 # Speaker diarization is opt-in at build time: `--build-arg DIARIZE=true`. Off, the image is
 # what it was before diarization existed.
 ARG DIARIZE=false
@@ -79,6 +86,14 @@ assert any(arch in flags for arch in wanted), f'no kernels for {wanted}: {flags}
 RUN if [ "$DIARIZE" = "true" ]; then \
         python3 -c "from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES; \
 assert 'nemotron3_diarization' in CONFIG_MAPPING_NAMES, 'this transformers build does not carry the diarization model'"; \
+    fi
+# CTranslate2 opens cuBLAS 12 and cuDNN 9 only when the first model loads, so on a CUDA 13 image
+# or an aarch64 host the image would build and then fail at startup. Fail the build instead:
+# dlopen needs no GPU.
+RUN if [ "$FASTER_WHISPER" = "true" ]; then \
+        python3 -c "import ctypes, platform, faster_whisper; \
+assert platform.machine() == 'x86_64', 'CTranslate2 has CUDA builds for x86_64 only'; \
+ctypes.CDLL('libcublas.so.12'); ctypes.CDLL('libcudnn.so.9')"; \
     fi
 RUN if [ "$PARAKEET" = "true" ]; then \
         python3 -c "from transformers import AutoModelForTDT; import transformers; \

@@ -319,11 +319,12 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_FP16`          | `true`                  | CUDA での半精度。Pascal 世代のカード（Tesla P40）は fp16 が 1/64 の速度のため `false` |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | モデルキャッシュのディレクトリ（Docker では `/opt/models`） |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`、`cuda`、または `auto`                         |
-| `STT_BACKEND`           | `whisper`               | 文字起こしのバックエンド: `whisper` または `parakeet`（`STT_MODELS` が空の場合） |
+| `STT_BACKEND`           | `whisper`               | 文字起こしのバックエンド: `whisper`、`parakeet` または `faster-whisper`（`STT_MODELS` が空の場合） |
 | `STT_MODELS`            | （空）                     | 複数モデルの同時利用: カンマ区切りの `backend:model[@pool]` |
 | `STT_DEFAULT_MODEL`     | （空）                     | `model` のないリクエストのモデル。空なら `STT_MODELS` の最初のエントリ |
 | `PARAKEET_MODEL`        | `nvidia/parakeet-tdt-0.6b-v3` | Parakeet のモデル ID                                  |
 | `PARAKEET_DOWNLOAD_ROOT`| `models`                | Parakeet モデルのキャッシュディレクトリ               |
+| `FASTER_WHISPER_COMPUTE_TYPE` | `auto`          | `faster-whisper` モデルの CTranslate2 計算型: `auto`、`int8_float16`、`int8`、`float32` など |
 | `DIARIZE_ENABLED`       | `false`                 | `POST /api/diarize` を有効化（`DIARIZE=true` イメージが必要） |
 | `DIARIZE_MODEL`         | `nvidia/Nemotron-3-Diarization` | 話者ダイアライゼーションのモデル ID                   |
 | `DIARIZE_POOL_SIZE`     | `1`                     | 事前に読み込むダイアライザーインスタンスの数          |
@@ -371,6 +372,7 @@ speech-to-text/
 │   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
+│   ├── fast_whisper.py  # faster-whisper (CTranslate2) wrapper that batches concurrent requests
 │   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
 │   ├── registry.py      # which models are loaded and what a request may select
 │   └── diarize.py       # speaker diarization (who spoke when, no text)
