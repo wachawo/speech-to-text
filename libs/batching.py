@@ -2,10 +2,16 @@
 # -*- coding: utf-8 -*-
 """One thread per loaded model that decodes whatever requests are waiting for it as one batch."""
 
+import logging
 import queue
 import threading
 from collections.abc import Callable
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# What CUDA out-of-memory failures say: torch's OutOfMemoryError, and CTranslate2's RuntimeErrors.
+MEMORY_ERROR_MARKERS = ("out of memory", "parallel_for failed")
 
 
 def start_engine(model: Any, name: str, serve_batch: Callable[[Any, list[dict[str, Any]]], None]) -> dict[str, Any]:
@@ -58,6 +64,45 @@ def run_safely(items: list[dict[str, Any]], function: Callable[..., None], *args
         for item in items:
             if item["result"] is None:
                 item["error"] = exc
+
+
+def is_memory_error(exc: Exception) -> bool:
+    """Whether a decode failed for want of GPU memory: torch's OutOfMemoryError or CTranslate2's CUDA errors.
+
+    CTranslate2 raises a plain RuntimeError. Out of memory, it says "CUDA failed with error out of
+    memory" or, when the allocation that failed belonged to one of its kernels, "parallel_for
+    failed" - both seen together in one burst on a card that a second process shared.
+    """
+    return isinstance(exc, RuntimeError) and any(marker in str(exc) for marker in MEMORY_ERROR_MARKERS)
+
+
+def decode_in_halves(
+    items: list[dict[str, Any]],
+    decode: Callable[[Any, list[dict[str, Any]]], None],
+    model: Any,
+    release: Callable[[], None] | None = None,
+) -> None:
+    """Decode items as one batch; out of GPU memory, decode each half the same way, down to one item.
+
+    A batch that does not fit when the card is shared - with another framework's cache in this
+    process, or another process - would otherwise fail every request in it at once, while each
+    half usually fits. `release` frees what the failed attempt left cached before the halves run.
+    An item that fails alone, or any other error, is handed to the items left without a result.
+    """
+    try:
+        decode(model, items)
+    except Exception as exc:
+        pending = [item for item in items if item["result"] is None]
+        if len(pending) < 2 or not is_memory_error(exc):
+            for item in pending:
+                item["error"] = exc
+            return
+        logger.warning("Out of GPU memory decoding a batch of %d, retrying it in halves: %s", len(pending), exc)
+        if release is not None:
+            release()
+        middle = len(pending) // 2
+        decode_in_halves(pending[:middle], decode, model, release)
+        decode_in_halves(pending[middle:], decode, model, release)
 
 
 def submit_request(engine: dict[str, Any], item: dict[str, Any]) -> Any:

@@ -175,11 +175,11 @@ def read_waveform(bio: io.BytesIO) -> np.ndarray:
 
 
 def serve_batch(model: Any, batch: list[dict[str, Any]]) -> None:
-    """Decode a batch: everything that fits one window together, the rest alone."""
+    """Decode a batch: everything that fits one window together, in halves if the GPU runs short, the rest alone."""
     short = [item for item in batch if item["frames"] <= WINDOW_FRAMES]
     logger.debug("Decoding a batch of %d, %d of them in one window", len(batch), len(short))
     if short:
-        batching.run_safely(short, decode_window_batch, model, short)
+        batching.decode_in_halves(short, decode_window_batch, model)
     for item in batch:
         if item["result"] is None and item["error"] is None:
             batching.run_safely([item], decode_alone, model, item)
