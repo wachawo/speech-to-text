@@ -18,6 +18,9 @@ services:
         DIARIZE: "${DIARIZE:-false}"
         # Build the Parakeet backend into the image: PARAKEET=true docker compose up --build
         PARAKEET: "${PARAKEET:-false}"
+        # Build the faster-whisper backend into the image: FASTER_WHISPER=true. x86_64 with a CUDA 12
+        # build of the image only (the five args above); see .env.example.
+        FASTER_WHISPER: "${FASTER_WHISPER:-false}"
     image: stt_server_gpu
     pull_policy: build
     container_name: stt_server

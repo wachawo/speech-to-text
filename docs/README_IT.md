@@ -319,11 +319,12 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_FP16`          | `true`                  | mezza precisione su CUDA; `false` sulle schede Pascal (Tesla P40), che eseguono fp16 a 1/64 della velocità |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | directory della cache dei modelli (`/opt/models` in Docker) |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda`, oppure `auto`                       |
-| `STT_BACKEND`           | `whisper`               | backend di trascrizione: `whisper` o `parakeet` quando `STT_MODELS` è vuoto |
+| `STT_BACKEND`           | `whisper`               | backend di trascrizione: `whisper`, `parakeet` o `faster-whisper` quando `STT_MODELS` è vuoto |
 | `STT_MODELS`            | (vuoto)                 | più modelli affiancati: `backend:model[@pool]`, separati da virgole |
 | `STT_DEFAULT_MODEL`     | (vuoto)                 | modello di una richiesta senza `model`; vuoto significa la prima voce di `STT_MODELS` |
 | `PARAKEET_MODEL`        | `nvidia/parakeet-tdt-0.6b-v3` | id del modello Parakeet                       |
 | `PARAKEET_DOWNLOAD_ROOT`| `models`                | directory della cache del modello Parakeet         |
+| `FASTER_WHISPER_COMPUTE_TYPE` | `auto`          | tipo di calcolo CTranslate2 dei modelli `faster-whisper`: `auto`, `int8_float16`, `int8`, `float32`, ... |
 | `DIARIZE_ENABLED`       | `false`                 | abilita `POST /api/diarize` (richiede un'immagine `DIARIZE=true`) |
 | `DIARIZE_MODEL`         | `nvidia/Nemotron-3-Diarization` | id del modello di diarizzazione                    |
 | `DIARIZE_POOL_SIZE`     | `1`                     | istanze di diarizzazione precaricate               |
@@ -371,6 +372,7 @@ speech-to-text/
 │   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
+│   ├── fast_whisper.py  # faster-whisper (CTranslate2) wrapper that batches concurrent requests
 │   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
 │   ├── registry.py      # which models are loaded and what a request may select
 │   └── diarize.py       # speaker diarization (who spoke when, no text)

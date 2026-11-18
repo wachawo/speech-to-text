@@ -53,11 +53,16 @@ stop:
 	fi
 
 # Freeze what the verified GPU image resolved into constraints.txt (see the header of that file).
+# A pin the image does not carry is kept: faster-whisper exists only in x86_64 CUDA 12 builds,
+# and refreezing from any other image must not drop its versions.
 constraints:
-	@head -n 9 constraints.txt > constraints.txt.new
 	@docker run --rm --entrypoint uv stt_server_gpu:latest pip freeze --python /opt/venv/bin/python \
-		| grep -viE '^(torch|torchaudio|triton|nvidia-|cuda-)' >> constraints.txt.new
+		| grep -viE '^(torch|torchaudio|triton|nvidia-|cuda-)' > constraints.txt.fresh
+	@tail -n +10 constraints.txt | grep -viE "^($$(cut -d= -f1 constraints.txt.fresh | paste -sd'|'))==" \
+		| cat - constraints.txt.fresh | sort -f -t= -k1,1 > constraints.txt.body
+	@head -n 9 constraints.txt | cat - constraints.txt.body > constraints.txt.new
 	@mv constraints.txt.new constraints.txt
+	@rm -f constraints.txt.fresh constraints.txt.body
 	@echo "[constraints] $$(grep -vc '^#' constraints.txt) packages frozen"
 
 # Tag both running images as rollback-<current commit> before a deploy replaces them.

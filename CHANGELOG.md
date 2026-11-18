@@ -3,6 +3,21 @@
 ### [Unreleased]
 
 #### Added
+- **faster-whisper, a third backend that decodes concurrent requests in one batch.** The
+  same Whisper checkpoints on CTranslate2: whatever is waiting when the GPU frees up goes
+  into the next batch, with one encoder pass and one beam search for all of it, and a lone
+  request waits for nothing. Load it with `STT_MODELS=faster-whisper:large-v3@32`, where `@32`
+  is the largest batch and the weights load once per process, and pick it with
+  `model=faster-whisper`. `language`, `prompt`, `WHISPER_BEAM_SIZE` and the `verbose_json`
+  segment fields (`avg_logprob` and `no_speech_prob` included) work as with Whisper;
+  `FASTER_WHISPER_COMPUTE_TYPE` sets CTranslate2's precision. It needs an image built with
+  `FASTER_WHISPER=true` on x86_64 with a CUDA 12 build, and the build refuses anything else.
+  At float32 every phrase gets exactly what it gets alone, and on 96 LibriSpeech phrases the
+  same text as openai-whisper; with int8 a phrase can depend on the batch it shared. On a
+  Tesla P40 with large-v3, a short phrase took 654 ms at int8 against 1066 ms with
+  openai-whisper, and the card served 2.2 phrases per second against 0.95, at the same 2.1%
+  WER.
+
 - **An image for Pascal GPUs such as the Tesla P40.** CUDA 13 and the cu128/cu130 torch
   builds dropped sm_50-sm_61, so the main GPU image cannot run on them. The `Dockerfile`
   takes five build args - `CUDA_IMAGE`, `CUBLAS_PACKAGE`, `TORCH_VERSION`, `TORCH_CUDA` and
@@ -246,6 +261,10 @@
   linked from the language switcher at the top of each README.
 
 #### Fixed
+- **More than ten requests in flight per process.** uvicorn ran Flask on 10 threads, so a
+  process never held more than 10 requests whatever its pools allowed, and with all 10
+  waiting for a model the health check and `/metrics` had none left. It now gets 10 plus
+  one per slot of every model pool.
 - **`python3 -m libs.stt` converts a file as the server converts an upload.** The CLI decoded
   the file through pydub on its own and handed Whisper the file's own rate and channels, a
   second conversion path that could drift from the server's. It now goes through

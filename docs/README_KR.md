@@ -319,11 +319,12 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_FP16`          | `true`                  | CUDA에서 반정밀도. fp16을 1/64 속도로 실행하는 Pascal 카드(Tesla P40)에서는 `false` |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | 모델 캐시 디렉터리(Docker에서는 `/opt/models`)     |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda`, 또는 `auto`                         |
-| `STT_BACKEND`           | `whisper`               | 전사 백엔드: `whisper` 또는 `parakeet`(`STT_MODELS`가 비어 있을 때) |
+| `STT_BACKEND`           | `whisper`               | 전사 백엔드: `whisper`, `parakeet` 또는 `faster-whisper`(`STT_MODELS`가 비어 있을 때) |
 | `STT_MODELS`            | (비어 있음)                 | 여러 모델 동시 사용: 쉼표로 구분된 `backend:model[@pool]` |
 | `STT_DEFAULT_MODEL`     | (비어 있음)                 | `model` 없는 요청의 모델, 비어 있으면 `STT_MODELS`의 첫 항목 |
 | `PARAKEET_MODEL`        | `nvidia/parakeet-tdt-0.6b-v3` | Parakeet 모델 ID                             |
 | `PARAKEET_DOWNLOAD_ROOT`| `models`                | Parakeet 모델 캐시 디렉터리                        |
+| `FASTER_WHISPER_COMPUTE_TYPE` | `auto`          | `faster-whisper` 모델의 CTranslate2 연산 타입: `auto`, `int8_float16`, `int8`, `float32` 등 |
 | `DIARIZE_ENABLED`       | `false`                 | `POST /api/diarize` 활성화(`DIARIZE=true` 이미지 필요) |
 | `DIARIZE_MODEL`         | `nvidia/Nemotron-3-Diarization` | 화자 분리 모델 ID                          |
 | `DIARIZE_POOL_SIZE`     | `1`                     | 미리 로드되는 화자 분리기 인스턴스 수              |
@@ -371,6 +372,7 @@ speech-to-text/
 │   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
+│   ├── fast_whisper.py  # faster-whisper (CTranslate2) wrapper that batches concurrent requests
 │   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
 │   ├── registry.py      # which models are loaded and what a request may select
 │   └── diarize.py       # speaker diarization (who spoke when, no text)

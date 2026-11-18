@@ -319,11 +319,12 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_FP16`          | `true`                  | CUDA पर हाफ़ प्रिसिज़न; Pascal कार्ड (Tesla P40) पर `false`, जो fp16 को 1/64 गति से चलाते हैं |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | मॉडल कैश डायरेक्टरी (Docker में `/opt/models`)        |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda`, या `auto`                             |
-| `STT_BACKEND`           | `whisper`               | ट्रांसक्रिप्शन बैकएंड: `whisper` या `parakeet` (जब `STT_MODELS` खाली हो) |
+| `STT_BACKEND`           | `whisper`               | ट्रांसक्रिप्शन बैकएंड: `whisper`, `parakeet` या `faster-whisper` (जब `STT_MODELS` खाली हो) |
 | `STT_MODELS`            | (खाली)                  | एक साथ कई मॉडल: अल्पविराम से अलग `backend:model[@pool]` |
 | `STT_DEFAULT_MODEL`     | (खाली)                  | बिना `model` वाले अनुरोध का मॉडल; खाली होने पर `STT_MODELS` की पहली प्रविष्टि |
 | `PARAKEET_MODEL`        | `nvidia/parakeet-tdt-0.6b-v3` | Parakeet मॉडल id                                    |
 | `PARAKEET_DOWNLOAD_ROOT`| `models`                | Parakeet मॉडल कैश डायरेक्टरी                         |
+| `FASTER_WHISPER_COMPUTE_TYPE` | `auto`          | `faster-whisper` मॉडलों का CTranslate2 compute type: `auto`, `int8_float16`, `int8`, `float32`, ... |
 | `DIARIZE_ENABLED`       | `false`                 | `POST /api/diarize` सक्षम करें (`DIARIZE=true` इमेज चाहिए) |
 | `DIARIZE_MODEL`         | `nvidia/Nemotron-3-Diarization` | डायराइज़ेशन मॉडल id                                  |
 | `DIARIZE_POOL_SIZE`     | `1`                     | पहले से लोड किए गए डायराइज़र इंस्टेंस                 |
@@ -371,6 +372,7 @@ speech-to-text/
 │   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
+│   ├── fast_whisper.py  # faster-whisper (CTranslate2) wrapper that batches concurrent requests
 │   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
 │   ├── registry.py      # which models are loaded and what a request may select
 │   └── diarize.py       # speaker diarization (who spoke when, no text)

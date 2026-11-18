@@ -319,11 +319,12 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_FP16`          | `true`                  | половинная точность на CUDA; `false` на картах Pascal (Tesla P40), где fp16 в 64 раза медленнее |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | каталог кеша моделей (`/opt/models` в Docker)       |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda` или `auto`                             |
-| `STT_BACKEND`           | `whisper`               | бэкенд транскрипции: `whisper` или `parakeet`, если `STT_MODELS` пуст |
+| `STT_BACKEND`           | `whisper`               | бэкенд транскрипции: `whisper`, `parakeet` или `faster-whisper`, если `STT_MODELS` пуст |
 | `STT_MODELS`            | (пусто)                 | несколько моделей сразу: `backend:model[@pool]` через запятую |
 | `STT_DEFAULT_MODEL`     | (пусто)                 | модель для запроса без `model`; пусто означает первую запись `STT_MODELS` |
 | `PARAKEET_MODEL`        | `nvidia/parakeet-tdt-0.6b-v3` | идентификатор модели Parakeet                       |
 | `PARAKEET_DOWNLOAD_ROOT`| `models`                | каталог кеша моделей Parakeet                       |
+| `FASTER_WHISPER_COMPUTE_TYPE` | `auto`          | тип вычислений CTranslate2 для моделей `faster-whisper`: `auto`, `int8_float16`, `int8`, `float32`, ... |
 | `DIARIZE_ENABLED`       | `false`                 | включить `POST /api/diarize` (нужен образ с `DIARIZE=true`) |
 | `DIARIZE_MODEL`         | `nvidia/Nemotron-3-Diarization` | идентификатор модели диаризации                     |
 | `DIARIZE_POOL_SIZE`     | `1`                     | число предзагруженных экземпляров диаризатора       |
@@ -371,6 +372,7 @@ speech-to-text/
 │   ├── longform.py      # длинная запись по кускам: одна взятая из пула модель на кусок, говорящие по всему файлу
 │   ├── stt.py           # обёртка над Whisper
 │   ├── parakeet.py      # обёртка над NVIDIA Parakeet, второй транскрибатор
+│   ├── fast_whisper.py  # обёртка над faster-whisper (CTranslate2), собирающая одновременные запросы в батч
 │   ├── backends.py      # имя бэкенда -> модуль транскрипции (STT_BACKEND или запись STT_MODELS)
 │   ├── registry.py      # какие модели загружены и что может выбрать запрос
 │   └── diarize.py       # диаризация говорящих (кто когда говорил, без текста)

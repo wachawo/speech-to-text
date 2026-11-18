@@ -84,6 +84,7 @@ DIARIZE=true            # build: install the diarization backend
 DIARIZE_ENABLED=true    # run: serve /api/diarize and /api/transcript
 PARAKEET=true           # build: install the Parakeet backend
 STT_BACKEND=parakeet    # run: transcribe with Parakeet instead of Whisper
+FASTER_WHISPER=true     # build: install the faster-whisper backend (x86_64, CUDA 12 image only)
 ```
 
 then rebuild with `docker compose up -d --build`. Running it on a server - updates, rollbacks, certificates, dependencies - is covered in [docs/DEPLOY.md](docs/DEPLOY.md). The two failures differ on purpose. Enabling diarization on an image built without it answers `503` for the diarization routes and keeps transcribing. Selecting `STT_BACKEND=parakeet` on an image built without it stops the server at startup with the missing dependency in the log: a transcription service that cannot transcribe should not report itself healthy, and quietly falling back to Whisper would serve a different model than the one configured. The first run downloads each model into `./models`: Whisper, and when enabled about 2.4 GB for Parakeet and 400 MB for the diarizer.
@@ -195,7 +196,9 @@ curl -X POST localhost:5051/api/diarize -F file=@meeting.wav
 
 Two things about those numbers. Turns may overlap, because each speaker channel is scored on its own, so two people talking at once produce two turns covering the same seconds. And the labels are positions in this one recording, ordered by who spoke first: they are not identities, and the same person gets a different number in the next request. Naming a speaker needs an enrollment step that this service does not have. At most eight speakers are distinguished.
 
-Two transcription backends are available. **Whisper** is the default and accepts a `language`. **Parakeet** (`nvidia/parakeet-tdt-0.6b-v3`) covers 25 European languages, detects the language itself and therefore takes no `language` argument at all, which `GET /api/models` reports as `accepts_language: false`. It needs an image built with `PARAKEET=true`. Select it for the whole server with `STT_BACKEND=parakeet`, or load it beside Whisper through `STT_MODELS` and pick it per request with `model`. A request only ever chooses among the models loaded at startup, and every loaded model holds its weights in every worker, so the memory is the number of workers times the sum of the pools.
+Three transcription backends are available. **Whisper** is the default and accepts a `language`. **Parakeet** (`nvidia/parakeet-tdt-0.6b-v3`) covers 25 European languages, detects the language itself and therefore takes no `language` argument at all, which `GET /api/models` reports as `accepts_language: false`. It needs an image built with `PARAKEET=true`. Select it for the whole server with `STT_BACKEND=parakeet`, or load it beside Whisper through `STT_MODELS` and pick it per request with `model`. A request only ever chooses among the models loaded at startup, and every loaded model holds its weights in every worker, so the memory is the number of workers times the sum of the pools.
+
+**faster-whisper** runs the same Whisper checkpoints on CTranslate2 and decodes concurrent requests together: whatever is waiting when the GPU frees up goes into the next batch, one encoder pass and one beam search for all of them, and a lone request waits for nothing. Load it with `STT_MODELS=faster-whisper:large-v3@32` and pick it with `model=faster-whisper`. For this backend `@N` is not a number of copies: the weights load once per process, and `@N` is how many requests may be in the batch at once. Audio longer than 30 s is decoded alone, window after window. It takes `language`, `prompt` and `WHISPER_BEAM_SIZE` like Whisper, and `verbose_json` carries the same per-segment fields, `avg_logprob` and `no_speech_prob` included. `FASTER_WHISPER_COMPUTE_TYPE` picks the precision; with an `int8` type the result of a phrase can depend on which other phrases shared its batch, because CTranslate2 quantizes the batch's activations together, while `float16` and `float32` give every phrase what it gets alone. It needs an image built with `FASTER_WHISPER=true` on x86_64, and the image must be a CUDA 12 build (the `CUDA_IMAGE` group of build args), because CTranslate2 ships CUDA builds for x86_64 and CUDA 12 only; the build refuses anything else. One server cannot load one checkpoint under both Whisper backends: both would be served as the same id.
 
 Neither backend is overlap-aware. NVIDIA's overlap-aware model ships only as a NeMo checkpoint, and NeMo pins a different PyTorch than this project's CUDA build, so it is not installable here.
 
@@ -346,11 +349,12 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `WHISPER_FP16`          | `true`                  | Half precision on CUDA; `false` on Pascal cards (Tesla P40), which run fp16 at 1/64 speed |
 | `WHISPER_DOWNLOAD_ROOT` | `models`                | model cache directory (`/opt/models` in Docker)     |
 | `COMPUTE_TYPE`          | `auto`                  | `cpu`, `cuda`, or `auto`                             |
-| `STT_BACKEND`           | `whisper`               | transcription backend when `STT_MODELS` is empty: `whisper` or `parakeet` |
+| `STT_BACKEND`           | `whisper`               | transcription backend when `STT_MODELS` is empty: `whisper`, `parakeet` or `faster-whisper` |
 | `STT_MODELS`            | (empty)                 | several models side by side: `backend:model[@pool]`, comma-separated |
 | `STT_DEFAULT_MODEL`     | (empty)                 | model a request without `model` gets; empty means the first `STT_MODELS` entry |
 | `PARAKEET_MODEL`        | `nvidia/parakeet-tdt-0.6b-v3` | Parakeet model id                             |
 | `PARAKEET_DOWNLOAD_ROOT`| `models`                | Parakeet model cache directory                      |
+| `FASTER_WHISPER_COMPUTE_TYPE` | `auto`          | CTranslate2 compute type of `faster-whisper` models: `auto`, `int8_float16`, `int8`, `float32`, ... |
 | `DIARIZE_ENABLED`       | `false`                 | enable `POST /api/diarize` (needs a `DIARIZE=true` image) |
 | `DIARIZE_MODEL`         | `nvidia/Nemotron-3-Diarization` | diarization model id                        |
 | `DIARIZE_POOL_SIZE`     | `1`                     | pre-loaded diarizer instances                       |
@@ -398,6 +402,7 @@ speech-to-text/
 │   ├── longform.py      # a long recording in pieces: one borrowed model per piece, speakers across the file
 │   ├── stt.py           # Whisper wrapper
 │   ├── parakeet.py      # NVIDIA Parakeet wrapper, the second transcriber
+│   ├── fast_whisper.py  # faster-whisper (CTranslate2) wrapper that batches concurrent requests
 │   ├── backends.py      # backend name -> transcriber module (STT_BACKEND or an STT_MODELS entry)
 │   ├── registry.py      # which models are loaded and what a request may select
 │   └── diarize.py       # speaker diarization (who spoke when, no text)

@@ -54,6 +54,9 @@ JOB_SPOOL_BYTES = 1024 * 500
 # Paths whose access log is demoted to DEBUG so healthchecks and scrapes do not flood the log.
 QUIET_PATHS = ("/api/health", "/metrics")
 
+# uvicorn's default thread count for a WSGI app, kept for everything that is not a model slot.
+HTTP_THREADS = 10
+
 
 def keep_upload_in_memory(**unused_part_details) -> io.BytesIO:
     """Werkzeug stream factory that holds a multipart file part in memory, whatever its size.
@@ -825,6 +828,17 @@ def log_auth_mode() -> None:
         logger.info("Auth: disabled (STT_TOKENS empty)")
 
 
+def count_http_threads() -> int:
+    """Threads that run Flask under uvicorn: uvicorn's own 10, plus one per slot of every model pool.
+
+    A request holds its thread while it waits for and uses an instance, so with only the 10 a
+    process never had more than 10 requests in flight, whatever the pools allowed: a batching
+    backend could not form a batch of more, and with every thread waiting on a model the health
+    check and /metrics had none left. A slot per instance keeps the 10 for everything else.
+    """
+    return HTTP_THREADS + sum(spec["pool_size"] for spec in registry.get_model_specs())
+
+
 def build_asgi_app(wsgi_app):
     """One ASGI app for uvicorn: the live stream socket, and everything else into Flask.
 
@@ -832,7 +846,7 @@ def build_asgi_app(wsgi_app):
     Flask would then see `/health` for `/api/health` and answer its own 404. Here every public URL
     stays exactly what it was.
     """
-    http_app = WSGIMiddleware(wsgi_app)
+    http_app = WSGIMiddleware(wsgi_app, workers=count_http_threads())
 
     async def asgi_app(scope, receive, send):
         """Route one ASGI connection by its type and path."""
