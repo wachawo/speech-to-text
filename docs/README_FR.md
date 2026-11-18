@@ -373,6 +373,7 @@ speech-to-text/
 │   ├── stt.py           # wrapper Whisper
 │   ├── parakeet.py      # wrapper NVIDIA Parakeet, le second transcripteur
 │   ├── fast_whisper.py  # wrapper faster-whisper (CTranslate2) qui regroupe les requêtes simultanées
+│   ├── batching.py      # le thread qui décode en un lot les requêtes en attente d'un modèle
 │   ├── backends.py      # nom de backend -> module de transcription (STT_BACKEND ou une entrée de STT_MODELS)
 │   ├── registry.py      # quels modèles sont chargés et ce qu'une requête peut choisir
 │   └── diarize.py       # diarisation des locuteurs (qui a parlé et quand, sans texte)
