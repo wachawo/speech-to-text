@@ -455,7 +455,12 @@ def get_stt_result(
     segments = [{"start": float(piece["start"]), "end": float(piece["end"]), "text": piece["text"]} for piece in pieces]
     text = "".join(piece["text"] for piece in pieces).strip()
     logger.debug("Transcribed %d chars in %d segments (language %s)", len(text), len(segments), result["language"])
-    return {"text": text, "language": result["language"], "segments": segments, "segment_details": build_segment_details(pieces)}
+    return {
+        "text": text,
+        "language": result["language"],
+        "segments": segments,
+        "segment_details": build_segment_details(pieces),
+    }
 
 
 def get_stt_bio(
