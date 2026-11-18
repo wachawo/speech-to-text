@@ -186,14 +186,31 @@ def read_mono_16k(bio: io.BytesIO) -> np.ndarray:
 
 
 def serve_batch(model: tuple[Any, Any], batch: list[dict[str, Any]]) -> None:
-    """Decode a batch: everything up to BATCH_FRAMES together, the rest alone."""
-    short = [item for item in batch if item["frames"] <= BATCH_FRAMES]
-    logger.debug("Decoding a batch of %d, %d of them together", len(batch), len(short))
-    if short:
-        batching.run_safely(short, decode_batch, model, short)
-    for item in batch:
-        if item["result"] is None and item["error"] is None:
-            batching.run_safely([item], decode_batch, model, [item])
+    """Decode a batch: everything up to BATCH_FRAMES together, in halves if the GPU runs short, the rest alone.
+
+    torch's cache is handed back to the driver after every batch. A batch's activations are the
+    largest allocation this model makes, and torch keeps that peak reserved once it is free: on a
+    card shared with faster-whisper, whose CTranslate2 allocates outside torch, the first full
+    Whisper batch after a burst of Parakeet ran out of memory and failed all 32 of its requests.
+    """
+    try:
+        short = [item for item in batch if item["frames"] <= BATCH_FRAMES]
+        logger.debug("Decoding a batch of %d, %d of them together", len(batch), len(short))
+        if short:
+            batching.decode_in_halves(short, decode_batch, model, release=release_cache)
+        for item in batch:
+            if item["result"] is None and item["error"] is None:
+                batching.decode_in_halves([item], decode_batch, model)
+    finally:
+        release_cache()
+
+
+def release_cache() -> None:
+    """Hand the memory torch holds cached and unused back to the CUDA driver; nothing on a CPU."""
+    import torch
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def decode_batch(model: tuple[Any, Any], batch: list[dict[str, Any]]) -> None:

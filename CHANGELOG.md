@@ -272,6 +272,12 @@
   linked from the language switcher at the top of each README.
 
 #### Fixed
+- **A batch that runs out of GPU memory no longer fails every request in it.** faster-whisper
+  and Parakeet now decode it in halves, down to a single request, and only a request that
+  does not fit on its own gets the error. Parakeet also hands PyTorch's cached memory back to
+  the driver after each batch: on a card shared with faster-whisper, whose CTranslate2 cannot
+  use what PyTorch keeps cached, the first full batch of 32 after a burst of Parakeet ran out
+  of memory and failed all 32 requests.
 - **The speech gate no longer caps a process at about 10 requests a second.** One voice
   detector behind one lock made every request wait for every other, whatever the models
   could do, and Whisper and Parakeet loaded side by side shared that limit. Each call now
