@@ -53,11 +53,13 @@ stop:
 	fi
 
 # Freeze what the verified GPU image resolved into constraints.txt (see the header of that file).
-# A pin the image does not carry is kept: faster-whisper exists only in x86_64 CUDA 12 builds,
-# and refreezing from any other image must not drop its versions.
+# A pin the image does not carry is kept: faster-whisper exists only in builds that asked for it,
+# and refreezing from any other image must not drop its versions. A package installed from a local
+# file (CTranslate2 built with CTRANSLATE2=source) freezes as `name @ file:///...`, a path no other
+# build has; it is left out, so its existing `name==version` pin is kept.
 constraints:
 	@docker run --rm --entrypoint uv stt_server_gpu:latest pip freeze --python /opt/venv/bin/python \
-		| grep -viE '^(torch|torchaudio|triton|nvidia-|cuda-)' > constraints.txt.fresh
+		| grep -viE '^(torch|torchaudio|triton|nvidia-|cuda-)' | grep -v ' @ file:' > constraints.txt.fresh
 	@tail -n +10 constraints.txt | grep -viE "^($$(cut -d= -f1 constraints.txt.fresh | paste -sd'|'))==" \
 		| cat - constraints.txt.fresh | sort -f -t= -k1,1 > constraints.txt.body
 	@head -n 9 constraints.txt | cat - constraints.txt.body > constraints.txt.new

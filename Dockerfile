@@ -6,6 +6,81 @@
 # The five go together: the base image, its cuBLAS package, the torch build for that CUDA, and
 # the kernels the build must carry.
 ARG CUDA_IMAGE=nvidia/cuda:13.0.3-cudnn-runtime-ubuntu24.04
+
+# CTranslate2, which faster-whisper runs on, publishes CUDA builds for x86_64 against CUDA 12,
+# with kernels from sm_53 up. `CTRANSLATE2=source` compiles it here instead, for the CUDA of
+# CTRANSLATE2_BUILD_IMAGE (a -devel image of the same CUDA as CUDA_IMAGE) and the architectures
+# in CTRANSLATE2_CUDA_ARCHES, plain numbers separated by spaces: that is how an aarch64 GB10
+# (CUDA 13, 121) or a Maxwell Tesla M40 (CUDA 12.6, 52) gets a GPU build. The default, `wheel`,
+# builds nothing and takes CTranslate2 from PyPI with faster-whisper. The flags are those of the
+# project's own release builds, minus the x86-only CPU backends: no cuDNN (the convolutions use
+# its own kernel, as in the PyPI wheels) and cuBLAS opened at runtime. BuildKit builds the source
+# stage only when it is selected; the legacy builder builds every stage.
+ARG CTRANSLATE2=wheel
+ARG CTRANSLATE2_BUILD_IMAGE=nvidia/cuda:13.0.3-devel-ubuntu24.04
+ARG CTRANSLATE2_VERSION=4.9.0
+ARG CTRANSLATE2_CUDA_ARCHES=121
+ARG FASTER_WHISPER=false
+
+# Nothing to build: an empty /out, so that the runtime image copies the same path either way.
+FROM ${CUDA_IMAGE} AS ctranslate2-wheel
+RUN mkdir -p /out
+
+FROM ${CTRANSLATE2_BUILD_IMAGE} AS ctranslate2-source
+ARG CTRANSLATE2_VERSION
+ARG CTRANSLATE2_CUDA_ARCHES
+ARG FASTER_WHISPER
+# Refused before half an hour of compiling rather than after it: the build is only for
+# faster-whisper, and the wheel is installed under constraints.txt, which pins one version.
+COPY constraints.txt /tmp/constraints.txt
+RUN [ "$FASTER_WHISPER" = "true" ] \
+        || { echo "CTRANSLATE2=source builds CTranslate2 for faster-whisper: set FASTER_WHISPER=true" >&2; exit 1; } \
+    && grep -qx "ctranslate2==${CTRANSLATE2_VERSION}" /tmp/constraints.txt \
+        || { echo "CTRANSLATE2_VERSION=${CTRANSLATE2_VERSION} is not the ctranslate2 pin in constraints.txt" >&2; exit 1; } \
+    && for arch in ${CTRANSLATE2_CUDA_ARCHES}; do \
+        case "$arch" in ''|*[!0-9]*) echo "CTRANSLATE2_CUDA_ARCHES takes numbers such as 52 or 121, not ${arch}" >&2; exit 1;; esac; \
+    done
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        cmake \
+        build-essential \
+        python3-dev \
+        python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch v${CTRANSLATE2_VERSION} --recurse-submodules --shallow-submodules \
+        https://github.com/OpenNMT/CTranslate2.git /src
+# Maxwell (sm_50, sm_52) has no f16x2 arithmetic, and one AWQ kernel uses it unguarded, so ptxas
+# refuses the whole build for those targets; the patch traps in that kernel below sm_53 (see its
+# header). Applied only when an architecture below 53 is asked for, so every other build is the
+# upstream source unchanged.
+COPY docker/ctranslate2-sm52.patch /tmp/ctranslate2-sm52.patch
+RUN for arch in ${CTRANSLATE2_CUDA_ARCHES}; do \
+        if [ "$arch" -lt 53 ]; then git -C /src apply /tmp/ctranslate2-sm52.patch || exit 1; break; fi; \
+    done
+WORKDIR /src/build
+# CMake takes the architectures as a semicolon list; the arg is space-separated for the loops here.
+RUN cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_CLI=OFF \
+        -DWITH_MKL=OFF -DWITH_RUY=ON -DOPENMP_RUNTIME=COMP \
+        -DWITH_CUDA=ON -DWITH_CUDNN=OFF -DCUDA_DYNAMIC_LOADING=ON \
+        -DCMAKE_CUDA_ARCHITECTURES="$(echo ${CTRANSLATE2_CUDA_ARCHES} | tr ' ' ';')" \
+        -DCMAKE_CUDA_FLAGS="-Xfatbin=-compress-all" \
+    && make -j"$(nproc)" install
+# Kernels for every requested architecture, or the build is refused: one missing would build
+# fine and fail on the first model load with "no kernel image is available".
+RUN for arch in ${CTRANSLATE2_CUDA_ARCHES}; do \
+        cuobjdump --list-elf /usr/local/lib/libctranslate2.so | grep -q "\.sm_${arch}\.cubin$" \
+            || { echo "libctranslate2 carries no sm_${arch} kernels" >&2; exit 1; }; \
+    done
+RUN python3 -m venv /venv && /venv/bin/pip install --no-cache-dir -r /src/python/install_requirements.txt \
+    && cd /src/python && /venv/bin/python setup.py bdist_wheel -d /out/wheel
+# The cuBLAS this build opens at runtime, by soname, for the runtime image to check.
+RUN mkdir -p /out/lib && cp -a /usr/local/lib/libctranslate2.so* /out/lib/ \
+    && grep -ao 'libcublas\.so\.[0-9]*' /usr/local/lib/libctranslate2.so | head -1 > /out/cublas-soname \
+    && test -s /out/cublas-soname
+
+FROM ctranslate2-${CTRANSLATE2} AS ctranslate2
+
 FROM ${CUDA_IMAGE}
 
 # ffmpeg is required by pydub; libsndfile1 is required by soundfile.
@@ -57,12 +132,21 @@ ARG PARAKEET=false
 COPY requirements-parakeet.txt /opt/requirements-parakeet.txt
 RUN if [ "$PARAKEET" = "true" ]; then uv pip install --no-cache -r requirements-parakeet.txt -c constraints.txt; fi
 
-# faster-whisper is opt-in at build time too: `--build-arg FASTER_WHISPER=true`. CTranslate2 has
-# CUDA builds for x86_64 only, made against CUDA 12 and cuDNN 9, so the image must be a CUDA 12
-# build of the five args above; the checks below refuse anything else.
+# faster-whisper is opt-in at build time too: `--build-arg FASTER_WHISPER=true`. CTranslate2's
+# PyPI wheels have CUDA builds for x86_64 only, made against CUDA 12 and cuDNN 9, so with them the
+# image must be a CUDA 12 build of the five args above. With CTRANSLATE2=source the library built
+# above is installed first, and the PyPI wheel is never fetched: the constraint pins the version
+# that was built. The checks below refuse anything else.
 ARG FASTER_WHISPER=false
+COPY --from=ctranslate2 /out /opt/ctranslate2
 COPY requirements-faster-whisper.txt /opt/requirements-faster-whisper.txt
-RUN if [ "$FASTER_WHISPER" = "true" ]; then uv pip install --no-cache -r requirements-faster-whisper.txt -c constraints.txt; fi
+RUN if [ "$FASTER_WHISPER" = "true" ]; then \
+        if [ -d /opt/ctranslate2/wheel ]; then \
+            cp -a /opt/ctranslate2/lib/. /usr/local/lib/ && ldconfig \
+            && uv pip install --no-cache /opt/ctranslate2/wheel/*.whl -c constraints.txt; \
+        fi \
+        && uv pip install --no-cache -r requirements-faster-whisper.txt -c constraints.txt; \
+    fi
 
 # Speaker diarization is opt-in at build time: `--build-arg DIARIZE=true`. Off, the image is
 # what it was before diarization existed.
@@ -87,12 +171,18 @@ RUN if [ "$DIARIZE" = "true" ]; then \
         python3 -c "from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES; \
 assert 'nemotron3_diarization' in CONFIG_MAPPING_NAMES, 'this transformers build does not carry the diarization model'"; \
     fi
-# CTranslate2 opens cuBLAS 12 and cuDNN 9 only when the first model loads, so on a CUDA 13 image
-# or an aarch64 host the image would build and then fail at startup. Fail the build instead:
-# dlopen needs no GPU.
-RUN if [ "$FASTER_WHISPER" = "true" ]; then \
+# CTranslate2 opens cuBLAS (and, from PyPI, cuDNN 9) only when the first model loads, so a
+# mismatched image would build and then fail at startup. Fail the build instead: dlopen needs no
+# GPU. From PyPI, that is cuBLAS 12 and cuDNN 9 on x86_64. Built from source, it is the cuBLAS the
+# build recorded, and the library Python loads must be that build and not a PyPI wheel's copy.
+RUN if [ "$FASTER_WHISPER" = "true" ] && [ -s /opt/ctranslate2/cublas-soname ]; then \
+        python3 -c "import ctypes, faster_whisper, ctranslate2; \
+ctypes.CDLL(open('/opt/ctranslate2/cublas-soname').read().strip()); \
+maps = open('/proc/self/maps').read(); \
+assert '/usr/local/lib/libctranslate2.so' in maps, 'CTranslate2 is not the source build'"; \
+    elif [ "$FASTER_WHISPER" = "true" ]; then \
         python3 -c "import ctypes, platform, faster_whisper; \
-assert platform.machine() == 'x86_64', 'CTranslate2 has CUDA builds for x86_64 only'; \
+assert platform.machine() == 'x86_64', 'CTranslate2 has CUDA builds for x86_64 only; build it with CTRANSLATE2=source'; \
 ctypes.CDLL('libcublas.so.12'); ctypes.CDLL('libcudnn.so.9')"; \
     fi
 RUN if [ "$PARAKEET" = "true" ]; then \

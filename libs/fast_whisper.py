@@ -60,7 +60,9 @@ def resolve_device(device: str | None = None) -> str:
     if device not in stt.SUPPORTED_DEVICES:
         raise ValueError("Device must be 'cpu' or 'cuda'.")
     if device == "cuda" and not has_cuda:
-        raise RuntimeError("CTranslate2 sees no CUDA device; its aarch64 wheels are CPU-only.")
+        raise RuntimeError(
+            "CTranslate2 sees no CUDA device; its aarch64 PyPI wheels are CPU-only, build it with CTRANSLATE2=source."
+        )
     return device
 
 
