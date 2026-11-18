@@ -20,6 +20,8 @@ of the phrases measured.
 import io
 import logging
 import math
+import os
+import queue
 import re
 import threading
 import time
@@ -41,7 +43,7 @@ SAMPLE_RATE = 16000
 VAD_THRESHOLD = 0.35
 VAD_MIN_SPEECH_MS = 100
 
-# The detector runs over this much audio per turn of its lock; see detect_speech.
+# The detector runs over this much audio per borrow of an instance; see detect_speech.
 VAD_WINDOW_SECONDS = 30
 
 # Two ranges this close across a window edge are one stretch of speech.
@@ -67,7 +69,14 @@ CREDIT_PATTERNS = (
 )
 CREDIT_LINES = re.compile("|".join(f"(?:{pattern})" for pattern in CREDIT_PATTERNS))
 
-VAD_MODEL: Any = None
+# Detector instances not in use. Each keeps recurrent state between the chunks of one call and
+# resets it at the start of the next, so an instance serves one call at a time. More are loaded
+# as callers need them, up to one per CPU this process may run on: a single instance behind a
+# lock held every request to its turn, and capped a process at about 10 short requests a second
+# whatever the transcriber could do. VAD_LOCK guards the loading and the count.
+VAD_MODELS: queue.Queue = queue.Queue()
+VAD_LOADED = 0
+VAD_MAX_MODELS = len(os.sched_getaffinity(0))
 VAD_LOCK = threading.Lock()
 
 # Set when the detector could not be imported or loaded, so a missing silero-vad is one error in
@@ -77,31 +86,39 @@ VAD_LOCK = threading.Lock()
 VAD_BROKEN = False
 
 
-def load_vad() -> Any:
-    """Load Silero VAD once per process. Imported here, not at module scope: it pulls in torch."""
-    global VAD_MODEL
+def borrow_vad() -> Any:
+    """An instance of Silero VAD for one call: a free one, a newly loaded one, or the next one given back.
+
+    Imported here, not at module scope: it pulls in torch.
+    """
+    global VAD_LOADED
+    try:
+        return VAD_MODELS.get_nowait()
+    except queue.Empty:
+        pass
     with VAD_LOCK:
-        if VAD_MODEL is None:
+        if VAD_LOADED < VAD_MAX_MODELS:
             from silero_vad import load_silero_vad
 
-            VAD_MODEL = load_silero_vad()
-            logger.info("Speech gate ready (Silero VAD)")
-    return VAD_MODEL
+            model = load_silero_vad()
+            VAD_LOADED += 1
+            if VAD_LOADED == 1:
+                logger.info("Speech gate ready (Silero VAD, up to %d instances)", VAD_MAX_MODELS)
+            return model
+    return VAD_MODELS.get()
 
 
 def detect_speech(samples: np.ndarray) -> list[tuple[float, float]]:
     """Speech ranges in seconds in 16 kHz mono float32 samples, or int16 ones scaled a window at a time.
 
-    Serialised by a lock: the detector keeps recurrent state between chunks and resets it per call,
-    so two requests sharing it at once would read each other's state. The audio is taken in windows
-    of VAD_WINDOW_SECONDS with the lock held for one window at a time: a background job running the
-    detector over an hour of audio would otherwise hold it for minutes, and every short request
-    behind it would wait that long - measured at 198 s on the deployment host.
+    The audio is taken in windows of VAD_WINDOW_SECONDS, and an instance of the detector is
+    borrowed for one window at a time: a background job running it over an hour of audio would
+    otherwise hold one for minutes, and with a single instance every short request behind it
+    waited that long - measured at 198 s on the deployment host.
     """
     import torch
     from silero_vad import get_speech_timestamps
 
-    model = load_vad()
     window = VAD_WINDOW_SECONDS * SAMPLE_RATE
     ranges: list[tuple[float, float]] = []
     for offset in range(0, max(1, samples.shape[0]), window):
@@ -110,10 +127,11 @@ def detect_speech(samples: np.ndarray) -> list[tuple[float, float]]:
             # A long job's samples stay int16 and on disk: only this window becomes float.
             piece /= 32768.0
         waiting_since = time.monotonic()
-        with VAD_LOCK:
-            waited = time.monotonic() - waiting_since
-            if waited > 1.0:
-                logger.info("Waited %.1fs for the voice detector", waited)
+        model = borrow_vad()
+        waited = time.monotonic() - waiting_since
+        if waited > 1.0:
+            logger.info("Waited %.1fs for the voice detector", waited)
+        try:
             found = get_speech_timestamps(
                 torch.from_numpy(piece),
                 model,
@@ -122,6 +140,8 @@ def detect_speech(samples: np.ndarray) -> list[tuple[float, float]]:
                 min_speech_duration_ms=VAD_MIN_SPEECH_MS,
                 return_seconds=True,
             )
+        finally:
+            VAD_MODELS.put(model)
         base = offset / SAMPLE_RATE
         for item in found:
             begin, finish = base + float(item["start"]), base + float(item["end"])
@@ -146,7 +166,7 @@ def find_speech(samples: np.ndarray, request_id: str = "-") -> list[tuple[float,
     try:
         return detect_speech(samples)
     except Exception as exc:
-        if VAD_MODEL is None:
+        if VAD_LOADED == 0:
             VAD_BROKEN = True
             logger.error(
                 "[%s] Speech gate unavailable, transcripts go out unfiltered: %s: %s\n%s",

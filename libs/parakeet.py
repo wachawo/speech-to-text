@@ -6,6 +6,7 @@ import io
 import logging
 import os
 import sys
+import threading
 import time
 import traceback
 from typing import Any
@@ -14,7 +15,7 @@ import numpy as np
 import soundfile as sf
 
 # Local imports
-from libs import config, logs
+from libs import batching, config, logs
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,18 @@ LANGUAGES_BY_MODEL = {"nvidia/parakeet-tdt-0.6b-v3": LANGUAGES}
 # get_stt_segments returns words, not phrases (see group_tokens). The live stream reads this to
 # join them into phrases before sending; a backend without the name returns phrases.
 WORD_SEGMENTS = True
+
+# Feature frames (10 ms each) of the longest audio decoded together with others. A batch costs
+# its longest member for everyone in it, so a short phrase must not wait behind a long job piece:
+# anything longer is decoded alone, after the batch.
+BATCH_FRAMES = 3000
+
+# One engine per (device, model) in this process: the weights and the thread that decodes on
+# them. get_model hands out the same engine for every instance of a pool, so a pool of N holds
+# one copy of the weights and lets N requests into the engine at once - which is also the
+# largest batch it can form.
+ENGINES: dict[tuple[str, str], dict[str, Any]] = {}
+ENGINES_LOCK = threading.Lock()
 
 
 def resolve_device(device: str | None = None) -> str:
@@ -109,10 +122,8 @@ def describe_backend(model_name: str | None = None) -> dict:
     }
 
 
-def get_model(device: str | None = None, model_name: str | None = None) -> Any:
+def load_parakeet_model(model_id: str, device: str) -> tuple[Any, Any]:
     """Load the Parakeet processor and model as one pair, ready for inference.
-
-    `model_name` None means PARAKEET_MODEL, the single-model deployment's id.
 
     transformers is imported inside the function for the same reason libs/diarize.py does it:
     it pulls torch, and the Gunicorn master must be able to import this module without either.
@@ -120,16 +131,44 @@ def get_model(device: str | None = None, model_name: str | None = None) -> Any:
     The device comes from COMPUTE_TYPE rather than `device_map="auto"`, which the model card
     uses: automatic placement would quietly ignore an operator who forced cpu or cuda, and it
     needs accelerate, which nothing else here does.
+
+    Two settings are fixed here, both measured on 246 LibriSpeech phrases. The processor's decoder
+    type is resolved once and pinned: a checkpoint that does not declare one has it inferred again
+    on every token, through a call that copies the whole vocabulary, and that cost 31 ms per phrase
+    - four times the GPU's share of a batch of 32. And TF32 is switched off for cuDNN, for the
+    whole process: with it, cuDNN picks its convolution algorithm by batch size, and one phrase in
+    246 lost its final period at batch 8 and 32. Without it every phrase decodes token for token
+    as it does alone, at the same speed. Whisper in fp16 and faster-whisper do not use TF32, so
+    only fp32 convolutions elsewhere (the diarizer's, or Whisper's with WHISPER_FP16=false) see it.
     """
+    import torch
     from transformers import AutoModelForTDT, AutoProcessor
 
-    model_id = config.PARAKEET_MODEL if model_name is None else model_name
+    torch.backends.cudnn.allow_tf32 = False
     os.makedirs(config.PARAKEET_DOWNLOAD_ROOT, exist_ok=True)
     processor = AutoProcessor.from_pretrained(model_id, cache_dir=config.PARAKEET_DOWNLOAD_ROOT)
+    processor.decoder_type = processor._decoder_type
     model = AutoModelForTDT.from_pretrained(model_id, cache_dir=config.PARAKEET_DOWNLOAD_ROOT)
-    model.to(resolve_device(device))
+    model.to(device)
     model.eval()
     return processor, model
+
+
+def get_model(device: str | None = None, model_name: str | None = None) -> dict[str, Any]:
+    """The engine of one Parakeet model, loaded on first use; every later call returns the same engine.
+
+    `model_name` None means PARAKEET_MODEL, the single-model deployment's id. init_model_pool
+    calls this once per pool slot, so the first call loads and the others share.
+    """
+    model_id = config.PARAKEET_MODEL if model_name is None else model_name
+    device = resolve_device(device)
+    key = (device, model_id)
+    with ENGINES_LOCK:
+        engine = ENGINES.get(key)
+        if engine is None:
+            engine = batching.start_engine(load_parakeet_model(model_id, device), f"parakeet {model_id}", serve_batch)
+            ENGINES[key] = engine
+    return engine
 
 
 def read_mono_16k(bio: io.BytesIO) -> np.ndarray:
@@ -146,22 +185,62 @@ def read_mono_16k(bio: io.BytesIO) -> np.ndarray:
     return data.astype(np.float32)
 
 
-def transcribe_tokens(bio: io.BytesIO, model: Any = None, device: str | None = None) -> tuple[str, list[dict]]:
-    """Transcribe a WAV buffer, returning the text and its token-level timestamps in seconds."""
+def serve_batch(model: tuple[Any, Any], batch: list[dict[str, Any]]) -> None:
+    """Decode a batch: everything up to BATCH_FRAMES together, the rest alone."""
+    short = [item for item in batch if item["frames"] <= BATCH_FRAMES]
+    logger.debug("Decoding a batch of %d, %d of them together", len(batch), len(short))
+    if short:
+        batching.run_safely(short, decode_batch, model, short)
+    for item in batch:
+        if item["result"] is None and item["error"] is None:
+            batching.run_safely([item], decode_batch, model, [item])
+
+
+def decode_batch(model: tuple[Any, Any], batch: list[dict[str, Any]]) -> None:
+    """Decode every item of a batch in one generate call and set each its text and token timestamps.
+
+    Each item's features were computed on its own, so they are exactly what a decode of that item
+    alone would see; the batch pads them with the zeros and the mask the feature extractor itself
+    gives a padded batch. The encoder masks padding in its subsampling, its convolutions and its
+    attention, and the transducer decodes every row on its own, so a row's tokens do not depend
+    on its batch-mates.
+    """
     import torch
 
-    if model is None:
-        model = get_model(device=device)
     processor, decoder = model
-
-    waveform = read_mono_16k(bio)
-    inputs = processor(waveform, sampling_rate=TARGET_SAMPLE_RATE).to(decoder.device)
+    longest = max(item["frames"] for item in batch)
+    width = batch[0]["features"].shape[-1]
+    features = torch.zeros((len(batch), longest, width), dtype=batch[0]["features"].dtype)
+    mask = torch.zeros((len(batch), longest), dtype=torch.bool)
+    for row, item in enumerate(batch):
+        features[row, : item["frames"]] = item["features"]
+        mask[row, : item["frames"]] = True
     with torch.inference_mode():
-        output = decoder.generate(**inputs, return_dict_in_generate=True)
-    text, timestamps = processor.decode(output.sequences, durations=output.durations, skip_special_tokens=True)
-    if isinstance(text, list):
-        text = text[0]
-    return text, list(timestamps[0]) if timestamps else []
+        output = decoder.generate(
+            input_features=features.to(decoder.device),
+            attention_mask=mask.to(decoder.device),
+            return_dict_in_generate=True,
+        )
+    texts, timestamps = processor.decode(output.sequences, durations=output.durations, skip_special_tokens=True)
+    for item, text, tokens in zip(batch, texts, timestamps, strict=True):
+        item["result"] = {"text": text, "tokens": list(tokens)}
+
+
+def transcribe_tokens(
+    bio: io.BytesIO, model: dict[str, Any] | None = None, device: str | None = None
+) -> tuple[str, list[dict]]:
+    """Transcribe a WAV buffer, returning the text and its token-level timestamps in seconds.
+
+    `model` is an engine from get_model; the call waits for the batch it joins. The features are
+    computed here, on the caller's thread, so the engine thread spends its time on the GPU.
+    """
+    engine = get_model(device=device) if model is None else model
+    processor = engine["model"][0]
+    inputs = processor.feature_extractor(read_mono_16k(bio), sampling_rate=TARGET_SAMPLE_RATE, return_tensors="pt")
+    frames = int(inputs["attention_mask"][0].sum())
+    item: dict[str, Any] = {"features": inputs["input_features"][0, :frames], "frames": frames}
+    result = batching.submit_request(engine, item)
+    return result["text"], result["tokens"]
 
 
 def group_tokens(tokens: list[dict]) -> list[dict]:

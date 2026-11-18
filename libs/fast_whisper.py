@@ -5,7 +5,6 @@
 import io
 import logging
 import os
-import queue
 import sys
 import threading
 import time
@@ -16,7 +15,7 @@ import numpy as np
 import soundfile as sf
 
 # Local imports
-from libs import config, logs, stt
+from libs import batching, config, logs, stt
 
 logger = logging.getLogger(__name__)
 
@@ -141,18 +140,6 @@ def load_whisper_model(model_name: str, device: str) -> Any:
     )
 
 
-def start_engine(model: Any, model_name: str) -> dict[str, Any]:
-    """Wrap a loaded model in an engine and start the one thread that ever decodes on it.
-
-    Started from get_model, which runs after fork(): a thread started in the Gunicorn master
-    would not exist in its workers.
-    """
-    engine: dict[str, Any] = {"name": model_name, "model": model, "requests": queue.Queue()}
-    thread = threading.Thread(target=run_engine, args=(engine,), name=f"faster-whisper {model_name}", daemon=True)
-    thread.start()
-    return engine
-
-
 def get_model(device: str | None = None, model_name: str | None = None) -> dict[str, Any]:
     """The engine of one checkpoint, loaded on first use; every later call returns the same engine.
 
@@ -165,7 +152,7 @@ def get_model(device: str | None = None, model_name: str | None = None) -> dict[
     with ENGINES_LOCK:
         engine = ENGINES.get(key)
         if engine is None:
-            engine = start_engine(load_whisper_model(model_name, device), model_name)
+            engine = batching.start_engine(load_whisper_model(model_name, device), f"{BACKEND_NAME} {model_name}", serve_batch)
             ENGINES[key] = engine
     return engine
 
@@ -187,53 +174,15 @@ def read_waveform(bio: io.BytesIO) -> np.ndarray:
     return data.astype(np.float32)
 
 
-def take_batch(requests: queue.Queue) -> list[dict[str, Any]]:
-    """Block for one request, then take every other one already waiting.
-
-    A lone request goes at once; whatever arrived while the previous batch ran goes together.
-    The pool in front bounds how many can be waiting, so the batch needs no cap of its own.
-    """
-    batch = [requests.get()]
-    while True:
-        try:
-            batch.append(requests.get_nowait())
-        except queue.Empty:
-            return batch
-
-
-def run_engine(engine: dict[str, Any]) -> None:
-    """The engine's thread: take a batch, decode it, wake its callers, forever."""
-    while True:
-        serve_batch(engine["model"], take_batch(engine["requests"]))
-
-
-def run_safely(items: list[dict[str, Any]], function: Any, *args: Any) -> None:
-    """Run one decoding step and hand any exception to the items it left without a result.
-
-    Each caller re-raises it in its own request, which logs it under its request id; the engine
-    thread itself must survive, or every later request would wait forever.
-    """
-    try:
-        function(*args)
-    except Exception as exc:
-        for item in items:
-            if item["result"] is None:
-                item["error"] = exc
-
-
 def serve_batch(model: Any, batch: list[dict[str, Any]]) -> None:
-    """Decode a batch: everything that fits one window together, the rest alone, then wake every caller."""
-    try:
-        short = [item for item in batch if item["frames"] <= WINDOW_FRAMES]
-        logger.debug("Decoding a batch of %d, %d of them in one window", len(batch), len(short))
-        if short:
-            run_safely(short, decode_window_batch, model, short)
-        for item in batch:
-            if item["result"] is None and item["error"] is None:
-                run_safely([item], decode_alone, model, item)
-    finally:
-        for item in batch:
-            item["done"].set()
+    """Decode a batch: everything that fits one window together, the rest alone."""
+    short = [item for item in batch if item["frames"] <= WINDOW_FRAMES]
+    logger.debug("Decoding a batch of %d, %d of them in one window", len(batch), len(short))
+    if short:
+        batching.run_safely(short, decode_window_batch, model, short)
+    for item in batch:
+        if item["result"] is None and item["error"] is None:
+            batching.run_safely([item], decode_alone, model, item)
 
 
 def build_tokenizer(model: Any, language: str | None) -> Any:
@@ -389,23 +338,15 @@ def submit_request(engine: dict[str, Any], waveform: np.ndarray, language: str |
     The features are computed here, on the caller's thread, so the engine thread spends its time
     on the GPU rather than on numpy.
     """
-    model = engine["model"]
-    features = model.feature_extractor(waveform)
+    features = engine["model"].feature_extractor(waveform)
     item: dict[str, Any] = {
         "waveform": waveform,
         "features": features,
         "frames": features.shape[-1] - 1,
         "language": language,
         "prompt": prompt or None,
-        "done": threading.Event(),
-        "result": None,
-        "error": None,
     }
-    engine["requests"].put(item)
-    item["done"].wait()
-    if item["error"] is not None:
-        raise item["error"]
-    return item["result"]
+    return batching.submit_request(engine, item)
 
 
 def build_segment_details(segments: list[dict[str, Any]]) -> list[dict]:

@@ -3,6 +3,17 @@
 ### [Unreleased]
 
 #### Added
+- **Parakeet decodes concurrent requests in one batch, like faster-whisper.** Whatever is
+  waiting when the GPU frees up goes into the next batch, and a lone request waits for
+  nothing. `@N` on a Parakeet entry is now how many requests may share a batch, not a number
+  of copies: `STT_MODELS=parakeet:nvidia/parakeet-tdt-0.6b-v3@32` holds one 2.4 GB copy per
+  process. Audio longer than 30 s is decoded alone. No new settings and no new build args.
+  Every phrase gets exactly the tokens it got before: checked on 246 LibriSpeech phrases at
+  batches of 1, 8 and 32, and on a 172 s recording and two dialogues, which came back
+  byte for byte the same. On a GB10, Parakeet in one process served 15 short phrases a
+  second one at a time and 46-54 with 16 to 48 requests in flight, against 10 before at any
+  concurrency; with Whisper turbo beside it under 16 + 16 concurrent requests, the process
+  served 32 phrases a second against 8.
 - **faster-whisper, a third backend that decodes concurrent requests in one batch.** The
   same Whisper checkpoints on CTranslate2: whatever is waiting when the GPU frees up goes
   into the next batch, with one encoder pass and one beam search for all of it, and a lone
@@ -261,6 +272,14 @@
   linked from the language switcher at the top of each README.
 
 #### Fixed
+- **The speech gate no longer caps a process at about 10 requests a second.** One voice
+  detector behind one lock made every request wait for every other, whatever the models
+  could do, and Whisper and Parakeet loaded side by side shared that limit. Each call now
+  borrows its own detector, up to one per CPU the process may run on, at about 9 MB each.
+- **Parakeet spent 31 ms per phrase looking up its decoder type.** transformers infers it on
+  every token for a checkpoint that does not declare it, by copying the whole vocabulary;
+  it is now resolved once at load, with the same result. A 172 s recording took 2.4 s
+  instead of 3.9 s.
 - **More than ten requests in flight per process.** uvicorn ran Flask on 10 threads, so a
   process never held more than 10 requests whatever its pools allowed, and with all 10
   waiting for a model the health check and `/metrics` had none left. It now gets 10 plus
