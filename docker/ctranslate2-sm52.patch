@@ -1,0 +1,30 @@
+Maxwell (sm_50, sm_52) has no f16x2 arithmetic, and the AWQ weight dequantization kernel uses it
+without the __CUDA_ARCH__ guard the other AWQ kernels carry, so ptxas refuses a CTranslate2 build
+for those targets. Below sm_53 the kernel body is replaced by a trap: AWQ weights are float16,
+which these cards do not offer as a compute type, and a trap fails loudly where an empty body
+(assert, compiled out under NDEBUG) would leave the output uninitialized. sm_53 and above compile
+exactly as upstream. Applied by the Dockerfile only when CTRANSLATE2_CUDA_ARCHES asks for one of
+these architectures.
+
+--- a/src/ops/awq/dequantize_gpu.cu
++++ b/src/ops/awq/dequantize_gpu.cu
+@@ -13,6 +13,11 @@
+                                                               int in_c,
+                                                               int out_c)
+      {
++#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 530
++       // f16x2 arithmetic needs sm_53, and AWQ needs float16, which this GPU does not offer.
++       // Trap rather than assert: an assert is compiled out under NDEBUG.
++       __trap();
++#else
+        if (blockIdx.z > 0) {
+          B = B + blockIdx.z * in_c * out_c / 8;
+          scaling_factors = scaling_factors + blockIdx.z * in_c * out_c / G;
+@@ -60,6 +65,7 @@
+        for (int i=0; i<8; ++i) {
+          *(C_ptr2 + i) = B_shared[i];
+        }
++#endif
+      }
+
+      template <Device D, typename InT, typename OutT>

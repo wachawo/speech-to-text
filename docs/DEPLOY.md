@@ -82,7 +82,7 @@ What to do next depends on what the pull changed:
 | `requirements*.txt`, `constraints.txt`, `Dockerfile`, `entrypoint.sh`            | `docker compose build stt_server && docker compose up -d --no-build`    |
 | `nginx/`, `Dockerfile-www`                                                       | `docker compose build stt_www && docker compose up -d --no-build`       |
 | `docker-compose.yml`, `.env`                                                     | `docker compose up -d --no-build`                                       |
-| the build args in `.env` (`DIARIZE`, `PARAKEET`, `CUDA_IMAGE` ... `TORCH_ARCHES`) | `docker compose build stt_server && docker compose up -d --no-build`    |
+| the build args in `.env` (`DIARIZE`, `PARAKEET`, `FASTER_WHISPER`, `CTRANSLATE2` ..., `CUDA_IMAGE` ... `TORCH_ARCHES`) | `docker compose build stt_server && docker compose up -d --no-build`    |
 
 Two traps apply:
 - **`pull_policy: build` is set,** so a plain `docker compose up -d` rebuilds the images. `--no-build` reuses the ones already built.
@@ -202,6 +202,22 @@ The five build args go together, and a change to any of them needs a rebuild. `W
 | `true`         | 3.65 s  | 4.54 s  | 4.3% |
 
 Parakeet v3 answered in 0.25 s (p50) with a WER of 1.1% on the same phrases. Both are about four times slower than on a GB10, with the same text.
+
+### faster-whisper without a PyPI build
+
+CTranslate2, which faster-whisper runs on, publishes CUDA wheels for x86_64 and CUDA 12 only, with kernels from sm_53 up. Anywhere else the image can compile it from source: set in `.env`
+
+```bash
+FASTER_WHISPER=true
+CTRANSLATE2=source
+CTRANSLATE2_BUILD_IMAGE=nvidia/cuda:13.0.3-devel-ubuntu24.04   # a -devel image of the same CUDA as CUDA_IMAGE
+CTRANSLATE2_CUDA_ARCHES=121                                    # the card's architectures, space-separated
+```
+
+and rebuild as for any other build arg. The build takes a while longer, and it refuses an image whose library lacks kernels for an architecture it was asked for. `CTRANSLATE2_VERSION` must equal the `ctranslate2` pin in `constraints.txt`, which the build checks before it compiles anything.
+
+- **GB10 (aarch64, CUDA 13):** the defaults above. It builds and transcribes the same text as openai-whisper, but it is not faster there: with `turbo`, a short phrase took 309 ms against 210 ms, and the card served 4.1 phrases per second against 4.8 up to 16 in flight, and 4.8 to 6.3 only from 32 up. The encoder of the 30 s window is what costs, about 140 ms per window at any batch size against 65 ms in torch at a batch of 8, and neither int8 nor CTranslate2's flash attention changed that. Keep openai-whisper on the GB10.
+- **Maxwell, such as the Tesla M40 (sm_52):** `CTRANSLATE2_BUILD_IMAGE=nvidia/cuda:12.6.3-devel-ubuntu24.04` and `CTRANSLATE2_CUDA_ARCHES=52`, beside the CUDA 12.6 build args of a Pascal host (with `TORCH_ARCHES` for the card), and `FASTER_WHISPER_COMPUTE_TYPE=float32`: Maxwell offers no other type. One AWQ kernel of CTranslate2 does not compile below sm_53, and `docker/ctranslate2-sm52.patch` makes it trap there; the build applies it only for such an architecture. AWQ is a float16-only path that no Whisper model uses.
 
 ### Dependencies
 

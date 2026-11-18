@@ -2,6 +2,17 @@
 
 ### [Unreleased]
 
+#### Added
+- **faster-whisper on GPUs that CTranslate2's PyPI wheels do not cover.** Those wheels are
+  x86_64 and CUDA 12 only, with kernels from sm_53 up. With `CTRANSLATE2=source` the GPU
+  image compiles CTranslate2 itself, for the CUDA of `CTRANSLATE2_BUILD_IMAGE` and the
+  architectures in `CTRANSLATE2_CUDA_ARCHES`, and refuses an image whose library lacks
+  kernels for one of them. A Maxwell card such as the Tesla M40 (sm_52) builds with a small
+  patch to one AWQ kernel, which no Whisper model uses. The default, `CTRANSLATE2=wheel`, is
+  the build as before. On a GB10 the source build gives openai-whisper's text but no speed
+  (a short phrase in 309 ms against 210 ms, the same throughput up to 16 in flight), so the
+  GB10 stays on openai-whisper; `docs/DEPLOY.md` has the details.
+
 ### [0.1.1] - 2026-11-18
 
 #### Added

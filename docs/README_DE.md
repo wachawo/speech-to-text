@@ -337,6 +337,7 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 | `STT_UID`, `STT_GID`    | (`stt` aus dem Image, 1001) | Host-Benutzer, dem `models/`, `logs/`, `recs/` gehören (Docker) |
 | `HF_HUB_OFFLINE`        | `0`                     | `1`, sobald die Modelle im Cache liegen: keine Hub-Anfragen beim Start |
 | `CUDA_IMAGE`, `CUBLAS_PACKAGE`, `TORCH_VERSION`, `TORCH_CUDA`, `TORCH_ARCHES` | CUDA 13.0 | CUDA-Build des GPU-Images (Compose); eine Pascal-Karte setzt alle fünf, siehe `.env.example` |
+| `CTRANSLATE2`, `CTRANSLATE2_BUILD_IMAGE`, `CTRANSLATE2_VERSION`, `CTRANSLATE2_CUDA_ARCHES` | `wheel` | `source` kompiliert CTranslate2 für faster-whisper im Image, für diese CUDA-Architekturen (Compose); siehe docs/DEPLOY.md |
 | `TZ`                    | `America/New_York`      | Zeitzone der Container (Compose) |
 | `OMP_NUM_THREADS`, `MKL_NUM_THREADS` | `1`        | CPU-Threads von torch; 1 ist für den Sprachdetektor am schnellsten (Compose) |
 | `STT_COMMAND`           | `python3 stt_server.py` | Kommandozeile des Server-Containers, z. B. gunicorn (Compose) |
@@ -383,6 +384,7 @@ speech-to-text/
 ├── nginx/               # stt_www-Konfiguration: statische Oberfläche, /api/-Proxy, selbstsigniertes TLS
 ├── www/                 # Web-Oberfläche: Vue 2 ohne Build-Schritt, Bibliotheken mitgeliefert
 ├── constraints.txt      # jede Abhängigkeitsversion, die das getestete Image aufgelöst hat
+├── docker/              # CTranslate2-Patch für Maxwell (sm_52), angewendet von CTRANSLATE2=source-Builds
 ├── docs/                # DEPLOY.md und die README-Übersetzungen
 └── tests/               # pytest-Tests, keine Modell-Downloads und keine GPU
 ```

@@ -18,9 +18,15 @@ services:
         DIARIZE: "${DIARIZE:-false}"
         # Build the Parakeet backend into the image: PARAKEET=true docker compose up --build
         PARAKEET: "${PARAKEET:-false}"
-        # Build the faster-whisper backend into the image: FASTER_WHISPER=true. x86_64 with a CUDA 12
-        # build of the image only (the five args above); see .env.example.
+        # Build the faster-whisper backend into the image: FASTER_WHISPER=true. With CTranslate2 from
+        # PyPI (CTRANSLATE2=wheel) that is x86_64 with a CUDA 12 build of the image only (the five
+        # args above); CTRANSLATE2=source compiles it for the CUDA of CTRANSLATE2_BUILD_IMAGE and the
+        # architectures in CTRANSLATE2_CUDA_ARCHES, which is how the GB10 gets one. See .env.example.
         FASTER_WHISPER: "${FASTER_WHISPER:-false}"
+        CTRANSLATE2: "${CTRANSLATE2:-wheel}"
+        CTRANSLATE2_BUILD_IMAGE: "${CTRANSLATE2_BUILD_IMAGE:-nvidia/cuda:13.0.3-devel-ubuntu24.04}"
+        CTRANSLATE2_VERSION: "${CTRANSLATE2_VERSION:-4.9.0}"
+        CTRANSLATE2_CUDA_ARCHES: "${CTRANSLATE2_CUDA_ARCHES:-121}"
     image: stt_server_gpu
     pull_policy: build
     container_name: stt_server

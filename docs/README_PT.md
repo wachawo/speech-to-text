@@ -337,6 +337,7 @@ O `.env` é carregado tanto pelo servidor quanto pelo cliente através do `pytho
 | `STT_UID`, `STT_GID`    | (`stt` da imagem, 1001) | usuário do host dono de `models/`, `logs/`, `recs/` (Docker) |
 | `HF_HUB_OFFLINE`        | `0`                     | `1` depois que os modelos estão em cache: nenhuma requisição ao hub na inicialização |
 | `CUDA_IMAGE`, `CUBLAS_PACKAGE`, `TORCH_VERSION`, `TORCH_CUDA`, `TORCH_ARCHES` | CUDA 13.0 | build CUDA da imagem GPU (compose); uma placa Pascal define as cinco, veja `.env.example` |
+| `CTRANSLATE2`, `CTRANSLATE2_BUILD_IMAGE`, `CTRANSLATE2_VERSION`, `CTRANSLATE2_CUDA_ARCHES` | `wheel` | `source` compiles CTranslate2 for faster-whisper in the image, for those CUDA architectures (compose); see docs/DEPLOY.md |
 | `TZ`                    | `America/New_York`      | fuso horário dos contêineres (compose) |
 | `OMP_NUM_THREADS`, `MKL_NUM_THREADS` | `1`        | threads de CPU do torch; 1 é o mais rápido para o detector de voz (compose) |
 | `STT_COMMAND`           | `python3 stt_server.py` | linha de comando do contêiner do servidor, p. ex. gunicorn (compose) |
@@ -383,6 +384,7 @@ speech-to-text/
 ├── nginx/               # stt_www config: static UI, /api/ proxy, self-signed TLS
 ├── www/                 # web UI: Vue 2 without a build step, libraries vendored
 ├── constraints.txt      # every dependency version the tested image resolved
+├── docker/              # CTranslate2 patch for Maxwell (sm_52), applied by CTRANSLATE2=source builds
 ├── docs/                # DEPLOY.md and the README translations
 └── tests/               # pytest tests, no model downloads and no GPU
 ```
