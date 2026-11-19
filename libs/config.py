@@ -85,7 +85,9 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_ACCESS = os.getenv("LOG_ACCESS", "false").lower() in TRUE_VALUES
 
 # HTTP server
-STT_HOST = os.getenv("STT_HOST", "0.0.0.0")
+# Loopback unless asked: auth is off by default, so a bare run must not listen on the network.
+# The compose files set 0.0.0.0, because a container has to listen on every interface.
+STT_HOST = os.getenv("STT_HOST", "127.0.0.1")
 STT_PORT = int(os.getenv("STT_PORT", "5051"))
 STT_DEBUG = os.getenv("STT_DEBUG", "false").lower() in TRUE_VALUES
 

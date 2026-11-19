@@ -13,6 +13,20 @@
   (a short phrase in 309 ms against 210 ms, the same throughput up to 16 in flight), so the
   GB10 stays on openai-whisper; `docs/DEPLOY.md` has the details.
 
+#### Changed
+- **A server started outside Docker listens on loopback by default.** `STT_HOST` now
+  defaults to `127.0.0.1` instead of `0.0.0.0`: auth is off until `STT_TOKENS` is set, so a
+  bare `stt-server` or `make run` was an open service on every interface. Gunicorn binds
+  `STT_HOST` as well, where `gu.py` had `0.0.0.0` written in. Containers are
+  unchanged: both images set `STT_HOST=0.0.0.0`, and so do both compose files. Set `STT_HOST=0.0.0.0`
+  to keep the old behaviour, and `STT_TOKENS` with it.
+
+#### Security
+- **`STT_DEBUG=true` no longer starts the Werkzeug debugger.** The server's own error
+  handlers answer every exception, so the debugger never had a traceback to show and added
+  only its console, which runs code for anyone who reaches the port and has the PIN. Debug
+  mode keeps the Flask dev server and its reloader.
+
 ### [0.1.1] - 2026-11-18
 
 #### Added

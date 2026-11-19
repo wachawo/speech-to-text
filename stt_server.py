@@ -871,10 +871,12 @@ def run_server() -> None:
     """Serve the app: the Flask dev server in debug mode, uvicorn otherwise.
 
     The live stream exists only under uvicorn: neither the Flask dev server nor Gunicorn's sync
-    workers speak websocket.
+    workers speak websocket. Debug mode keeps the reloader and leaves Werkzeug's debugger off:
+    the error handlers answer every exception, so the debugger would show no traceback and add
+    only its console, which runs code for whoever reaches the port.
     """
     if config.STT_DEBUG:
-        app.run(host=config.STT_HOST, port=config.STT_PORT, debug=True)
+        app.run(host=config.STT_HOST, port=config.STT_PORT, debug=True, use_debugger=False)
         return
 
     uvicorn.run(

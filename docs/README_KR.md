@@ -300,13 +300,13 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 
 | 변수                    | 기본값                  | 용도                                               |
 | ----------------------- | ----------------------- | -------------------------------------------------- |
-| `STT_HOST`              | `0.0.0.0`               | 서버 바인드 주소                                   |
+| `STT_HOST`              | `127.0.0.1`             | 바인드 주소. `0.0.0.0`은 다른 호스트의 연결을 받으며, Docker는 항상 이 값을 설정합니다 |
 | `STT_PORT`              | `5051`                  | 서버 포트                                          |
 | `STT_POOL_SIZE`         | `8`                     | 모델당 인스턴스 수, `@pool`이 없는 `STT_MODELS` 항목의 기본값 |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | 동기 요청이 `503`을 받기 전에 모델의 빈 인스턴스를 기다리는 초 |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | 유휴 HTTP 연결을 열어 두는 초(uvicorn, gunicorn `keepalive`) |
 | `STT_TOKENS`            | (비어 있음)             | 쉼표로 구분된 유효 토큰, 비어 있으면 인증 비활성화 |
-| `STT_DEBUG`             | `false`                 | Flask 디버그 모드                                  |
+| `STT_DEBUG`             | `false`                 | 리로더가 있는 Flask 개발 서버(디버거 콘솔 없음, 라이브 스트림 없음) |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | 최대 업로드 크기(MB), 더 큰 본문은 `413` 반환      |
 | `CORS_ORIGINS`          | `*`                     | 허용되는 CORS 출처: `*` 또는 쉼표로 구분된 목록    |
 | `GUNICORN_WORKERS`      | `4`                     | 워커 프로세스 수(gunicorn 전용)                    |
@@ -410,7 +410,9 @@ make lint           # pre-commit (black + ruff)
 make typecheck      # mypy
 ```
 
-테스트 스위트는 Whisper 백엔드를 스텁으로 대체하므로 HTTP 계층(request_id, 오류 범주, 모델 풀 동작)을 다루며, 모델을 내려받거나 GPU가 필요하지 않고 몇 초 만에 실행됩니다.
+이렇게 실행하면 서버는 `127.0.0.1`에서만 수신합니다. 다른 호스트의 연결을 받으려면 `STT_HOST=0.0.0.0`을 설정하고 `STT_TOKENS`도 함께 설정하세요. Docker 이미지는 항상 모든 인터페이스에서 수신합니다.
+
+테스트 스위트는 모델 백엔드를 스텁으로 대체하므로 모델을 내려받거나 GPU가 필요하지 않고 몇 초 만에 실행됩니다. HTTP 라우트와 오류 범주, 모델 선택과 레지스트리, 언어 결정, 라이브 스트림과 구절 분할, 긴 녹음 작업, URL 소스, 화자 매칭, 스피치 게이트, 배치 엔진, OpenAI 호환 라우트를 다룹니다. 다룰 수 없는 것은 모델 자체(GPU에서의 디코딩)이며, 이는 GPU 호스트에서 확인합니다.
 
 ### 라이선스
 

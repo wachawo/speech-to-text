@@ -300,13 +300,13 @@ O `.env` é carregado tanto pelo servidor quanto pelo cliente através do `pytho
 
 | Variável                | Padrão                  | Finalidade                                          |
 | ----------------------- | ----------------------- | --------------------------------------------------- |
-| `STT_HOST`              | `0.0.0.0`               | endereço de bind do servidor                        |
+| `STT_HOST`              | `127.0.0.1`             | endereço de bind; `0.0.0.0` aceita conexões de outros hosts, e o Docker sempre o define |
 | `STT_PORT`              | `5051`                  | porta do servidor                                   |
 | `STT_POOL_SIZE`         | `8`                     | instâncias por modelo; padrão de uma entrada de `STT_MODELS` sem `@pool` |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | segundos que uma requisição síncrona espera por uma instância livre do seu modelo antes de `503` |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | segundos que uma conexão HTTP ociosa fica aberta (uvicorn; `keepalive` do gunicorn) |
 | `STT_TOKENS`            | (vazio)                 | tokens válidos separados por vírgula; vazio desativa a autenticação |
-| `STT_DEBUG`             | `false`                 | modo de depuração do Flask                          |
+| `STT_DEBUG`             | `false`                 | servidor de desenvolvimento do Flask com recarga automática (sem console do depurador, sem transmissão ao vivo) |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | tamanho máximo de upload em MB; um corpo maior retorna `413` |
 | `CORS_ORIGINS`          | `*`                     | origens CORS permitidas: `*` ou uma lista separada por vírgulas |
 | `GUNICORN_WORKERS`      | `4`                     | processos worker (apenas gunicorn)                  |
@@ -410,7 +410,9 @@ make lint           # pre-commit (black + ruff)
 make typecheck      # mypy
 ```
 
-A suíte de testes substitui o backend do Whisper por um stub, de modo que cobre a camada HTTP (request_id, categorias de erro, semântica do pool de modelos) e roda em segundos sem baixar um modelo nem precisar de uma GPU.
+Executado assim, o servidor escuta apenas em `127.0.0.1`. Defina `STT_HOST=0.0.0.0` para aceitar conexões de outros hosts, e `STT_TOKENS` junto com ele; as imagens Docker sempre escutam em todas as interfaces.
+
+A suíte de testes substitui os backends de modelos por stubs, de modo que roda em segundos sem baixar um modelo nem precisar de uma GPU. Ela cobre as rotas HTTP e as categorias de erro, a seleção de modelo e o registro, a resolução de idioma, a transmissão ao vivo e seu corte em frases, os jobs de gravações longas, as fontes por URL, a atribuição de falantes, o filtro de fala, o motor de lotes e a rota compatível com a OpenAI. O que ela não consegue cobrir são os próprios modelos (a decodificação em uma GPU), verificados em um host com GPU.
 
 ### Licença
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""A batch that runs out of GPU memory is decoded in halves instead of failing every request in it."""
+"""The engine thread batches what is waiting, and a batch out of GPU memory is decoded in halves."""
 
 import importlib.util
 import os
@@ -17,6 +17,9 @@ CT2_PARALLEL_FOR = "parallel_for failed: cudaErrorInvalidDevice: invalid device 
 TORCH_OUT_OF_MEMORY = "CUDA out of memory. Tried to allocate 2.00 GiB"
 
 PARAKEET_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "libs", "parakeet.py")
+
+# Longest any engine test waits for another thread; a broken engine fails the test instead of hanging the suite.
+WAIT_SECONDS = 10
 
 
 def build_items(count):
@@ -159,3 +162,151 @@ def test_parakeet_decodes_in_halves_and_releases_the_cache_after_every_batch(mon
     assert sizes == [16, 8, 8]
     # Once before the halves, once after the batch.
     assert len(releases) == 2
+
+
+def decode_ids(model, batch):
+    """A serve_batch that answers every item with its own id."""
+    for item in batch:
+        item["result"] = {"text": f"phrase {item['id']}"}
+
+
+def watch_arrivals(engine):
+    """Count every item put on the engine's queue; returns the semaphore a test acquires once per item."""
+    arrivals = threading.Semaphore(0)
+    put_request = engine["requests"].put
+
+    def put_and_count(item):
+        """Queue the item as before, then say it is there."""
+        put_request(item)
+        arrivals.release()
+
+    engine["requests"].put = put_and_count
+    return arrivals
+
+
+def submit_in_thread(engine, number, outcomes):
+    """Submit one request from its own daemon thread, recording its result or the exception it raised."""
+
+    def submit():
+        """One caller, as a backend's get_stt_result is."""
+        try:
+            outcomes[number] = batching.submit_request(engine, {"id": number})
+        except Exception as exc:
+            outcomes[number] = exc
+
+    thread = threading.Thread(target=submit, daemon=True)
+    thread.start()
+    return thread
+
+
+def join_threads(threads):
+    """Wait for every caller to get its answer, failing rather than hanging when one never does."""
+    for thread in threads:
+        thread.join(WAIT_SECONDS)
+        assert not thread.is_alive()
+
+
+def run_while_engine_is_busy(serve_batch, count):
+    """Start a real engine, hold it inside a first batch until `count` more requests are queued, then let it go.
+
+    The opening request has id "opener" and is answered by the engine's first batch; the others
+    have ids 0 to count - 1 and go to `serve_batch`. Returns the engine, every caller's result or
+    exception by id, and the ids of each batch in the order the engine decoded them.
+    """
+    batches = []
+    started = threading.Event()
+    release = threading.Event()
+
+    def serve(model, batch):
+        """Hold the first batch until the test releases it; hand every later one to the test's decode."""
+        batches.append([item["id"] for item in batch])
+        if len(batches) > 1:
+            serve_batch(model, batch)
+            return
+        started.set()
+        assert release.wait(WAIT_SECONDS)
+        decode_ids(model, batch)
+
+    engine = batching.start_engine("model", "test-engine", serve)
+    arrivals = watch_arrivals(engine)
+    outcomes = {}
+    threads = [submit_in_thread(engine, "opener", outcomes)]
+    assert started.wait(WAIT_SECONDS)
+    threads += [submit_in_thread(engine, number, outcomes) for number in range(count)]
+    # The opener's own put counts too.
+    for unused_number in range(count + 1):
+        assert arrivals.acquire(timeout=WAIT_SECONDS)
+    release.set()
+    join_threads(threads)
+    return engine, outcomes, batches
+
+
+def test_take_batch_returns_everything_queued():
+    """Whatever is waiting goes into one batch, in the order it arrived, and the queue is left empty."""
+    requests = queue.Queue()
+    for item in build_items(5):
+        requests.put(item)
+    batch = batching.take_batch(requests)
+    assert [item["id"] for item in batch] == [0, 1, 2, 3, 4]
+    assert requests.empty()
+
+
+def test_a_lone_request_is_decoded_by_the_engine_thread():
+    """One request goes at once, on the engine's thread, with the engine's model, and gets its result back."""
+    seen = []
+
+    def serve(model, batch):
+        """Record who decoded what, then answer."""
+        seen.append((threading.current_thread().name, model, len(batch)))
+        decode_ids(model, batch)
+
+    engine = batching.start_engine("model", "test-engine", serve)
+    outcomes = {}
+    join_threads([submit_in_thread(engine, 7, outcomes)])
+    assert outcomes == {7: {"text": "phrase 7"}}
+    assert seen == [("test-engine", "model", 1)]
+
+
+def test_requests_waiting_for_the_engine_are_taken_as_one_batch():
+    """Everything that arrived while a batch ran is the next batch, and each caller gets its own result."""
+    unused_engine, outcomes, batches = run_while_engine_is_busy(decode_ids, count=8)
+    assert batches[0] == ["opener"]
+    assert len(batches) == 2
+    assert sorted(batches[1]) == list(range(8))
+    assert outcomes == {number: {"text": f"phrase {number}"} for number in ["opener", *range(8)]}
+
+
+def test_a_failed_batch_raises_in_every_caller_left_without_a_result():
+    """The exception reaches each request the decode did not answer; one it had answered keeps its result."""
+    failure = ValueError("bad input")
+
+    def serve(model, batch):
+        """Answer request 0, then fail as a broken decode does."""
+        for item in batch:
+            if item["id"] == 0:
+                item["result"] = {"text": "phrase 0"}
+        raise failure
+
+    unused_engine, outcomes, batches = run_while_engine_is_busy(serve, count=4)
+    assert sorted(batches[1]) == [0, 1, 2, 3]
+    assert outcomes[0] == {"text": "phrase 0"}
+    assert [outcomes[number] for number in (1, 2, 3)] == [failure, failure, failure]
+    assert outcomes["opener"] == {"text": "phrase opener"}
+
+
+def test_the_engine_thread_survives_a_failed_batch():
+    """A batch that raised does not end the thread: the next request is decoded as usual."""
+    failed = []
+
+    def serve(model, batch):
+        """Fail the first batch it is given, decode every later one."""
+        if not failed:
+            failed.append(len(batch))
+            raise RuntimeError("decode failed")
+        decode_ids(model, batch)
+
+    engine, outcomes, unused_batches = run_while_engine_is_busy(serve, count=2)
+    assert failed == [2]
+    assert all(isinstance(outcomes[number], RuntimeError) for number in (0, 1))
+    join_threads([submit_in_thread(engine, 9, outcomes)])
+    assert outcomes[9] == {"text": "phrase 9"}

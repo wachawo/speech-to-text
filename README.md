@@ -332,13 +332,13 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 
 | Variable                | Default                 | Purpose                                             |
 | ----------------------- | ----------------------- | --------------------------------------------------- |
-| `STT_HOST`              | `0.0.0.0`               | server bind address                                 |
+| `STT_HOST`              | `127.0.0.1`             | bind address; `0.0.0.0` accepts connections from other hosts, and Docker always sets it |
 | `STT_PORT`              | `5051`                  | server port                                         |
 | `STT_POOL_SIZE`         | `8`                     | instances per model; the default for an `STT_MODELS` entry without `@pool` |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | seconds a synchronous request waits for a free instance of its model before `503` |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | seconds an idle HTTP connection stays open (uvicorn; gunicorn `keepalive`) |
 | `STT_TOKENS`            | (empty)                 | comma-separated valid tokens; empty disables auth   |
-| `STT_DEBUG`             | `false`                 | Flask debug mode                                     |
+| `STT_DEBUG`             | `false`                 | Flask development server with the reloader (no debugger console, no live stream) |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | max upload size in MB; a larger body returns `413`  |
 | `CORS_ORIGINS`          | `*`                     | allowed CORS origins: `*` or a comma-separated list |
 | `GUNICORN_WORKERS`      | `4`                     | worker processes (gunicorn only)                    |
@@ -442,7 +442,9 @@ make lint           # pre-commit (black + ruff)
 make typecheck      # mypy
 ```
 
-The test suite stubs the Whisper backend, so it covers the HTTP layer (request_id, error categories, model pool semantics) and runs in seconds without downloading a model or needing a GPU.
+Run this way, the server listens on `127.0.0.1` only. Set `STT_HOST=0.0.0.0` to accept connections from other hosts, and `STT_TOKENS` along with it; the Docker images always listen on every interface.
+
+The test suite stubs the model backends, so it runs in seconds without downloading a model or needing a GPU. It covers the HTTP routes and error categories, model selection and the registry, language resolution, the live stream and its phrase cutting, long-form jobs, URL sources, the speaker join, the speech gate, the batching engine and the OpenAI-compatible route. What it cannot cover is the models themselves (decoding on a GPU), which is checked on a GPU host.
 
 ### License
 
