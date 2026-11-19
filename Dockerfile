@@ -217,5 +217,8 @@ COPY entrypoint.sh /opt/entrypoint.sh
 RUN chmod +x /opt/entrypoint.sh
 ENTRYPOINT ["/opt/entrypoint.sh"]
 
+# A container must listen on every interface: the server's own default is loopback.
+ENV STT_HOST=0.0.0.0
+
 EXPOSE 5051
 CMD ["python3", "stt_server.py"]

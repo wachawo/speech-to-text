@@ -300,13 +300,13 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 
 | Variable                | Défaut                  | Rôle                                                |
 | ----------------------- | ----------------------- | --------------------------------------------------- |
-| `STT_HOST`              | `0.0.0.0`               | adresse d'écoute du serveur                          |
+| `STT_HOST`              | `127.0.0.1`             | adresse d'écoute ; `0.0.0.0` accepte les connexions d'autres hôtes, et Docker le définit toujours |
 | `STT_PORT`              | `5051`                  | port du serveur                                      |
 | `STT_POOL_SIZE`         | `8`                     | instances par modèle ; valeur par défaut d'une entrée `STT_MODELS` sans `@pool` |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | secondes pendant lesquelles une requête synchrone attend une instance libre de son modèle avant `503` |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | secondes pendant lesquelles une connexion HTTP inactive reste ouverte (uvicorn ; `keepalive` de gunicorn) |
 | `STT_TOKENS`            | (vide)                  | jetons valides séparés par des virgules ; vide désactive l'authentification |
-| `STT_DEBUG`             | `false`                 | mode debug de Flask                                  |
+| `STT_DEBUG`             | `false`                 | serveur de développement Flask avec rechargement automatique (pas de console de débogage, pas de flux en direct) |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | taille maximale d'envoi en Mo ; un corps plus grand renvoie `413` |
 | `CORS_ORIGINS`          | `*`                     | origines CORS autorisées : `*` ou une liste séparée par des virgules |
 | `GUNICORN_WORKERS`      | `4`                     | processus de travail (gunicorn uniquement)           |
@@ -410,7 +410,9 @@ make lint           # pre-commit (black + ruff)
 make typecheck      # mypy
 ```
 
-La suite de tests simule le backend Whisper, elle couvre donc la couche HTTP (request_id, catégories d'erreurs, sémantique du pool de modèles) et s'exécute en quelques secondes sans télécharger de modèle ni nécessiter de GPU.
+Lancé ainsi, le serveur n'écoute que sur `127.0.0.1`. Définissez `STT_HOST=0.0.0.0` pour accepter les connexions d'autres hôtes, et `STT_TOKENS` avec lui ; les images Docker écoutent toujours sur toutes les interfaces.
+
+La suite de tests remplace les backends de modèles par des stubs, elle s'exécute donc en quelques secondes sans télécharger de modèle ni nécessiter de GPU. Elle couvre les routes HTTP et les catégories d'erreurs, la sélection du modèle et le registre, la résolution de la langue, le flux en direct et son découpage en phrases, les tâches sur de longs enregistrements, les sources par URL, l'attribution des locuteurs, le filtre de parole, le moteur de traitement par lots et la route compatible OpenAI. Ce qu'elle ne peut pas couvrir, ce sont les modèles eux-mêmes (le décodage sur un GPU), vérifiés sur un hôte GPU.
 
 ### Licence
 

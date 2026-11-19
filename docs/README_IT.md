@@ -300,13 +300,13 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 
 | Variable                | Default                 | Scopo                                              |
 | ----------------------- | ----------------------- | -------------------------------------------------- |
-| `STT_HOST`              | `0.0.0.0`               | indirizzo di bind del server                       |
+| `STT_HOST`              | `127.0.0.1`             | indirizzo di bind; `0.0.0.0` accetta connessioni da altri host, e Docker lo imposta sempre |
 | `STT_PORT`              | `5051`                  | porta del server                                   |
 | `STT_POOL_SIZE`         | `8`                     | istanze per modello; valore predefinito di una voce di `STT_MODELS` senza `@pool` |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | secondi che una richiesta sincrona attende un'istanza libera del suo modello prima di `503` |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | secondi per cui una connessione HTTP inattiva resta aperta (uvicorn; `keepalive` di gunicorn) |
 | `STT_TOKENS`            | (vuoto)                 | token validi separati da virgola; vuoto disabilita l'autenticazione |
-| `STT_DEBUG`             | `false`                 | modalità debug di Flask                            |
+| `STT_DEBUG`             | `false`                 | server di sviluppo di Flask con ricaricamento automatico (nessuna console del debugger, nessuno stream live) |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | dimensione massima dell'upload in MB; un corpo più grande restituisce `413` |
 | `CORS_ORIGINS`          | `*`                     | origini CORS consentite: `*` o un elenco separato da virgole |
 | `GUNICORN_WORKERS`      | `4`                     | processi worker (solo gunicorn)                    |
@@ -410,7 +410,9 @@ make lint           # pre-commit (black + ruff)
 make typecheck      # mypy
 ```
 
-La suite di test sostituisce il backend Whisper con uno stub, quindi copre il livello HTTP (request_id, categorie di errore, semantica del pool di modelli) e viene eseguita in pochi secondi senza scaricare un modello né richiedere una GPU.
+Avviato così, il server ascolta solo su `127.0.0.1`. Imposta `STT_HOST=0.0.0.0` per accettare connessioni da altri host, e insieme `STT_TOKENS`; le immagini Docker ascoltano sempre su tutte le interfacce.
+
+La suite di test sostituisce i backend dei modelli con degli stub, quindi viene eseguita in pochi secondi senza scaricare un modello né richiedere una GPU. Copre le route HTTP e le categorie di errore, la selezione del modello e il registro, la risoluzione della lingua, lo stream live e il suo taglio in frasi, i job per le registrazioni lunghe, le sorgenti URL, l'attribuzione dei parlanti, il filtro del parlato, il motore di batching e la route compatibile con OpenAI. Ciò che non può coprire sono i modelli stessi (la decodifica su una GPU), che vengono verificati su un host con GPU.
 
 ### Licenza
 

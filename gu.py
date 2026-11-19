@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 # Serializes the first model download across workers; the rest read the cached .pt file.
 MODEL_INIT_LOCK_PATH = "/tmp/.stt_model_init.lock"
 
-# Server socket
-bind = f"0.0.0.0:{stt_config.STT_PORT}"
+# Server socket: STT_HOST, as the direct run binds it (loopback by default, 0.0.0.0 in Docker).
+bind = f"{stt_config.STT_HOST}:{stt_config.STT_PORT}"
 
 # Worker processes - sync is safest for CPU-bound torch/whisper inference.
 # gthread causes hangs because PyTorch's MKL/OpenBLAS thread pools

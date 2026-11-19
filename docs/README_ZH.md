@@ -300,13 +300,13 @@ python3 stt_client.py --stream meeting.wav --speakers --model turbo --language r
 
 | 变量                    | 默认值                  | 用途                                               |
 | ----------------------- | ----------------------- | -------------------------------------------------- |
-| `STT_HOST`              | `0.0.0.0`               | 服务器绑定地址                                     |
+| `STT_HOST`              | `127.0.0.1`             | 绑定地址；`0.0.0.0` 接受来自其他主机的连接，Docker 始终设置为该值 |
 | `STT_PORT`              | `5051`                  | 服务器端口                                         |
 | `STT_POOL_SIZE`         | `8`                     | 每个模型的实例数；没有 `@pool` 的 `STT_MODELS` 条目的默认值 |
 | `STT_QUEUE_TIMEOUT`     | `120`                   | 同步请求在返回 `503` 之前等待其模型空闲实例的秒数 |
 | `STT_KEEPALIVE_SECONDS` | `5`                     | 空闲 HTTP 连接保持打开的秒数（uvicorn；gunicorn 的 `keepalive`） |
 | `STT_TOKENS`            | （空）                  | 逗号分隔的有效令牌；为空则禁用鉴权                 |
-| `STT_DEBUG`             | `false`                 | Flask 调试模式                                     |
+| `STT_DEBUG`             | `false`                 | 带重载器的 Flask 开发服务器（没有调试器控制台，没有实时流） |
 | `MAX_CONTENT_LENGTH_MB` | `10`                    | 最大上传大小（MB）；更大的请求体返回 `413`         |
 | `CORS_ORIGINS`          | `*`                     | 允许的 CORS 来源：`*` 或逗号分隔的列表             |
 | `GUNICORN_WORKERS`      | `4`                     | 工作进程数量（仅 gunicorn）                        |
@@ -410,7 +410,9 @@ make lint           # pre-commit (black + ruff)
 make typecheck      # mypy
 ```
 
-测试套件对 Whisper 后端进行了打桩，因此它覆盖了 HTTP 层（request_id、错误类别、模型池语义），并能在数秒内运行完成，无需下载模型或使用 GPU。
+以这种方式运行时，服务器只监听 `127.0.0.1`。要接受来自其他主机的连接，请设置 `STT_HOST=0.0.0.0`，并同时设置 `STT_TOKENS`；Docker 镜像始终监听所有接口。
+
+测试套件对模型后端进行了打桩，因此能在数秒内运行完成，无需下载模型或使用 GPU。它覆盖了 HTTP 路由和错误类别、模型选择和注册表、语言解析、实时流及其短语切分、长录音任务、URL 源、说话人归属、语音门控、批处理引擎以及兼容 OpenAI 的路由。它无法覆盖的是模型本身（在 GPU 上解码），这部分在 GPU 主机上检查。
 
 ### 许可证
 
