@@ -60,7 +60,7 @@ pydub==0.25.1
 pygments==2.21.0
 python-dotenv==1.2.4
 pyyaml==6.0.3
-regex==2026.11.9
+regex==2026.11.15
 requests==2.34.2
 rich==15.0.0
 safetensors==0.8.0
