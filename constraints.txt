@@ -7,19 +7,19 @@
 # between the CPU and the GPU build.
 #
 # Regenerate from a freshly built, verified GPU image with `make constraints`.
-annotated-doc==0.0.6
+annotated-doc==0.0.7
 anyio==4.16.0
 av==19.0.2
 blinker==1.9.0
-certifi==2026.10.23
+certifi==2026.11.20
 cffi==2.1.1
-charset-normalizer==3.5.2
+charset-normalizer==3.5.3
 click==8.5.1
-cloudpickle==3.1.2
-ctranslate2==4.9.0
-decorator==5.3.1
+cloudpickle==3.1.3
+ctranslate2==4.9.1
+decorator==5.3.2
 faster-whisper==1.2.1
-filelock==4.2.10
+filelock==4.3.0
 flask==3.1.3
 flask-cors==6.0.5
 flatbuffers==25.12.19
@@ -44,14 +44,14 @@ mdurl==0.1.2
 more-itertools==11.2.1
 mpmath==1.3.0
 msgpack==1.2.4
-narwhals==2.28.0
+narwhals==2.29.0
 networkx==3.6.1
 numba==0.68.1
 numpy==2.5.3
 onnxruntime==1.32.0
 openai-whisper==20250625
 packaging==26.3
-platformdirs==4.14.5
+platformdirs==4.14.8
 pooch==1.9.0
 prometheus-client==0.26.0
 protobuf==7.36.2
@@ -59,8 +59,8 @@ pycparser==3.12
 pydub==0.25.1
 pygments==2.21.0
 python-dotenv==1.2.4
-pyyaml==6.0.3
-regex==2026.11.15
+pyyaml==6.0.4
+regex==2026.11.19
 requests==2.34.2
 rich==15.0.0
 safetensors==0.8.0
@@ -76,8 +76,8 @@ threadpoolctl==3.8.0
 tiktoken==0.14.0
 tokenizers==0.23.3
 tqdm==4.70.1
-transformers==5.23.0
-typer==0.29.1
+transformers==5.24.0
+typer==0.29.2
 typing-extensions==4.16.0
 urllib3==2.8.0
 uvicorn==0.54.0
